@@ -55,6 +55,33 @@ This repository is **client-only**.
 - `design-system`: reusable components and interaction primitives.
 - `docs`: architecture records, feature specs, contribution docs.
 
+### Frontend stack decision
+- Renderer framework: `Vue 3`.
+- UI component layer: `PrimeVue` in **unstyled mode**.
+- Styling system: custom design tokens + utility/component CSS to match Discord-like UX.
+- Component usage rule: PrimeVue components must be wrapped by local design-system components before broad app usage.
+- Goal: use PrimeVue for accessibility and behavior primitives while owning all visual presentation.
+
+### State management decision
+- Primary client state store: `Pinia`.
+- Data-fetching and request lifecycle logic: service layer first, with optional `@tanstack/vue-query` adoption for cache/sync patterns where it reduces complexity.
+- Store design rule: server-scoped domain data must be keyed by `server_id` and never mixed across server contexts.
+
+### Planned Pinia store boundaries
+- `useAppUiStore`: global shell state (layout panes, modals, navigation context).
+- `useSessionStore`: current auth/session metadata and active server context.
+- `useServerRegistryStore`: joined servers and server configuration metadata.
+- `useChannelStore`: channel trees and per-server channel selection state.
+- `useMessageStore`: message timelines, optimistic sends, pagination windows.
+- `usePresenceStore`: typing, presence, and ephemeral real-time indicators.
+- `useSettingsStore`: user preferences (theme, keybinds, notification settings).
+
+### State persistence and security rules
+- Persist only non-sensitive UX settings by default.
+- Store credentials/tokens using secure Electron + OS keychain mechanisms, not plain local storage.
+- Apply TTL and bounded cache limits for message/presence state.
+- Clear server-scoped volatile state on sign-out and on server removal.
+
 ### Process model
 - Keep privileged operations in Electron main process.
 - Use preload scripts and context isolation for safe IPC.
@@ -153,8 +180,15 @@ This repository is **client-only**.
 
 ### Tooling direction
 - Package manager and scripts standardized via root config.
+- Renderer build tooling centered on `Vite` + `Vue`.
 - Linting, type checks, unit tests, and UI tests in CI.
 - Electron packaging for macOS/Windows/Linux artifacts.
+
+### UI library standards (PrimeVue unstyled)
+- Keep PrimeVue in unstyled mode globally.
+- Theme through local tokens only (colors, spacing, radius, typography, motion).
+- Disallow direct app-wide use of PrimeVue default presets.
+- Document each wrapped PrimeVue component in `docs/features/` or `docs/architecture/design-system.md`.
 
 ### CI stages (proposed)
 1. `validate`:
