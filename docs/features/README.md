@@ -12,11 +12,12 @@ All user-facing features must have a feature spec before implementation.
 - Format: `NNNN-feature-name.md`
 - Example: `0001-server-join-flow.md`
 
-## Planned MVP Specs (To Be Authored)
-- Authentication session UI.
-- Server join and registry management.
-- Channel list and navigation.
-- Message timeline and composer.
-- Presence and typing indicators.
-- Notifications.
-- Settings and accessibility foundations.
+## MVP Specs
+- `0001-auth-session-ui.md` (Draft)
+- `0002-server-join-registry.md` (Draft)
+- `0003-channel-navigation.md` (Draft)
+- `0004-message-timeline-composer.md` (Draft)
+- `0005-notifications.md` (Draft)
+- `0006-settings-accessibility.md` (Draft)
+
+Identity baseline for all MVP specs: servers should only receive `user_uid` and required protocol proofs unless explicitly approved by ADR.

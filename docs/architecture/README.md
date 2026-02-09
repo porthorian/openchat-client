@@ -5,12 +5,15 @@ This section defines the client architecture, major constraints, and accepted te
 ## Contents
 - ADR index: `docs/architecture/adrs/README.md`
 - ADR template: `docs/architecture/adrs/ADR_TEMPLATE.md`
+- Backend contract: `docs/architecture/backend-contract.md`
+- Design system architecture: `docs/architecture/design-system.md`
 
 ## Current Focus
 - Electron process boundaries and renderer safety model.
 - Vue 3 client architecture and PrimeVue unstyled design-system approach.
 - Pinia-based state organization with server-scoped isolation.
 - Clear client/backend contract boundaries for this repository.
+- User-owned identity model with UID-only server disclosure.
 
 ## Updating Architecture Docs
 1. Create or update an ADR for major decisions.

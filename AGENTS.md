@@ -43,6 +43,7 @@ This repository is **client-only**.
 - Safety: explicit trust signals for server endpoints and permissions.
 - Transparency: visible server identity, capabilities, and connection state.
 - Extensibility: plugin-like feature toggles driven by server capabilities.
+- User sovereignty: user profile and identity metadata stay local to the client; servers receive only protocol-required unique user identifiers and proofs.
 
 ## 4) Architecture Plan (Client-Only)
 
@@ -51,6 +52,7 @@ This repository is **client-only**.
 - `renderer-app`: UI shell, routing, feature surfaces.
 - `shared-sdk`: typed contracts for transport, events, and domain models.
 - `server-connection-layer`: endpoint configuration, session management, reconnect logic.
+- `identity-layer`: local identity generation/import, key management, server UID projection.
 - `state-layer`: global/app state, server-scoped caches, optimistic updates.
 - `design-system`: reusable components and interaction primitives.
 - `docs`: architecture records, feature specs, contribution docs.
@@ -69,6 +71,7 @@ This repository is **client-only**.
 
 ### Planned Pinia store boundaries
 - `useAppUiStore`: global shell state (layout panes, modals, navigation context).
+- `useIdentityStore`: local user identity profile, key references, and privacy controls.
 - `useSessionStore`: current auth/session metadata and active server context.
 - `useServerRegistryStore`: joined servers and server configuration metadata.
 - `useChannelStore`: channel trees and per-server channel selection state.
@@ -79,8 +82,10 @@ This repository is **client-only**.
 ### State persistence and security rules
 - Persist only non-sensitive UX settings by default.
 - Store credentials/tokens using secure Electron + OS keychain mechanisms, not plain local storage.
+- Store local identity/profile data in encrypted local storage controlled by the user.
 - Apply TTL and bounded cache limits for message/presence state.
 - Clear server-scoped volatile state on sign-out and on server removal.
+- Never transmit user profile attributes to servers unless explicitly approved by a future ADR.
 
 ### Process model
 - Keep privileged operations in Electron main process.
@@ -92,11 +97,13 @@ This repository is **client-only**.
   - display name
   - backend base URL
   - transport config (WebSocket/SSE/fallback)
-  - auth mode metadata
+  - identity handshake metadata
+  - user identifier policy
   - capability flags
   - trust status
 - Client keeps isolated server-scoped state to avoid cross-server leakage.
 - Connection manager tracks health independently per server.
+- Client identity persists across servers while disclosing only server-allowed UID/proof material.
 
 ## 5) Server Configuration Model
 
@@ -105,7 +112,8 @@ This repository is **client-only**.
 - `display_name`
 - `backend_url`
 - `icon_url` (optional)
-- `auth_strategy` (OIDC/token/device/local)
+- `identity_handshake_strategy` (challenge-signature/token-proof/etc.)
+- `user_identifier_policy` (server-scoped UID vs global UID acceptance)
 - `capabilities` (feature matrix returned by backend)
 - `tls_fingerprint` (optional pinning metadata)
 - `connection_policy` (timeouts/retries/backoff)
@@ -114,7 +122,7 @@ This repository is **client-only**.
 ### Join flow
 1. User enters invite or backend URL.
 2. Client validates URL and performs capability probe.
-3. Client displays trust and security warning state.
+3. Client displays trust, security warnings, and identity disclosure summary.
 4. User confirms join.
 5. Server profile is stored locally and rendered in server rail.
 
@@ -122,11 +130,12 @@ This repository is **client-only**.
 - Distinguish verified vs unverified servers.
 - Prominent warning for insecure transport or certificate mismatch.
 - Explain exactly what data permissions the server requests.
+- Explicitly show that only unique user identifier/proof data is shared by default.
 
 ## 6) Planned Feature Matrix
 
 ### Foundation features (MVP)
-- Authentication session UI.
+- User-owned identity and session UI.
 - Server switching and server profile management.
 - Channel list and channel navigation.
 - Message timeline rendering (text, basic embeds, attachments list).
@@ -149,6 +158,7 @@ This repository is **client-only**.
 - Accessibility (keyboard, screen reader semantics, contrast).
 - Internationalization readiness.
 - Telemetry opt-in with privacy-first defaults.
+- Privacy disclosure UX in identity/join flows (clear "what leaves device" messaging).
 
 ## 7) Documentation Strategy (Open Source)
 
@@ -179,7 +189,8 @@ This repository is **client-only**.
 ## 8) Build and Release Pipeline Plan
 
 ### Tooling direction
-- Package manager and scripts standardized via root config.
+- Package manager standardized on `yarn` (repository default, `node-modules` linker).
+- Scripts standardized via root config.
 - Renderer build tooling centered on `Vite` + `Vue`.
 - Linting, type checks, unit tests, and UI tests in CI.
 - Electron packaging for macOS/Windows/Linux artifacts.
@@ -192,7 +203,7 @@ This repository is **client-only**.
 
 ### CI stages (proposed)
 1. `validate`:
-   - install dependencies
+   - `yarn install --immutable`
    - lint
    - format check
    - type check
@@ -249,6 +260,7 @@ This repository is **client-only**.
 - Minimize Electron attack surface.
 - Prevent cross-server data contamination.
 - Protect tokens/session data at rest and in transit.
+- Preserve user-owned identity data as local-only by default.
 
 ### Baseline controls
 - Context isolation enabled.
@@ -257,6 +269,7 @@ This repository is **client-only**.
 - CSP policy for renderer content.
 - Secure credential storage via OS keychain APIs.
 - Redaction rules for logs.
+- UID-only disclosure boundary for server communication unless explicitly expanded by ADR.
 
 ### Supply chain and dependency posture
 - Locked dependencies.
@@ -305,6 +318,7 @@ This repository is **client-only**.
 - All CI checks required on pull requests.
 - No unchecked accessibility regressions.
 - No undocumented user-facing changes.
+- No undocumented expansion of user data disclosure to backend services.
 
 ## 13) Initial Milestones
 

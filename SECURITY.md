@@ -31,6 +31,8 @@ Include:
 - Secure storage for credentials via OS keychain mechanisms.
 - No token persistence in plain local storage.
 - Server-scoped state isolation to prevent data leakage across servers.
+- User profile and personal identity metadata remain local by default.
+- Server-facing identity disclosure is limited to `user_uid` and required protocol proofs.
 
 ## Responsible Disclosure
 Please give maintainers reasonable time to patch before public disclosure.

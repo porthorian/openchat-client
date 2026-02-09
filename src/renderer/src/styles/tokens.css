@@ -1,0 +1,18 @@
+:root {
+  --bg-app: #0a1017;
+  --bg-topbar: #0e1520;
+  --bg-panel: #121b29;
+  --bg-panel-alt: #172233;
+  --bg-surface-soft: #1d2a3d;
+  --text-main: #ecf2ff;
+  --text-dim: #9bb0c7;
+  --line-soft: #2d3c52;
+  --accent-main: #10b981;
+  --accent-quiet: #27483b;
+  --warn-main: #f59e0b;
+  --danger-main: #ef4444;
+  --font-sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+}

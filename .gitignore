@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-electron/
+out/
+.pnp.cjs
+.pnp.loader.mjs
+.DS_Store
+*.log
+coverage/
+*.tsbuildinfo
+
+.yarn

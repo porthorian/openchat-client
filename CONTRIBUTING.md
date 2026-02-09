@@ -18,6 +18,7 @@ Thanks for contributing. This project is in early planning and documentation-fir
 - Prefer explicit decisions over implicit behavior.
 - Preserve multi-server isolation requirements.
 - Follow security baseline requirements in `SECURITY.md`.
+- Preserve UID-only identity disclosure policy unless a new ADR explicitly approves changes.
 
 ## Pull Request Expectations
 - Clear summary of user-visible behavior changes.
@@ -36,6 +37,11 @@ Thanks for contributing. This project is in early planning and documentation-fir
 - Use `docs/features/FEATURE_TEMPLATE.md` for feature specs.
 - Add architecture decisions to `docs/architecture/adrs/`.
 - Keep links and indices updated when adding files.
+- Update milestone status in `docs/release/milestones.md` when scope or target milestone changes.
+
+## Issue and PR Templates
+- Use the templates in `.github/ISSUE_TEMPLATE/` for new issues.
+- Use `.github/pull_request_template.md` when opening pull requests.
 
 ## Code of Conduct
 All participants must follow `CODE_OF_CONDUCT.md`.
