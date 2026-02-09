@@ -15,6 +15,7 @@
     "typecheck": "vue-tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@mdi/js": "^7.4.47",
     "pinia": "^2.1.7",
     "primevue": "^4.0.0",
     "vue": "^3.4.0"

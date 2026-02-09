@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import type { SessionStatus, UIDMode } from "@renderer/types/models";
+import { mdiEmoticonHappyOutline, mdiImageOutline, mdiPlusCircleOutline } from "@mdi/js";
+import type { UIDMode } from "@renderer/types/models";
+import AppIcon from "./AppIcon.vue";
 
 type Message = {
   id: string;
@@ -9,74 +11,65 @@ type Message = {
 };
 
 defineProps<{
-  serverName: string;
   channelId: string;
   messages: Message[];
-  sessionStatus: SessionStatus;
-  currentUID: string;
+  currentUid: string;
   uidMode: UIDMode;
   disclosureMessage: string;
+  appVersion: string;
+  runtimeLabel: string;
 }>();
 
 const emit = defineEmits<{
   toggleUidMode: [];
-  setSessionStatus: [status: SessionStatus];
 }>();
-
-const statusOptions: SessionStatus[] = ["active", "connecting", "expired", "disconnected"];
 </script>
 
 <template>
-  <main class="chat-pane panel">
-    <header class="pane-header chat-header">
-      <div>
-        <h2># {{ channelId.replace("ch_", "") }}</h2>
-        <small>{{ serverName }}</small>
-      </div>
-      <div class="status-stack">
-        <span class="status-pill" :class="`is-${sessionStatus}`">{{ sessionStatus }}</span>
-        <label>
-          <span class="sr-only">Session status</span>
-          <select :value="sessionStatus" @change="emit('setSessionStatus', ($event.target as HTMLSelectElement).value as SessionStatus)">
-            <option v-for="option in statusOptions" :key="option" :value="option">
-              {{ option }}
-            </option>
-          </select>
-        </label>
-      </div>
-    </header>
+  <main class="chat-pane">
+    <section class="chat-stage">
+      <div class="chat-stage-inner">
+        <section class="disclosure-banner">
+          <p class="disclosure-title">Identity Disclosure</p>
+          <p>{{ disclosureMessage }}</p>
+          <p class="uid-line">
+            current UID:
+            <code>{{ currentUid }}</code>
+          </p>
+          <div class="meta-row">
+            <span>build {{ appVersion }}</span>
+            <span>{{ runtimeLabel }}</span>
+          </div>
+          <button type="button" class="ghost-btn" @click="emit('toggleUidMode')">
+            Switch UID mode ({{ uidMode }})
+          </button>
+        </section>
 
-    <section class="disclosure-banner">
-      <p class="disclosure-title">Identity Disclosure</p>
-      <p>{{ disclosureMessage }}</p>
-      <p class="uid-line">
-        current UID:
-        <code>{{ currentUID }}</code>
-      </p>
-      <button type="button" class="ghost-btn" @click="emit('toggleUidMode')">
-        Switch UID mode ({{ uidMode }})
-      </button>
-    </section>
-
-    <section class="timeline" aria-label="Message timeline">
-      <article v-for="message in messages" :key="message.id" class="message-row">
-        <header>
-          <strong>{{ message.authorUID }}</strong>
-          <time>{{ message.sentAt }}</time>
-        </header>
-        <p>{{ message.body }}</p>
-      </article>
+        <section class="timeline" aria-label="Message timeline">
+          <article v-for="message in messages" :key="message.id" class="message-row">
+            <header>
+              <strong>{{ message.authorUID }}</strong>
+              <time>{{ message.sentAt }}</time>
+            </header>
+            <p>{{ message.body }}</p>
+          </article>
+        </section>
+      </div>
     </section>
 
     <footer class="composer">
-      <textarea
-        rows="3"
-        placeholder="Type a message (client scaffolding only)"
-        aria-label="Message composer"
-      />
-      <button type="button" class="send-btn" disabled>
-        Send
+      <button type="button" class="composer-icon">
+        <AppIcon :path="mdiPlusCircleOutline" :size="18" />
       </button>
+      <input type="text" :placeholder="`Message #${channelId}`" aria-label="Message composer" />
+      <div class="composer-actions">
+        <button type="button">
+          <AppIcon :path="mdiImageOutline" :size="18" />
+        </button>
+        <button type="button">
+          <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
+        </button>
+      </div>
     </footer>
   </main>
 </template>

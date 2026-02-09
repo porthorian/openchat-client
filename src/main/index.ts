@@ -14,6 +14,7 @@ function createMainWindow(): BrowserWindow {
     minHeight: 680,
     backgroundColor: "#10141c",
     title: "OpenChat Client",
+    titleBarStyle: isMac ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
       contextIsolation: true,

@@ -7,7 +7,8 @@ export const useAppUIStore = defineStore("app-ui", {
     activeServerId: "srv_harbor",
     activeChannelId: "ch_general",
     channelFilter: "",
-    viewMode: "comfortable" as ViewMode
+    viewMode: "comfortable" as ViewMode,
+    membersPaneOpen: true
   }),
   actions: {
     setActiveServer(serverId: string): void {
@@ -20,6 +21,12 @@ export const useAppUIStore = defineStore("app-ui", {
     },
     setChannelFilter(value: string): void {
       this.channelFilter = value;
+    },
+    toggleMembersPane(): void {
+      this.membersPaneOpen = !this.membersPaneOpen;
+    },
+    setMembersPaneOpen(isOpen: boolean): void {
+      this.membersPaneOpen = isOpen;
     }
   }
 });
