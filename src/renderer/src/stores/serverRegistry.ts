@@ -1,30 +1,11 @@
 import { defineStore } from "pinia";
+import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
+import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
-
-const seedServers: ServerProfile[] = [
-  {
-    serverId: "srv_harbor",
-    displayName: "Harbor Guild",
-    backendUrl: "https://harbor.example.net",
-    iconText: "HG",
-    trustState: "verified",
-    identityHandshakeStrategy: "challenge_signature",
-    userIdentifierPolicy: "server_scoped"
-  },
-  {
-    serverId: "srv_arcade",
-    displayName: "Arcade Workshop",
-    backendUrl: "https://arcade.example.net",
-    iconText: "AW",
-    trustState: "unverified",
-    identityHandshakeStrategy: "token_proof",
-    userIdentifierPolicy: "either"
-  }
-];
 
 export const useServerRegistryStore = defineStore("server-registry", {
   state: () => ({
-    servers: seedServers
+    servers: [] as ServerProfile[]
   }),
   getters: {
     byId: (state) => (serverId: string): ServerProfile | undefined => {
@@ -32,11 +13,23 @@ export const useServerRegistryStore = defineStore("server-registry", {
     }
   },
   actions: {
-    addServer(profile: ServerProfile): void {
+    async hydrateFromBackend(backendUrl = DEFAULT_BACKEND_URL): Promise<void> {
+      const servers = await fetchServerDirectory(backendUrl);
+      this.servers = servers;
+    },
+    addServer(profile: ServerProfile): boolean {
       const exists = this.servers.some((item) => item.serverId === profile.serverId);
       if (!exists) {
         this.servers.push(profile);
+        return true;
       }
+      return false;
+    },
+    setCapabilities(serverId: string, capabilities: ServerCapabilities): void {
+      const target = this.servers.find((item) => item.serverId === serverId);
+      if (!target) return;
+      target.capabilities = capabilities;
+      target.capabilitiesFetchedAt = new Date().toISOString();
     }
   }
 });

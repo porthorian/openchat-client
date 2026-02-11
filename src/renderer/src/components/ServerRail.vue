@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { mdiHelpCircleOutline, mdiMessage, mdiPlus } from "@mdi/js";
+import { mdiMessage, mdiPlus } from "@mdi/js";
 import type { ServerProfile } from "@renderer/types/models";
 import AppIcon from "./AppIcon.vue";
 
@@ -10,6 +10,7 @@ defineProps<{
 
 const emit = defineEmits<{
   selectServer: [serverId: string];
+  addServer: [];
 }>();
 </script>
 
@@ -33,7 +34,7 @@ const emit = defineEmits<{
       {{ server.iconText }}
     </button>
 
-    <button type="button" class="server-dot utility">
+    <button type="button" class="server-dot utility" aria-label="Add server" @click="emit('addServer')">
       <AppIcon :path="mdiPlus" :size="18" />
     </button>
   </aside>

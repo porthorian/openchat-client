@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   mdiAccountMultiple,
   mdiArrowLeft,
@@ -11,26 +11,16 @@ import {
   mdiPinOutline
 } from "@mdi/js";
 import type { RuntimeInfo } from "@shared/ipc";
-import { useAppUIStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
+import type { Channel, ChannelGroup } from "@renderer/types/chat";
+import type { ServerProfile } from "@renderer/types/models";
+import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
+import { useAppUIStore, useCallStore, useChatStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
 import AppIcon from "./AppIcon.vue";
 import ServerRail from "./ServerRail.vue";
 import ChannelPane from "./ChannelPane.vue";
 import ChatPane from "./ChatPane.vue";
 import MembersPane from "./MembersPane.vue";
-
-type Channel = {
-  id: string;
-  name: string;
-  type: "text" | "voice";
-  unreadCount?: number;
-};
-
-type ChannelGroup = {
-  id: string;
-  label: string;
-  kind: "text" | "voice";
-  channels: Channel[];
-};
+import CallBar from "./CallBar.vue";
 
 type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
 
@@ -43,266 +33,86 @@ type VoiceParticipant = {
   badgeEmoji?: string;
 };
 
-type Message = {
-  id: string;
-  authorUID: string;
-  body: string;
-  sentAt: string;
-};
-
-type MemberItem = {
-  id: string;
-  name: string;
-  status: "online" | "idle" | "dnd";
+type AddServerFormState = {
+  backendUrl: string;
+  serverId: string;
+  displayName: string;
+  errorMessage: string | null;
+  isSubmitting: boolean;
 };
 
 const appUI = useAppUIStore();
+const call = useCallStore();
+const chat = useChatStore();
 const identity = useIdentityStore();
 const registry = useServerRegistryStore();
 const session = useSessionStore();
 const isMacOS = /mac/i.test(window.navigator.userAgent);
-const activeVoiceChannelId = ref<string | null>(null);
 
 const runtime = ref<RuntimeInfo | null>(null);
 const appVersion = ref<string>("0.0.0");
+const isHydrating = ref(false);
+const startupError = ref<string | null>(null);
+const isAddServerDialogOpen = ref(false);
+const addServerForm = ref<AddServerFormState>({
+  backendUrl: DEFAULT_BACKEND_URL,
+  serverId: "",
+  displayName: "",
+  errorMessage: null,
+  isSubmitting: false
+});
 
-const channelsByServer: Record<string, ChannelGroup[]> = {
-  srv_harbor: [
-    {
-      id: "grp_general",
-      label: "shipposting",
-      kind: "text",
-      channels: [
-        { id: "ch_general", name: "pornography", type: "text", unreadCount: 0 },
-        { id: "ch_design", name: "memes", type: "text", unreadCount: 2 },
-        { id: "ch_release", name: "bedtime-stories", type: "text", unreadCount: 0 },
-        { id: "ch_jeans", name: "jeansposting", type: "text", unreadCount: 0 }
-      ]
-    },
-    {
-      id: "grp_media",
-      label: "media",
-      kind: "text",
-      channels: [
-        { id: "ch_public", name: "public-clown-services", type: "text", unreadCount: 0 },
-        { id: "ch_jobs", name: "get-a-job", type: "text", unreadCount: 0 }
-      ]
-    },
-    {
-      id: "grp_gaming",
-      label: "gaming",
-      kind: "text",
-      channels: [
-        { id: "ch_video", name: "videogames", type: "text", unreadCount: 5 },
-        { id: "ch_minecraft", name: "minecraft", type: "text", unreadCount: 0 },
-        { id: "ch_ttrpg", name: "ttrpg", type: "text", unreadCount: 0 }
-      ]
-    },
-    {
-      id: "grp_voice",
-      label: "Voice Channels",
-      kind: "voice",
-      channels: [
-        { id: "vc_nocursing", name: "No Cursing Out Loud", type: "voice" },
-        { id: "vc_wavepeach", name: "👋🍑", type: "voice" }
-      ]
-    }
-  ],
-  srv_arcade: [
-    {
-      id: "grp_lobby",
-      label: "lobby",
-      kind: "text",
-      channels: [
-        { id: "ch_general", name: "welcome-desk", type: "text", unreadCount: 1 },
-        { id: "ch_tools", name: "tooling", type: "text", unreadCount: 4 },
-        { id: "ch_ux", name: "ux-lab", type: "text", unreadCount: 0 }
-      ]
-    },
-    {
-      id: "grp_ops",
-      label: "operations",
-      kind: "text",
-      channels: [
-        { id: "ch_release", name: "release-notes", type: "text", unreadCount: 0 },
-        { id: "ch_public", name: "outage-watch", type: "text", unreadCount: 0 }
-      ]
-    },
-    {
-      id: "grp_voice",
-      label: "Voice Channels",
-      kind: "voice",
-      channels: [
-        { id: "vc_general", name: "Arcade Lobby", type: "voice" },
-        { id: "vc_party", name: "Party Chat", type: "voice" }
-      ]
-    }
-  ]
-};
+const moodCatalog: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
 
-const messagesByChannel: Record<string, Message[]> = {
-  ch_general: [
-    {
-      id: "msg_01",
-      authorUID: "uid_21980f1c",
-      body: "Server now advertises uid_only profile policy.",
-      sentAt: "09:42"
-    },
-    {
-      id: "msg_02",
-      authorUID: "uid_23b65a11",
-      body: "Updated join disclosure panel copy in the latest branch.",
-      sentAt: "09:44"
-    },
-    {
-      id: "msg_03",
-      authorUID: "uid_97de1b44",
-      body: "Ready for identity-mode review after lunch.",
-      sentAt: "09:46"
-    }
-  ],
-  ch_design: [
-    {
-      id: "msg_11",
-      authorUID: "uid_5f7ac998",
-      body: "Need clearer contrast for trust banners in unverified servers.",
-      sentAt: "08:31"
-    }
-  ],
-  ch_release: [
-    {
-      id: "msg_21",
-      authorUID: "uid_3498bdc2",
-      body: "Nightly package checks passed with zero disclosure regressions.",
-      sentAt: "07:58"
-    }
-  ],
-  ch_tools: [
-    {
-      id: "msg_31",
-      authorUID: "uid_40aa13d0",
-      body: "Pinia devtools integration is wired for local debugging.",
-      sentAt: "10:02"
-    }
-  ],
-  ch_ux: [
-    {
-      id: "msg_41",
-      authorUID: "uid_9cc013af",
-      body: "Prototype copy: 'Only UID + proof leaves this device.'",
-      sentAt: "11:10"
-    }
-  ],
-  ch_jeans: [
-    {
-      id: "msg_51",
-      authorUID: "uid_13bd88fe",
-      body: "New texture pass for denim emotes is now in staging.",
-      sentAt: "12:12"
-    }
-  ],
-  ch_public: [
-    {
-      id: "msg_61",
-      authorUID: "uid_72cae900",
-      body: "Public endpoint health checks are all green.",
-      sentAt: "13:31"
-    }
-  ],
-  ch_jobs: [
-    {
-      id: "msg_71",
-      authorUID: "uid_0a31fd67",
-      body: "Hiring workflow docs moved to the handbook channel.",
-      sentAt: "14:20"
-    }
-  ],
-  ch_video: [
-    {
-      id: "msg_81",
-      authorUID: "uid_49de7aa5",
-      body: "Tonight: Halo Infinite private lobby at 9 PM.",
-      sentAt: "16:09"
-    }
-  ],
-  ch_minecraft: [
-    {
-      id: "msg_91",
-      authorUID: "uid_2f90a8ec",
-      body: "Server seed rotation complete. Backups verified.",
-      sentAt: "17:16"
-    }
-  ],
-  ch_ttrpg: [
-    {
-      id: "msg_101",
-      authorUID: "uid_3ef12ab0",
-      body: "Session notes synced, next run starts Friday.",
-      sentAt: "18:42"
-    }
-  ]
-};
-
-const membersByServer: Record<string, MemberItem[]> = {
-  srv_harbor: [
-    { id: "mem_1", name: "Lyra", status: "online" },
-    { id: "mem_2", name: "Orin", status: "idle" },
-    { id: "mem_3", name: "Mira", status: "online" },
-    { id: "mem_4", name: "Calix", status: "online" },
-    { id: "mem_5", name: "Sable", status: "dnd" },
-    { id: "mem_6", name: "Tamsin", status: "idle" }
-  ],
-  srv_arcade: [
-    { id: "mem_11", name: "Aster", status: "online" },
-    { id: "mem_12", name: "Nyla", status: "idle" },
-    { id: "mem_13", name: "Pearl", status: "online" }
-  ]
-};
-
-const voiceParticipantsByServer: Record<string, Record<string, VoiceParticipant[]>> = {
-  srv_harbor: {
-    vc_nocursing: [
-      {
-        id: "vp_deadguy",
-        name: "deadguy",
-        avatarText: "D",
-        avatarColor: "#9f8f6a",
-        mood: "chilling",
-        badgeEmoji: "🕹️"
-      }
-    ],
-    vc_wavepeach: []
-  },
-  srv_arcade: {
-    vc_general: [
-      {
-        id: "vp_aster",
-        name: "Aster",
-        avatarText: "A",
-        avatarColor: "#6b8fd8",
-        mood: "gaming",
-        badgeEmoji: "🎮"
-      }
-    ],
-    vc_party: []
+function toColorFromUID(uid: string): string {
+  let hash = 0;
+  for (let index = 0; index < uid.length; index += 1) {
+    hash = (hash << 5) - hash + uid.charCodeAt(index);
+    hash |= 0;
   }
-};
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 55% 62%)`;
+}
 
-onMounted(async () => {
-  identity.initializeIdentity();
+function toMoodFromUID(uid: string): VoiceMood {
+  let hash = 0;
+  for (let index = 0; index < uid.length; index += 1) {
+    hash = (hash << 5) - hash + uid.charCodeAt(index);
+    hash |= 0;
+  }
+  return moodCatalog[Math.abs(hash) % moodCatalog.length];
+}
 
-  registry.servers.forEach((server) => {
-    const projectedUID = identity.getUIDForServer(server.serverId);
-    const existing = session.sessionsByServer[server.serverId];
-    session.setSession(server.serverId, {
-      status: existing?.status ?? "active",
-      userUID: projectedUID,
-      lastBoundAt: existing?.lastBoundAt ?? new Date().toISOString()
-    });
-  });
+function toDisplayName(uid: string): string {
+  if (uid.length <= 12) return uid;
+  return `${uid.slice(0, 8)}…${uid.slice(-4)}`;
+}
 
-  appVersion.value = await window.openchat.getAppVersion();
-  runtime.value = await window.openchat.getRuntimeInfo();
+function findChannelByID(groups: ChannelGroup[], channelID: string): Channel | null {
+  for (const group of groups) {
+    const match = group.channels.find((channel) => channel.id === channelID);
+    if (match) return match;
+  }
+  return null;
+}
+
+function firstTextChannel(groups: ChannelGroup[]): Channel | null {
+  for (const group of groups) {
+    for (const channel of group.channels) {
+      if (channel.type === "text") {
+        return channel;
+      }
+    }
+  }
+  return null;
+}
+
+const activeVoiceChannelId = computed(() => call.activeChannelFor(appUI.activeServerId));
+const localDeviceID = computed(() => {
+  if (identity.rootIdentityId) {
+    return `desktop_${identity.rootIdentityId.slice(-8)}`;
+  }
+  return "desktop_local";
 });
 
 const activeServer = computed(() => registry.byId(appUI.activeServerId));
@@ -314,11 +124,12 @@ function orderChannelGroups(groups: ChannelGroup[]): ChannelGroup[] {
   return [...voiceGroups, ...textGroups];
 }
 
+const rawChannelGroups = computed(() => chat.groupsFor(appUI.activeServerId));
+
 const filteredChannelGroups = computed(() => {
-  const groups = orderChannelGroups(channelsByServer[appUI.activeServerId] ?? []);
+  const groups = orderChannelGroups(rawChannelGroups.value);
   const filter = appUI.channelFilter.trim().toLowerCase();
   if (!filter) return groups;
-
   return groups
     .map((group) => ({
       ...group,
@@ -328,61 +139,172 @@ const filteredChannelGroups = computed(() => {
 });
 
 const activeMessages = computed(() => {
-  return messagesByChannel[appUI.activeChannelId] ?? [];
+  return chat.messagesFor(appUI.activeChannelId);
 });
 
 const activeMembers = computed(() => {
-  return membersByServer[appUI.activeServerId] ?? [];
+  return chat.membersFor(appUI.activeServerId);
+});
+
+const activeCallSession = computed(() => {
+  if (!activeVoiceChannelId.value) return null;
+  return call.sessionFor(appUI.activeServerId, activeVoiceChannelId.value);
 });
 
 const activeVoiceParticipants = computed<Record<string, VoiceParticipant[]>>(() => {
-  const base = voiceParticipantsByServer[appUI.activeServerId] ?? {};
   const byChannel: Record<string, VoiceParticipant[]> = {};
-  Object.entries(base).forEach(([channelId, participants]) => {
-    byChannel[channelId] = participants.map((participant) => ({ ...participant }));
-  });
-
-  if (activeVoiceChannelId.value) {
-    const currentParticipants = byChannel[activeVoiceChannelId.value] ?? [];
-    const localParticipantId = "vp_local";
-    if (!currentParticipants.some((participant) => participant.id === localParticipantId)) {
-      byChannel[activeVoiceChannelId.value] = [
-        {
-          id: localParticipantId,
-          name: "Vincenzo Ferrari",
-          avatarText: "V",
-          avatarColor: "#f2d58f",
-          mood: "chilling",
-          badgeEmoji: "🕹️"
-        },
-        ...currentParticipants
-      ];
-    }
-  }
-
+  if (!activeVoiceChannelId.value) return byChannel;
+  const currentParticipants = call.participantsFor(appUI.activeServerId, activeVoiceChannelId.value);
+  if (currentParticipants.length === 0) return byChannel;
+  byChannel[activeVoiceChannelId.value] = currentParticipants.map((participant) => ({
+    id: participant.participantId,
+    name: toDisplayName(participant.userUID),
+    avatarText: participant.userUID.slice(0, 1).toUpperCase(),
+    avatarColor: toColorFromUID(participant.userUID),
+    mood: toMoodFromUID(participant.userUID),
+    badgeEmoji: participant.isLocal ? "🛰️" : "🎧"
+  }));
   return byChannel;
 });
 
 const activeChannelName = computed(() => {
-  const groups = channelsByServer[appUI.activeServerId] ?? [];
-  for (const group of groups) {
-    const match = group.channels.find((channel) => channel.id === appUI.activeChannelId && channel.type === "text");
-    if (match) return match.name;
-  }
-  return appUI.activeChannelId.replace("ch_", "");
+  const match = findChannelByID(rawChannelGroups.value, appUI.activeChannelId);
+  if (!match) return "unknown";
+  return match.name;
 });
 
-function selectServer(serverId: string): void {
-  appUI.setActiveServer(serverId);
-  activeVoiceChannelId.value = null;
+const activeVoiceChannelName = computed(() => {
+  if (!activeVoiceChannelId.value) return null;
+  const match = findChannelByID(rawChannelGroups.value, activeVoiceChannelId.value);
+  return match?.name ?? activeVoiceChannelId.value;
+});
+
+const isLoadingMessages = computed(() => {
+  return chat.isMessagesLoading(appUI.activeChannelId) || isHydrating.value;
+});
+
+const isSendingMessage = computed(() => {
+  return chat.isSendingInChannel(appUI.activeChannelId);
+});
+
+async function hydrateServer(serverId: string): Promise<void> {
+  const server = registry.byId(serverId);
+  if (!server) return;
+
+  const currentSession = session.sessionsByServer[serverId];
+  const projectedUID = identity.getUIDForServer(serverId);
+  if (!currentSession || currentSession.userUID !== projectedUID) {
+    session.setSession(serverId, {
+      status: currentSession?.status ?? "active",
+      userUID: projectedUID,
+      lastBoundAt: new Date().toISOString()
+    });
+  }
+  const activeUser = session.sessionsByServer[serverId]?.userUID;
+  if (!activeUser) return;
+
+  isHydrating.value = true;
+  try {
+    const firstChannelID = await chat.loadServerData({
+      serverId,
+      backendUrl: server.backendUrl,
+      userUID: activeUser,
+      deviceID: localDeviceID.value
+    });
+
+    const currentChannel = findChannelByID(chat.groupsFor(serverId), appUI.activeChannelId);
+    let targetChannelID = appUI.activeChannelId;
+    if (!currentChannel || currentChannel.type !== "text") {
+      targetChannelID = firstChannelID ?? firstTextChannel(chat.groupsFor(serverId))?.id ?? "";
+      if (targetChannelID) {
+        appUI.setActiveChannel(targetChannelID);
+      }
+    }
+
+    if (targetChannelID) {
+      await chat.loadMessages({
+        backendUrl: server.backendUrl,
+        channelId: targetChannelID
+      });
+      chat.subscribeToChannel(serverId, targetChannelID);
+    }
+  } finally {
+    isHydrating.value = false;
+  }
 }
 
-function selectChannel(channelId: string): void {
+onMounted(async () => {
+  identity.initializeIdentity();
+  try {
+    appVersion.value = await window.openchat.getAppVersion();
+    runtime.value = await window.openchat.getRuntimeInfo();
+  } catch (error) {
+    startupError.value = `Desktop runtime bridge unavailable: ${(error as Error).message}`;
+  }
+
+  try {
+    await registry.hydrateFromBackend();
+    if (registry.servers.length === 0) {
+      startupError.value = "No servers available from backend.";
+      return;
+    }
+
+    const initialServerID = registry.byId(appUI.activeServerId)?.serverId ?? registry.servers[0].serverId;
+    if (initialServerID !== appUI.activeServerId) {
+      appUI.setActiveServer(initialServerID);
+    }
+    startupError.value = null;
+    await hydrateServer(initialServerID);
+  } catch (error) {
+    const connectError = (error as Error).message;
+    startupError.value = startupError.value ? `${startupError.value} | ${connectError}` : connectError;
+  }
+});
+
+onBeforeUnmount(() => {
+  call.disconnectAll();
+  chat.disconnectAllRealtime();
+});
+
+async function selectServer(serverId: string): Promise<void> {
+  const currentActiveVoice = activeVoiceChannelId.value;
+  if (currentActiveVoice) {
+    call.leaveChannel(appUI.activeServerId, currentActiveVoice);
+  }
+  const previousServerID = appUI.activeServerId;
+  const previousChannelID = appUI.activeChannelId;
+  if (previousChannelID) {
+    chat.unsubscribeFromChannel(previousServerID, previousChannelID);
+  }
+  appUI.setActiveServer(serverId);
+  await hydrateServer(serverId);
+}
+
+async function selectChannel(channelId: string): Promise<void> {
+  const server = activeServer.value;
+  if (!server) return;
+  if (appUI.activeChannelId && appUI.activeChannelId !== channelId) {
+    chat.unsubscribeFromChannel(appUI.activeServerId, appUI.activeChannelId);
+  }
   appUI.setActiveChannel(channelId);
+  await chat.loadMessages({
+    backendUrl: server.backendUrl,
+    channelId
+  });
+  chat.subscribeToChannel(appUI.activeServerId, channelId);
 }
 
 function selectVoiceChannel(channelId: string): void {
-  activeVoiceChannelId.value = activeVoiceChannelId.value === channelId ? null : channelId;
+  const server = activeServer.value;
+  const activeUser = activeSession.value?.userUID;
+  if (!server || !activeUser) return;
+  void call.toggleVoiceChannel({
+    serverId: appUI.activeServerId,
+    channelId,
+    backendUrl: server.backendUrl,
+    userUID: activeUser,
+    deviceID: localDeviceID.value
+  });
 }
 
 function setChannelFilter(value: string): void {
@@ -396,9 +318,11 @@ function cycleUIDMode(): void {
     session.setSession(server.serverId, {
       status: existing?.status ?? "active",
       userUID: identity.getUIDForServer(server.serverId),
-      lastBoundAt: existing?.lastBoundAt ?? new Date().toISOString()
+      lastBoundAt: new Date().toISOString()
     });
   });
+  chat.disconnectAllRealtime();
+  void hydrateServer(appUI.activeServerId);
 }
 
 function toggleMembersPane(): void {
@@ -407,6 +331,129 @@ function toggleMembersPane(): void {
 
 function closeMembersPane(): void {
   appUI.setMembersPaneOpen(false);
+}
+
+function toggleMic(): void {
+  call.toggleMic(appUI.activeServerId);
+}
+
+function toggleDeafen(): void {
+  call.toggleDeafen(appUI.activeServerId);
+}
+
+function leaveVoiceChannel(): void {
+  if (!activeVoiceChannelId.value) return;
+  call.leaveChannel(appUI.activeServerId, activeVoiceChannelId.value);
+}
+
+async function sendMessage(body: string): Promise<void> {
+  const server = activeServer.value;
+  const currentUID = activeSession.value?.userUID;
+  if (!server || !currentUID || !appUI.activeChannelId) return;
+  await chat.sendMessage({
+    backendUrl: server.backendUrl,
+    channelId: appUI.activeChannelId,
+    body,
+    userUID: currentUID,
+    deviceID: localDeviceID.value
+  });
+}
+
+function toIconText(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) return "SV";
+  return normalized.slice(0, 2);
+}
+
+function resetAddServerForm(): void {
+  addServerForm.value = {
+    backendUrl: DEFAULT_BACKEND_URL,
+    serverId: "",
+    displayName: "",
+    errorMessage: null,
+    isSubmitting: false
+  };
+}
+
+function openAddServerDialog(): void {
+  resetAddServerForm();
+  isAddServerDialogOpen.value = true;
+}
+
+function closeAddServerDialog(): void {
+  if (addServerForm.value.isSubmitting) return;
+  isAddServerDialogOpen.value = false;
+}
+
+async function discoverServersFromURL(): Promise<void> {
+  const backendUrl = addServerForm.value.backendUrl.trim().replace(/\/$/, "");
+  if (!backendUrl) {
+    addServerForm.value.errorMessage = "Backend URL is required.";
+    return;
+  }
+
+  addServerForm.value.isSubmitting = true;
+  addServerForm.value.errorMessage = null;
+  try {
+    const discovered = await fetchServerDirectory(backendUrl);
+    if (discovered.length === 0) {
+      addServerForm.value.errorMessage = `No servers available at ${backendUrl}/v1/servers`;
+      return;
+    }
+
+    let addedCount = 0;
+    discovered.forEach((profile) => {
+      if (registry.addServer(profile)) {
+        addedCount += 1;
+      }
+    });
+
+    const first = discovered[0];
+    appUI.setActiveServer(first.serverId);
+    startupError.value = addedCount === 0 ? `Server already added: ${first.displayName}` : null;
+    isAddServerDialogOpen.value = false;
+    await hydrateServer(first.serverId);
+  } catch (directoryError) {
+    addServerForm.value.errorMessage = (directoryError as Error).message;
+  } finally {
+    addServerForm.value.isSubmitting = false;
+  }
+}
+
+async function addServerManually(): Promise<void> {
+  const backendUrl = addServerForm.value.backendUrl.trim().replace(/\/$/, "");
+  const serverId = addServerForm.value.serverId.trim();
+  const displayName = addServerForm.value.displayName.trim();
+
+  if (!backendUrl) {
+    addServerForm.value.errorMessage = "Backend URL is required.";
+    return;
+  }
+  if (!serverId) {
+    addServerForm.value.errorMessage = "Server ID is required.";
+    return;
+  }
+
+  const profile: ServerProfile = {
+    serverId,
+    displayName: displayName || serverId,
+    backendUrl,
+    iconText: toIconText(displayName || serverId),
+    trustState: "unverified",
+    identityHandshakeStrategy: "challenge_signature",
+    userIdentifierPolicy: "server_scoped"
+  };
+
+  const added = registry.addServer(profile);
+  if (!added) {
+    addServerForm.value.errorMessage = `Server already added: ${serverId}`;
+    return;
+  }
+
+  appUI.setActiveServer(profile.serverId);
+  startupError.value = null;
+  isAddServerDialogOpen.value = false;
+  await hydrateServer(profile.serverId);
 }
 </script>
 
@@ -442,6 +489,7 @@ function closeMembersPane(): void {
         :servers="registry.servers"
         :active-server-id="appUI.activeServerId"
         @select-server="selectServer"
+        @add-server="openAddServerDialog"
       />
 
       <ChannelPane
@@ -488,6 +536,19 @@ function closeMembersPane(): void {
         </div>
       </header>
 
+      <CallBar
+        class="call-bar-slot"
+        :active-voice-channel-name="activeVoiceChannelName"
+        :call-state="activeCallSession?.state ?? 'idle'"
+        :participant-count="activeCallSession?.participants.length ?? 0"
+        :mic-muted="activeCallSession?.micMuted ?? false"
+        :deafened="activeCallSession?.deafened ?? false"
+        :error-message="activeCallSession?.errorMessage ?? null"
+        @toggle-mic="toggleMic"
+        @toggle-deafen="toggleDeafen"
+        @leave-call="leaveVoiceChannel"
+      />
+
       <ChatPane
         class="chat-pane-slot"
         :channel-id="activeChannelName"
@@ -497,7 +558,11 @@ function closeMembersPane(): void {
         :uid-mode="identity.uidMode"
         :app-version="appVersion"
         :runtime-label="runtime ? `${runtime.platform} / ${runtime.arch}` : 'runtime pending'"
+        :is-loading-messages="isLoadingMessages"
+        :is-sending-message="isSendingMessage"
+        :startup-error="startupError"
         @toggle-uid-mode="cycleUIDMode"
+        @send-message="sendMessage"
       />
 
       <MembersPane
@@ -506,6 +571,62 @@ function closeMembersPane(): void {
         :is-open="appUI.membersPaneOpen"
         @close="closeMembersPane"
       />
+
     </section>
+
+    <div
+      v-if="isAddServerDialogOpen"
+      class="modal-backdrop"
+      role="presentation"
+      @click.self="closeAddServerDialog"
+    >
+      <section class="server-modal" role="dialog" aria-modal="true" aria-label="Add server">
+        <header>
+          <h3>Add Server</h3>
+          <button type="button" class="server-modal-close" @click="closeAddServerDialog">Close</button>
+        </header>
+
+        <label class="server-modal-field">
+          <span>Backend URL</span>
+          <input v-model="addServerForm.backendUrl" type="text" placeholder="http://localhost:8080" />
+        </label>
+
+        <div class="server-modal-actions">
+          <button
+            type="button"
+            class="server-modal-btn is-primary"
+            :disabled="addServerForm.isSubmitting"
+            @click="discoverServersFromURL"
+          >
+            {{ addServerForm.isSubmitting ? "Discovering..." : "Discover From Backend" }}
+          </button>
+        </div>
+
+        <p v-if="addServerForm.errorMessage" class="server-modal-error">{{ addServerForm.errorMessage }}</p>
+
+        <div class="server-modal-divider" />
+
+        <p class="server-modal-label">Manual Add</p>
+        <label class="server-modal-field">
+          <span>Server ID</span>
+          <input v-model="addServerForm.serverId" type="text" placeholder="srv_demo" />
+        </label>
+        <label class="server-modal-field">
+          <span>Display Name</span>
+          <input v-model="addServerForm.displayName" type="text" placeholder="Demo Server" />
+        </label>
+
+        <div class="server-modal-actions">
+          <button
+            type="button"
+            class="server-modal-btn"
+            :disabled="addServerForm.isSubmitting"
+            @click="addServerManually"
+          >
+            Add Manually
+          </button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>

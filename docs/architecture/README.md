@@ -8,6 +8,7 @@ This section defines the client architecture, major constraints, and accepted te
 - Backend contract: `docs/architecture/backend-contract.md`
 - Design system architecture: `docs/architecture/design-system.md`
 - WebRTC test strategy: `docs/architecture/webrtc-test-strategy.md`
+- Implementation open questions: `docs/architecture/implementation-open-questions.md`
 
 ## Current Focus
 - Electron process boundaries and renderer safety model.

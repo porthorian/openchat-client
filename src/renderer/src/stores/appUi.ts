@@ -4,8 +4,8 @@ type ViewMode = "comfortable" | "compact";
 
 export const useAppUIStore = defineStore("app-ui", {
   state: () => ({
-    activeServerId: "srv_harbor",
-    activeChannelId: "ch_general",
+    activeServerId: "",
+    activeChannelId: "",
     channelFilter: "",
     viewMode: "comfortable" as ViewMode,
     membersPaneOpen: true
@@ -13,7 +13,7 @@ export const useAppUIStore = defineStore("app-ui", {
   actions: {
     setActiveServer(serverId: string): void {
       this.activeServerId = serverId;
-      this.activeChannelId = "ch_general";
+      this.activeChannelId = "";
       this.channelFilter = "";
     },
     setActiveChannel(channelId: string): void {

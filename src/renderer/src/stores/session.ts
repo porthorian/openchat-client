@@ -19,17 +19,7 @@ const baseSession: ServerSession = {
 
 export const useSessionStore = defineStore("session", {
   state: (): SessionState => ({
-    sessionsByServer: {
-      srv_harbor: {
-        ...baseSession,
-        userUID: "uid_4f3a1bc2"
-      },
-      srv_arcade: {
-        status: "connecting",
-        userUID: "uid_pending",
-        lastBoundAt: null
-      }
-    }
+    sessionsByServer: {}
   }),
   actions: {
     setSession(serverId: string, payload: ServerSession): void {

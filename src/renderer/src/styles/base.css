@@ -60,7 +60,7 @@ button {
   min-width: 0;
   display: grid;
   grid-template-columns: 72px 305px minmax(0, 1fr) 248px;
-  grid-template-rows: 50px minmax(0, 1fr);
+  grid-template-rows: 50px auto minmax(0, 1fr);
   transition: grid-template-columns 180ms ease;
   overflow: hidden;
 }
@@ -71,12 +71,12 @@ button {
 
 .layout > .server-rail {
   grid-column: 1;
-  grid-row: 1 / 3;
+  grid-row: 1 / 4;
 }
 
 .layout > .channel-pane {
   grid-column: 2;
-  grid-row: 1 / 3;
+  grid-row: 1 / 4;
 }
 
 .workspace-toolbar {
@@ -85,15 +85,21 @@ button {
   min-width: 0;
 }
 
+.call-bar-slot {
+  grid-column: 3 / 5;
+  grid-row: 2;
+  min-width: 0;
+}
+
 .chat-pane-slot {
   grid-column: 3;
-  grid-row: 2;
+  grid-row: 3;
   min-width: 0;
 }
 
 .members-pane-slot {
   grid-column: 4;
-  grid-row: 2;
+  grid-row: 3;
   min-width: 0;
   overflow: hidden;
 }
@@ -1242,6 +1248,109 @@ button {
   color: #6f7585;
 }
 
+.call-bar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 8px 14px;
+  background: #1f222c;
+  border-bottom: 1px solid #2d3240;
+}
+
+.call-bar-primary {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.call-bar-primary strong {
+  font-size: 0.9rem;
+  color: #eef2ff;
+}
+
+.call-bar-primary small {
+  font-size: 0.77rem;
+  color: #b4bbcb;
+}
+
+.call-state-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.call-state-chip.is-idle {
+  background: #2e3542;
+  color: #a7afc0;
+}
+
+.call-state-chip.is-joining,
+.call-state-chip.is-reconnecting {
+  background: #4f4126;
+  color: #f3c979;
+}
+
+.call-state-chip.is-active {
+  background: #214b34;
+  color: #79d1a0;
+}
+
+.call-state-chip.is-error {
+  background: #5b2a30;
+  color: #ffb0ba;
+}
+
+.call-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.call-control {
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid #3a4254;
+  background: #2a303d;
+  color: #dbe3f5;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.call-control:hover:not(:disabled) {
+  background: #364056;
+}
+
+.call-control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.call-control.is-danger {
+  border-color: #6a3a41;
+  background: #4d2a2f;
+  color: #ffd8de;
+}
+
+.call-control.is-danger:hover:not(:disabled) {
+  background: #66363d;
+}
+
+.call-error {
+  grid-column: 1 / -1;
+  font-size: 0.74rem;
+  color: #ffb2bc;
+}
+
 .chat-stage {
   min-height: 0;
   overflow-y: auto;
@@ -1276,6 +1385,16 @@ button {
   letter-spacing: 0.07em;
   color: #93b4ff;
   text-transform: uppercase;
+}
+
+.startup-error-note {
+  border: 1px solid #7a3a40;
+  border-radius: var(--radius-xs);
+  background: #47262b;
+  color: #ffd1d7;
+  padding: 8px 10px;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
 }
 
 .uid-line {
@@ -1318,6 +1437,17 @@ button {
   padding: 12px;
   display: grid;
   gap: 8px;
+}
+
+.timeline-status {
+  min-height: 72px;
+  border: 1px dashed #33394a;
+  border-radius: var(--radius-sm);
+  background: #161d2d;
+  color: #9ca7bf;
+  display: grid;
+  place-items: center;
+  font-size: 0.86rem;
 }
 
 .message-row {
@@ -1390,6 +1520,23 @@ button {
   color: #adb2be;
   border: 1px solid transparent;
   padding: 0 8px;
+}
+
+.composer-actions .composer-send-btn {
+  min-width: 68px;
+  border-color: #4b5570;
+  background: #313a50;
+  color: #eef3ff;
+}
+
+.composer-actions .composer-send-btn:hover:not(:disabled) {
+  border-color: #5f6e95;
+  background: #3a4664;
+}
+
+.composer-actions .composer-send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .composer-actions button:hover {
@@ -1559,12 +1706,118 @@ button {
   border: 0;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgb(8 9 14 / 62%);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.server-modal {
+  width: min(460px, 100%);
+  border: 1px solid #363c4f;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #1f2330, #1a1d28);
+  box-shadow: 0 20px 44px rgb(0 0 0 / 45%);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.server-modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.server-modal > header h3 {
+  font-size: 1.06rem;
+}
+
+.server-modal-close {
+  min-height: 30px;
+  border-radius: 8px;
+  background: #2a2f3e;
+  border: 1px solid #41485c;
+  color: #dce3f3;
+  padding: 0 10px;
+}
+
+.server-modal-field {
+  display: grid;
+  gap: 6px;
+}
+
+.server-modal-field span,
+.server-modal-label {
+  color: #c5cde0;
+  font-size: 0.83rem;
+  letter-spacing: 0.02em;
+}
+
+.server-modal-field input {
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #353b4e;
+  background: #121521;
+  color: #e8edf9;
+  padding: 0 10px;
+  outline: none;
+}
+
+.server-modal-field input:focus {
+  border-color: #4c5c84;
+}
+
+.server-modal-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.server-modal-btn {
+  min-height: 34px;
+  border-radius: 8px;
+  border: 1px solid #4a5167;
+  background: #2e3446;
+  color: #e4ebfb;
+  padding: 0 12px;
+}
+
+.server-modal-btn.is-primary {
+  border-color: #5d6d95;
+  background: #3a4767;
+}
+
+.server-modal-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.server-modal-error {
+  border-radius: 8px;
+  border: 1px solid #7a3a40;
+  background: #49262c;
+  color: #ffd2d7;
+  padding: 7px 10px;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.server-modal-divider {
+  height: 1px;
+  background: #33394a;
+}
+
 @media (max-width: 1240px) {
   .layout {
     grid-template-columns: 72px 280px minmax(0, 1fr);
   }
 
-  .workspace-toolbar {
+  .workspace-toolbar,
+  .call-bar-slot {
     grid-column: 3 / 4;
   }
 
@@ -1586,7 +1839,8 @@ button {
     display: none;
   }
 
-  .workspace-toolbar {
+  .workspace-toolbar,
+  .call-bar-slot {
     grid-column: 2 / 3;
   }
 
@@ -1600,5 +1854,16 @@ button {
 
   .composer {
     grid-template-columns: auto 1fr auto;
+  }
+
+  .call-bar {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 9px 10px;
+  }
+
+  .call-bar-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 }
