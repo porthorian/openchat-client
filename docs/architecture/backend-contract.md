@@ -123,29 +123,91 @@ The exact URI layout is backend-defined, but capabilities must describe availabl
 - Resume token flow is recommended for realtime session continuity.
 - Client falls back to full sync when resume is not supported.
 
-## 10) Attachments and Media
+## 10) RTC and Signaling Contract
+
+### RTC capability fields
+When media is supported, capability discovery should include `rtc` with:
+- `protocol_version`
+- `signaling_url`
+- `signaling_transport` (`websocket` for current contract)
+- `topologies` (must include `sfu` for group channels)
+- `features` (`voice`, `video`, `screenshare`, `simulcast`)
+- `ice_servers` (STUN/TURN definitions with credential metadata)
+- `connection_policy` (`join_timeout_ms`, `answer_timeout_ms`, `ice_restart_enabled`, `reconnect_backoff_ms`)
+
+### Join and signaling expectations
+- `POST /v1/rtc/channels/:channel_id/join-ticket`:
+  - validates session + channel membership + media permission state
+  - returns short-lived, one-time signaling join ticket
+- `GET /v1/rtc/signaling` (WebSocket upgrade):
+  - accepts join ticket
+  - supports SDP/ICE exchange and participant state events
+
+Join tickets should be scoped minimally to:
+- `server_id`
+- `channel_id`
+- `user_uid`
+- `device_id`
+- permitted media actions
+- expiry and single-use identifier
+
+### RTC event expectations
+Backends should emit explicit events for:
+- participant join/leave
+- track publish/unpublish
+- speaking state updates
+- negotiation/permission errors
+- forced disconnect (`kick`, `ban`, policy revoke)
+
+### Moderation and permission integration
+- Moderation enforcement should immediately invalidate relevant RTC access.
+- `kick`/`ban` should force disconnect active media sessions.
+- `timeout`/channel-level restrictions should map to deterministic permission errors.
+
+## 11) Attachments and Media
 - Capability flags must indicate upload support and limits.
 - Server response should include stable media URLs or retrieval tokens.
 - Client supports placeholder and failure states for uploads.
 
-## 11) Versioning and Compatibility
+## 12) Versioning and Compatibility
 - `api_version` must be exposed in capability discovery.
 - Backward-compatible changes should not break previous minor client versions.
 - Breaking changes require explicit version bump and migration guidance.
 
-## 12) Security Requirements for Compatible Backends
+## 13) Security Requirements for Compatible Backends
 - HTTPS required in production use.
 - Certificate mismatch or insecure transport should trigger explicit client warnings.
 - Servers must not require privileged renderer execution patterns.
 - Servers compatible with this client must support a UID-only identity boundary.
 
-## 13) Contract Testing Strategy
+## 14) Contract Testing Strategy
 - Client integration tests use contract fixtures for capabilities and error shapes.
 - Contract test matrix includes capability variation by server.
 - New feature specs must declare required capability flags.
 - Tests must verify no personal profile fields are required by server paths.
 
-## 14) Open Questions
+## 15) Moderation and Governance Contract
+
+### Capability fields
+Moderation-capable backends should expose moderation policy in discovery payloads, for example:
+- `moderation.enabled`
+- `moderation.actions.immediate` (e.g. kick/timeout/channel_lock)
+- `moderation.actions.vote_required` (e.g. ban)
+- `moderation.vote_policy` (`threshold`, `quorum`, `window_seconds`)
+- `moderation.evidence_policy` (`report_bundle_required`, `plaintext_disclosure_optional`)
+
+### E2EE moderation behavior
+- Backends must not assume moderators can decrypt all historical content.
+- Report flows should support ciphertext references and optional user-disclosed plaintext evidence.
+- Moderation enforcement (`kick`/`ban`) should emit server and channel membership updates for client state invalidation.
+
+### Endpoint expectations
+- Case create/read/list endpoints.
+- Vote create/read endpoints for vote-gated actions.
+- Enforcement endpoints for immediate safety actions and finalized vote actions.
+- Audit/event feed exposing moderation case and action lifecycle metadata.
+
+## 16) Open Questions
 - Should default `user_uid` mode be global or server-scoped pseudonymous projection?
 - Standard schema package location for shared contracts across repositories.
 - Minimum supported API version policy for the first stable release.

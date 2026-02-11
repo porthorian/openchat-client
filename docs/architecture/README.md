@@ -7,6 +7,7 @@ This section defines the client architecture, major constraints, and accepted te
 - ADR template: `docs/architecture/adrs/ADR_TEMPLATE.md`
 - Backend contract: `docs/architecture/backend-contract.md`
 - Design system architecture: `docs/architecture/design-system.md`
+- WebRTC test strategy: `docs/architecture/webrtc-test-strategy.md`
 
 ## Current Focus
 - Electron process boundaries and renderer safety model.
@@ -14,6 +15,7 @@ This section defines the client architecture, major constraints, and accepted te
 - Pinia-based state organization with server-scoped isolation.
 - Clear client/backend contract boundaries for this repository.
 - User-owned identity model with UID-only server disclosure.
+- WebRTC reliability, reconnect, and moderation-enforcement test coverage.
 
 ## Updating Architecture Docs
 1. Create or update an ADR for major decisions.

@@ -19,3 +19,4 @@ This directory contains Architecture Decision Records for the OpenChat Client.
 - `0003-client-only-boundary.md` (Accepted, 2026-02-09)
 - `0004-multi-server-isolation.md` (Accepted, 2026-02-09)
 - `0005-user-owned-identity.md` (Accepted, 2026-02-09)
+- `0006-webrtc-sfu-media-architecture.md` (Proposed, 2026-02-11)
