@@ -12,7 +12,6 @@ import {
 } from "@mdi/js";
 import type { RuntimeInfo } from "@shared/ipc";
 import { useAppUIStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
-import type { SessionStatus } from "@renderer/types/models";
 import AppIcon from "./AppIcon.vue";
 import ServerRail from "./ServerRail.vue";
 import ChannelPane from "./ChannelPane.vue";
@@ -22,13 +21,26 @@ import MembersPane from "./MembersPane.vue";
 type Channel = {
   id: string;
   name: string;
-  unreadCount: number;
+  type: "text" | "voice";
+  unreadCount?: number;
 };
 
 type ChannelGroup = {
   id: string;
   label: string;
+  kind: "text" | "voice";
   channels: Channel[];
+};
+
+type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
+
+type VoiceParticipant = {
+  id: string;
+  name: string;
+  avatarText: string;
+  avatarColor: string;
+  mood: VoiceMood;
+  badgeEmoji?: string;
 };
 
 type Message = {
@@ -49,6 +61,7 @@ const identity = useIdentityStore();
 const registry = useServerRegistryStore();
 const session = useSessionStore();
 const isMacOS = /mac/i.test(window.navigator.userAgent);
+const activeVoiceChannelId = ref<string | null>(null);
 
 const runtime = ref<RuntimeInfo | null>(null);
 const appVersion = ref<string>("0.0.0");
@@ -58,28 +71,40 @@ const channelsByServer: Record<string, ChannelGroup[]> = {
     {
       id: "grp_general",
       label: "shipposting",
+      kind: "text",
       channels: [
-        { id: "ch_general", name: "pornography", unreadCount: 0 },
-        { id: "ch_design", name: "memes", unreadCount: 2 },
-        { id: "ch_release", name: "bedtime-stories", unreadCount: 0 },
-        { id: "ch_jeans", name: "jeansposting", unreadCount: 0 }
+        { id: "ch_general", name: "pornography", type: "text", unreadCount: 0 },
+        { id: "ch_design", name: "memes", type: "text", unreadCount: 2 },
+        { id: "ch_release", name: "bedtime-stories", type: "text", unreadCount: 0 },
+        { id: "ch_jeans", name: "jeansposting", type: "text", unreadCount: 0 }
       ]
     },
     {
       id: "grp_media",
       label: "media",
+      kind: "text",
       channels: [
-        { id: "ch_public", name: "public-clown-services", unreadCount: 0 },
-        { id: "ch_jobs", name: "get-a-job", unreadCount: 0 }
+        { id: "ch_public", name: "public-clown-services", type: "text", unreadCount: 0 },
+        { id: "ch_jobs", name: "get-a-job", type: "text", unreadCount: 0 }
       ]
     },
     {
       id: "grp_gaming",
       label: "gaming",
+      kind: "text",
       channels: [
-        { id: "ch_video", name: "videogames", unreadCount: 5 },
-        { id: "ch_minecraft", name: "minecraft", unreadCount: 0 },
-        { id: "ch_ttrpg", name: "ttrpg", unreadCount: 0 }
+        { id: "ch_video", name: "videogames", type: "text", unreadCount: 5 },
+        { id: "ch_minecraft", name: "minecraft", type: "text", unreadCount: 0 },
+        { id: "ch_ttrpg", name: "ttrpg", type: "text", unreadCount: 0 }
+      ]
+    },
+    {
+      id: "grp_voice",
+      label: "Voice Channels",
+      kind: "voice",
+      channels: [
+        { id: "vc_nocursing", name: "No Cursing Out Loud", type: "voice" },
+        { id: "vc_wavepeach", name: "👋🍑", type: "voice" }
       ]
     }
   ],
@@ -87,18 +112,29 @@ const channelsByServer: Record<string, ChannelGroup[]> = {
     {
       id: "grp_lobby",
       label: "lobby",
+      kind: "text",
       channels: [
-        { id: "ch_general", name: "welcome-desk", unreadCount: 1 },
-        { id: "ch_tools", name: "tooling", unreadCount: 4 },
-        { id: "ch_ux", name: "ux-lab", unreadCount: 0 }
+        { id: "ch_general", name: "welcome-desk", type: "text", unreadCount: 1 },
+        { id: "ch_tools", name: "tooling", type: "text", unreadCount: 4 },
+        { id: "ch_ux", name: "ux-lab", type: "text", unreadCount: 0 }
       ]
     },
     {
       id: "grp_ops",
       label: "operations",
+      kind: "text",
       channels: [
-        { id: "ch_release", name: "release-notes", unreadCount: 0 },
-        { id: "ch_public", name: "outage-watch", unreadCount: 0 }
+        { id: "ch_release", name: "release-notes", type: "text", unreadCount: 0 },
+        { id: "ch_public", name: "outage-watch", type: "text", unreadCount: 0 }
+      ]
+    },
+    {
+      id: "grp_voice",
+      label: "Voice Channels",
+      kind: "voice",
+      channels: [
+        { id: "vc_general", name: "Arcade Lobby", type: "voice" },
+        { id: "vc_party", name: "Party Chat", type: "voice" }
       ]
     }
   ]
@@ -223,6 +259,35 @@ const membersByServer: Record<string, MemberItem[]> = {
   ]
 };
 
+const voiceParticipantsByServer: Record<string, Record<string, VoiceParticipant[]>> = {
+  srv_harbor: {
+    vc_nocursing: [
+      {
+        id: "vp_deadguy",
+        name: "deadguy",
+        avatarText: "D",
+        avatarColor: "#9f8f6a",
+        mood: "chilling",
+        badgeEmoji: "🕹️"
+      }
+    ],
+    vc_wavepeach: []
+  },
+  srv_arcade: {
+    vc_general: [
+      {
+        id: "vp_aster",
+        name: "Aster",
+        avatarText: "A",
+        avatarColor: "#6b8fd8",
+        mood: "gaming",
+        badgeEmoji: "🎮"
+      }
+    ],
+    vc_party: []
+  }
+};
+
 onMounted(async () => {
   identity.initializeIdentity();
 
@@ -243,8 +308,14 @@ onMounted(async () => {
 const activeServer = computed(() => registry.byId(appUI.activeServerId));
 const activeSession = computed(() => session.sessionsByServer[appUI.activeServerId]);
 
+function orderChannelGroups(groups: ChannelGroup[]): ChannelGroup[] {
+  const voiceGroups = groups.filter((group) => group.kind === "voice");
+  const textGroups = groups.filter((group) => group.kind === "text");
+  return [...voiceGroups, ...textGroups];
+}
+
 const filteredChannelGroups = computed(() => {
-  const groups = channelsByServer[appUI.activeServerId] ?? [];
+  const groups = orderChannelGroups(channelsByServer[appUI.activeServerId] ?? []);
   const filter = appUI.channelFilter.trim().toLowerCase();
   if (!filter) return groups;
 
@@ -264,10 +335,38 @@ const activeMembers = computed(() => {
   return membersByServer[appUI.activeServerId] ?? [];
 });
 
+const activeVoiceParticipants = computed<Record<string, VoiceParticipant[]>>(() => {
+  const base = voiceParticipantsByServer[appUI.activeServerId] ?? {};
+  const byChannel: Record<string, VoiceParticipant[]> = {};
+  Object.entries(base).forEach(([channelId, participants]) => {
+    byChannel[channelId] = participants.map((participant) => ({ ...participant }));
+  });
+
+  if (activeVoiceChannelId.value) {
+    const currentParticipants = byChannel[activeVoiceChannelId.value] ?? [];
+    const localParticipantId = "vp_local";
+    if (!currentParticipants.some((participant) => participant.id === localParticipantId)) {
+      byChannel[activeVoiceChannelId.value] = [
+        {
+          id: localParticipantId,
+          name: "Vincenzo Ferrari",
+          avatarText: "V",
+          avatarColor: "#f2d58f",
+          mood: "chilling",
+          badgeEmoji: "🕹️"
+        },
+        ...currentParticipants
+      ];
+    }
+  }
+
+  return byChannel;
+});
+
 const activeChannelName = computed(() => {
   const groups = channelsByServer[appUI.activeServerId] ?? [];
   for (const group of groups) {
-    const match = group.channels.find((channel) => channel.id === appUI.activeChannelId);
+    const match = group.channels.find((channel) => channel.id === appUI.activeChannelId && channel.type === "text");
     if (match) return match.name;
   }
   return appUI.activeChannelId.replace("ch_", "");
@@ -275,10 +374,15 @@ const activeChannelName = computed(() => {
 
 function selectServer(serverId: string): void {
   appUI.setActiveServer(serverId);
+  activeVoiceChannelId.value = null;
 }
 
 function selectChannel(channelId: string): void {
   appUI.setActiveChannel(channelId);
+}
+
+function selectVoiceChannel(channelId: string): void {
+  activeVoiceChannelId.value = activeVoiceChannelId.value === channelId ? null : channelId;
 }
 
 function setChannelFilter(value: string): void {
@@ -295,10 +399,6 @@ function cycleUIDMode(): void {
       lastBoundAt: existing?.lastBoundAt ?? new Date().toISOString()
     });
   });
-}
-
-function setSessionStatus(status: SessionStatus): void {
-  session.setStatus(appUI.activeServerId, status);
 }
 
 function toggleMembersPane(): void {
@@ -348,11 +448,12 @@ function closeMembersPane(): void {
         :server-name="activeServer?.displayName ?? 'Unknown Server'"
         :groups="filteredChannelGroups"
         :active-channel-id="appUI.activeChannelId"
+        :active-voice-channel-id="activeVoiceChannelId"
+        :voice-participants-by-channel="activeVoiceParticipants"
         :filter-value="appUI.channelFilter"
-        :session-status="activeSession?.status ?? 'disconnected'"
         @select-channel="selectChannel"
+        @select-voice-channel="selectVoiceChannel"
         @update-filter="setChannelFilter"
-        @set-session-status="setSessionStatus"
       />
 
       <header class="workspace-toolbar">

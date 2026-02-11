@@ -5,6 +5,12 @@ This document defines the implementation plan for an open-source Electron deskto
 
 This repository is **client-only**.
 
+## Agent Execution Rule
+- Do not run any `git` commands in this repository.
+- Do not run any commands unless they are explicitly approved by the user or explicitly allowed in this `AGENTS.md`.
+- Never reintroduce code/content that the user previously removed.
+- If an edit conflicts or patching fails, prefer minimal targeted edits; do not replace entire files unless the user explicitly asks for a full rewrite.
+
 ## 2) Scope and Boundaries
 
 ### In scope
