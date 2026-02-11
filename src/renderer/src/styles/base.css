@@ -186,9 +186,9 @@ button {
   background: var(--bg-rail);
   border-right: 1px solid #101116;
   padding: 10px 0;
-  display: grid;
-  grid-auto-rows: 52px;
-  justify-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 8px;
 }
 
@@ -209,6 +209,10 @@ button {
   color: #d9dbe1;
   font-size: 0.72rem;
   font-weight: 700;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  line-height: 1;
   transition: all 150ms ease;
 }
 

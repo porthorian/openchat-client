@@ -18,7 +18,7 @@ const emit = defineEmits<{
     <button type="button" class="server-dot app-home is-active">
       <AppIcon :path="mdiMessage" :size="20" />
     </button>
-    <div class="server-divider" />
+    <div class="server-divider"></div>
     <button
       v-for="server in servers"
       :key="server.serverId"
@@ -35,9 +35,6 @@ const emit = defineEmits<{
 
     <button type="button" class="server-dot utility">
       <AppIcon :path="mdiPlus" :size="18" />
-    </button>
-    <button type="button" class="server-dot utility">
-      <AppIcon :path="mdiHelpCircleOutline" :size="18" />
     </button>
   </aside>
 </template>
