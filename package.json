@@ -13,8 +13,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
-    "pack": "yarn build && yarn dlx electron-builder@24.13.3 --dir",
-    "dist": "yarn build && yarn dlx electron-builder@24.13.3"
+    "pack": "yarn build && yarn dlx electron-builder@24.13.3 --dir --publish never",
+    "dist": "yarn build && yarn dlx electron-builder@24.13.3 --publish never"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",

@@ -27,6 +27,7 @@ win:
 
 linux:
   category: Network
+  maintainer: OpenChat Maintainers <maintainers@marone.us>
   target:
     - AppImage
     - deb
