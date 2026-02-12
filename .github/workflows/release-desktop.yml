@@ -20,6 +20,14 @@ jobs:
           - ubuntu-latest
           - windows-latest
           - macos-latest
+    env:
+      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -41,47 +49,47 @@ jobs:
         run: corepack yarn install --immutable
 
       - name: Import Apple code signing certificate
-        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE_P12_BASE64 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != ''
+        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_CERTIFICATE_PASSWORD != ''
         uses: apple-actions/import-codesign-certs@v3
         with:
-          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          p12-file-base64: ${{ env.APPLE_CERTIFICATE_P12_BASE64 }}
+          p12-password: ${{ env.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Prepare Windows code signing certificate
-        if: matrix.os == 'windows-latest' && secrets.WINDOWS_CERT_PFX_BASE64 != '' && secrets.WINDOWS_CERT_PASSWORD != ''
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERT_PFX_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != ''
         shell: pwsh
         run: |
           $certPath = "${{ runner.temp }}\\windows-signing.pfx"
           [System.IO.File]::WriteAllBytes(
             $certPath,
-            [System.Convert]::FromBase64String("${{ secrets.WINDOWS_CERT_PFX_BASE64 }}")
+            [System.Convert]::FromBase64String("${{ env.WINDOWS_CERT_PFX_BASE64 }}")
           )
 
       - name: Build installers (macOS signed + notarized)
-        if: matrix.os == 'macos-latest' && secrets.APPLE_CERTIFICATE_P12_BASE64 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != ''
+        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_CERTIFICATE_PASSWORD != '' && env.APPLE_ID != '' && env.APPLE_APP_SPECIFIC_PASSWORD != '' && env.APPLE_TEAM_ID != ''
         run: corepack yarn dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "true"
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ env.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ env.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
 
       - name: Build installers (macOS unsigned fallback)
-        if: matrix.os == 'macos-latest' && (secrets.APPLE_CERTIFICATE_P12_BASE64 == '' || secrets.APPLE_CERTIFICATE_PASSWORD == '' || secrets.APPLE_ID == '' || secrets.APPLE_APP_SPECIFIC_PASSWORD == '' || secrets.APPLE_TEAM_ID == '')
+        if: matrix.os == 'macos-latest' && (env.APPLE_CERTIFICATE_P12_BASE64 == '' || env.APPLE_CERTIFICATE_PASSWORD == '' || env.APPLE_ID == '' || env.APPLE_APP_SPECIFIC_PASSWORD == '' || env.APPLE_TEAM_ID == '')
         run: corepack yarn dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Build installers (Windows signed)
-        if: matrix.os == 'windows-latest' && secrets.WINDOWS_CERT_PFX_BASE64 != '' && secrets.WINDOWS_CERT_PASSWORD != ''
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERT_PFX_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != ''
         run: corepack yarn dist
         env:
           CSC_LINK: "${{ runner.temp }}\\windows-signing.pfx"
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          CSC_KEY_PASSWORD: ${{ env.WINDOWS_CERT_PASSWORD }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Build installers (Windows unsigned fallback)
-        if: matrix.os == 'windows-latest' && (secrets.WINDOWS_CERT_PFX_BASE64 == '' || secrets.WINDOWS_CERT_PASSWORD == '')
+        if: matrix.os == 'windows-latest' && (env.WINDOWS_CERT_PFX_BASE64 == '' || env.WINDOWS_CERT_PASSWORD == '')
         run: corepack yarn dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -93,12 +101,12 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Warn about unsigned macOS build
-        if: matrix.os == 'macos-latest' && (secrets.APPLE_CERTIFICATE_P12_BASE64 == '' || secrets.APPLE_CERTIFICATE_PASSWORD == '' || secrets.APPLE_ID == '' || secrets.APPLE_APP_SPECIFIC_PASSWORD == '' || secrets.APPLE_TEAM_ID == '')
+        if: matrix.os == 'macos-latest' && (env.APPLE_CERTIFICATE_P12_BASE64 == '' || env.APPLE_CERTIFICATE_PASSWORD == '' || env.APPLE_ID == '' || env.APPLE_APP_SPECIFIC_PASSWORD == '' || env.APPLE_TEAM_ID == '')
         run: |
           echo "::warning::macOS artifact was built unsigned/unnotarized. Gatekeeper may show 'damaged' for downloaded apps."
 
       - name: Warn about unsigned Windows build
-        if: matrix.os == 'windows-latest' && (secrets.WINDOWS_CERT_PFX_BASE64 == '' || secrets.WINDOWS_CERT_PASSWORD == '')
+        if: matrix.os == 'windows-latest' && (env.WINDOWS_CERT_PFX_BASE64 == '' || env.WINDOWS_CERT_PASSWORD == '')
         run: |
           echo "::warning::Windows artifact was built unsigned. SmartScreen and publisher verification warnings are expected."
 
