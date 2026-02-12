@@ -161,6 +161,20 @@ let statusMenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const presenceLabel = computed(() => presenceLabels[presenceStatus.value]);
 const isVoiceConnected = computed(() => props.callState === "active" && Boolean(props.activeVoiceChannelName));
 const shouldShowVoiceConnectedCard = computed(() => props.callState !== "idle" || Boolean(props.activeVoiceChannelName));
+const profileDisplayName = computed(() => {
+  const uid = props.currentUid.trim();
+  if (!uid) return "Unknown User";
+  if (uid.length <= 16) return uid;
+  return `${uid.slice(0, 12)}…${uid.slice(-4)}`;
+});
+const profileAvatarText = computed(() => profileDisplayName.value.slice(0, 1).toUpperCase());
+const profileHandle = computed(() => `@${props.currentUid.trim() || "uid_unbound"}`);
+const profileNote = computed(() => {
+  return props.uidMode === "server_scoped" ? "Server-scoped identity active" : "Global identity active";
+});
+const profileBio = computed(() => {
+  return `Active on ${props.serverName}.`;
+});
 const voiceConnectedTitle = computed(() => {
   switch (props.callState) {
     case "active":
@@ -661,12 +675,12 @@ onBeforeUnmount(() => {
       <div class="user-dock-main">
         <button type="button" class="user-identity-btn" @click="toggleProfileCard">
           <div class="avatar-pill">
-            V
+            {{ profileAvatarText }}
             <span class="presence-dot" :class="`is-${presenceStatus}`" />
           </div>
           <div class="user-meta">
-            <strong>V. Marone</strong>
-            <small>{{ presenceLabel }}</small>
+            <strong>{{ profileDisplayName }}</strong>
+            <small>{{ profileHandle }}</small>
           </div>
         </button>
 
@@ -761,19 +775,19 @@ onBeforeUnmount(() => {
       <section v-if="profileCardOpen" class="profile-card" role="dialog" aria-label="User profile and status">
         <div class="profile-card-header">
           <div class="profile-avatar">
-            V
+            {{ profileAvatarText }}
             <span class="presence-dot is-large" :class="`is-${presenceStatus}`" />
           </div>
           <div class="profile-note-pill">
             <AppIcon :path="mdiPlusCircleOutline" :size="14" />
-            <span>Favorite anime lately?</span>
+            <span>{{ profileNote }}</span>
           </div>
         </div>
 
         <div class="profile-identity">
-          <strong>V. Marone</strong>
-          <p class="profile-handle">vmarone <span>#</span> <span>⚙️</span></p>
-          <p class="profile-bio">Welp.</p>
+          <strong>{{ profileDisplayName }}</strong>
+          <p class="profile-handle">{{ profileHandle }}</p>
+          <p class="profile-bio">{{ profileBio }}</p>
         </div>
 
         <div class="profile-panel">
