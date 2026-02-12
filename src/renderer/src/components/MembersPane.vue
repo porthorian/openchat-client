@@ -11,6 +11,9 @@ type MemberItem = {
 defineProps<{
   members: MemberItem[];
   isOpen: boolean;
+  title?: string;
+  subtitle?: string;
+  emptyMessage?: string;
 }>();
 
 const emit = defineEmits<{
@@ -21,13 +24,15 @@ const emit = defineEmits<{
 <template>
   <aside class="members-pane" :class="{ 'is-collapsed': !isOpen }">
     <header>
-      <h3>Online - {{ members.length }}</h3>
+      <h3>{{ title ?? "Online" }} - {{ members.length }}</h3>
       <button type="button" class="members-close" @click="emit('close')">
         <AppIcon :path="mdiChevronRight" :size="18" />
       </button>
     </header>
 
     <div class="member-list">
+      <p v-if="subtitle" class="member-list-subtitle">{{ subtitle }}</p>
+      <p v-if="members.length === 0" class="member-list-empty">{{ emptyMessage ?? "No users connected." }}</p>
       <article v-for="member in members" :key="member.id" class="member-row">
         <div class="member-avatar">
           {{ member.name.slice(0, 1) }}

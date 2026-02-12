@@ -8,7 +8,7 @@ import {
   sendRealtime,
   type RealtimeEnvelope
 } from "@renderer/services/chatClient";
-import type { Channel, ChannelGroup, ChatMessage, MemberItem } from "@renderer/types/chat";
+import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, MemberItem } from "@renderer/types/chat";
 
 type ServerRealtimeState = {
   connected: boolean;
@@ -18,6 +18,7 @@ type ServerRealtimeState = {
 type ChatStoreState = {
   groupsByServer: Record<string, ChannelGroup[]>;
   membersByServer: Record<string, MemberItem[]>;
+  presenceByChannel: Record<string, ChannelPresenceMember[]>;
   messagesByChannel: Record<string, ChatMessage[]>;
   loadingByServer: Record<string, boolean>;
   loadingMessagesByChannel: Record<string, boolean>;
@@ -56,6 +57,25 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
   };
 }
 
+function normalizePresenceMember(input: unknown): ChannelPresenceMember | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const userUID = String(payload.user_uid ?? "").trim();
+  if (!userUID) return null;
+  return {
+    clientId: String(payload.client_id ?? "").trim(),
+    userUID,
+    deviceID: String(payload.device_id ?? "").trim()
+  };
+}
+
+function presenceMemberKey(member: ChannelPresenceMember): string {
+  if (member.clientId) return `client:${member.clientId}`;
+  const userUID = member.userUID || "uid_unknown";
+  const deviceID = member.deviceID || "device_unknown";
+  return `user:${userUID}|device:${deviceID}`;
+}
+
 function firstTextChannel(groups: ChannelGroup[]): Channel | null {
   for (const group of groups) {
     for (const channel of group.channels) {
@@ -71,6 +91,7 @@ export const useChatStore = defineStore("chat", {
   state: (): ChatStoreState => ({
     groupsByServer: {},
     membersByServer: {},
+    presenceByChannel: {},
     messagesByChannel: {},
     loadingByServer: {},
     loadingMessagesByChannel: {},
@@ -88,6 +109,11 @@ export const useChatStore = defineStore("chat", {
       (state) =>
       (serverId: string): MemberItem[] => {
         return state.membersByServer[serverId] ?? [];
+      },
+    channelPresenceFor:
+      (state) =>
+      (channelId: string): ChannelPresenceMember[] => {
+        return state.presenceByChannel[channelId] ?? [];
       },
     messagesFor:
       (state) =>
@@ -220,6 +246,7 @@ export const useChatStore = defineStore("chat", {
     },
     subscribeToChannel(serverId: string, channelId: string): void {
       this.subscribedChannelByServer[serverId] = channelId;
+      this.presenceByChannel[channelId] = [];
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendRealtime(socket, {
@@ -233,6 +260,7 @@ export const useChatStore = defineStore("chat", {
       if (activeSubscribed === channelId) {
         this.subscribedChannelByServer[serverId] = null;
       }
+      this.presenceByChannel[channelId] = [];
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendRealtime(socket, {
@@ -251,6 +279,39 @@ export const useChatStore = defineStore("chat", {
         this.messagesByChannel[message.channelId] = [...existing, message];
         return;
       }
+      if (envelope.type === "chat.presence.snapshot") {
+        const payload = (envelope.payload ?? {}) as Record<string, unknown>;
+        const channelID = String(payload.channel_id ?? "").trim();
+        if (!channelID) return;
+        const members = Array.isArray(payload.members)
+          ? payload.members
+              .map((item) => normalizePresenceMember(item))
+              .filter((item): item is ChannelPresenceMember => item !== null)
+          : [];
+        this.presenceByChannel[channelID] = members;
+        return;
+      }
+      if (envelope.type === "chat.presence.joined") {
+        const payload = (envelope.payload ?? {}) as Record<string, unknown>;
+        const channelID = String(payload.channel_id ?? "").trim();
+        const member = normalizePresenceMember(payload.member);
+        if (!channelID || !member) return;
+        const existing = this.presenceByChannel[channelID] ?? [];
+        const key = presenceMemberKey(member);
+        if (existing.some((item) => presenceMemberKey(item) === key)) return;
+        this.presenceByChannel[channelID] = [...existing, member];
+        return;
+      }
+      if (envelope.type === "chat.presence.left") {
+        const payload = (envelope.payload ?? {}) as Record<string, unknown>;
+        const channelID = String(payload.channel_id ?? "").trim();
+        const member = normalizePresenceMember(payload.member);
+        if (!channelID || !member) return;
+        const existing = this.presenceByChannel[channelID] ?? [];
+        const leavingKey = presenceMemberKey(member);
+        this.presenceByChannel[channelID] = existing.filter((item) => presenceMemberKey(item) !== leavingKey);
+        return;
+      }
       if (envelope.type === "chat.error") {
         const payload = (envelope.payload ?? {}) as Record<string, unknown>;
         this.ensureRealtimeState(serverId);
@@ -263,11 +324,13 @@ export const useChatStore = defineStore("chat", {
       intentionallyClosedSockets.add(serverId);
       socket.close();
       socketsByServer.delete(serverId);
+      this.clearPresenceForServer(serverId);
     },
     disconnectAllRealtime(): void {
       [...socketsByServer.keys()].forEach((serverId) => {
         this.disconnectServerRealtime(serverId);
       });
+      this.presenceByChannel = {};
     },
     ensureRealtimeState(serverId: string): void {
       if (!this.realtimeByServer[serverId]) {
@@ -276,6 +339,14 @@ export const useChatStore = defineStore("chat", {
           errorMessage: null
         };
       }
+    },
+    clearPresenceForServer(serverId: string): void {
+      const groups = this.groupsByServer[serverId] ?? [];
+      groups.forEach((group) => {
+        group.channels.forEach((channel) => {
+          delete this.presenceByChannel[channel.id];
+        });
+      });
     }
   }
 });

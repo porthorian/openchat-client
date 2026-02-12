@@ -141,8 +141,28 @@ const activeMessages = computed(() => {
   return chat.messagesFor(appUI.activeChannelId);
 });
 
-const activeMembers = computed(() => {
-  return chat.membersFor(appUI.activeServerId);
+const connectedMembers = computed(() => {
+  if (!appUI.activeChannelId) return [];
+  const members = chat.channelPresenceFor(appUI.activeChannelId);
+  return members.map((member) => ({
+    id: member.clientId || `${member.userUID}:${member.deviceID}`,
+    name: toDisplayName(member.userUID),
+    status: "online" as const
+  }));
+});
+
+const membersPaneTitle = computed(() => {
+  return "Online";
+});
+
+const membersPaneSubtitle = computed(() => {
+  if (!appUI.activeChannelId) return "No active channel";
+  return `#${activeChannelName.value}`;
+});
+
+const membersPaneEmptyMessage = computed(() => {
+  if (!appUI.activeChannelId) return "Select a text channel to see active users.";
+  return "No users currently active in this text channel.";
 });
 
 const activeCallSession = computed(() => {
@@ -562,7 +582,10 @@ async function addServerManually(): Promise<void> {
 
       <MembersPane
         class="members-pane-slot"
-        :members="activeMembers"
+        :members="connectedMembers"
+        :title="membersPaneTitle"
+        :subtitle="membersPaneSubtitle"
+        :empty-message="membersPaneEmptyMessage"
         :is-open="appUI.membersPaneOpen"
         @close="closeMembersPane"
       />

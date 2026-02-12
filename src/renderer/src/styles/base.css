@@ -1985,6 +1985,24 @@ button {
   padding: 10px 8px;
 }
 
+.member-list-subtitle {
+  color: #9ea6bc;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0 8px 6px;
+}
+
+.member-list-empty {
+  border: 1px dashed #343949;
+  border-radius: 8px;
+  background: #242833;
+  color: #aab2c7;
+  font-size: 0.82rem;
+  padding: 10px;
+  margin: 0 2px 8px;
+}
+
 .member-row {
   height: 42px;
   border-radius: var(--radius-sm);

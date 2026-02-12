@@ -27,3 +27,9 @@ export type ChatMessage = {
   body: string;
   createdAt: string;
 };
+
+export type ChannelPresenceMember = {
+  clientId: string;
+  userUID: string;
+  deviceID: string;
+};
