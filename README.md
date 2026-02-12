@@ -1,6 +1,7 @@
 # OpenChat Client
 
 OpenChat Client is an open-source Electron desktop app that provides a Discord-like experience while connecting each joined server to its own independent backend.
+![OpenChat Client](image.png)
 
 ## Status
 - Early implementation phase (Milestone 0 scaffolding).
