@@ -51,6 +51,21 @@ Tag-based release process:
 2. GitHub Actions workflow `.github/workflows/release-desktop.yml` builds installers for macOS, Windows, and Linux.
 3. The workflow publishes assets to a GitHub Release for that tag.
 
+macOS signing/notarization (required for end-user install UX):
+- `APPLE_CERTIFICATE_P12_BASE64` (Developer ID Application cert exported as base64 `.p12`)
+- `APPLE_CERTIFICATE_PASSWORD` (password for the `.p12`)
+- `APPLE_ID` (Apple ID email)
+- `APPLE_APP_SPECIFIC_PASSWORD` (app-specific password for notarization)
+- `APPLE_TEAM_ID` (Apple Developer team id)
+
+If these are missing, CI still builds mac artifacts but they are unsigned and may be blocked by Gatekeeper as damaged/untrusted.
+
+Windows code signing (recommended for SmartScreen + verified publisher UX):
+- `WINDOWS_CERT_PFX_BASE64` (code-signing `.pfx` exported as base64)
+- `WINDOWS_CERT_PASSWORD` (password for the `.pfx`)
+
+If these are missing, CI still builds Windows artifacts but they are unsigned and Windows may show publisher/security warnings.
+
 Local packaging (maintainers):
 - `yarn pack`: builds unpacked app output.
 - `yarn dist`: builds platform installer artifacts in `release/`.
