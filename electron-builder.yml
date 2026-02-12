@@ -1,0 +1,36 @@
+appId: io.openchat.client
+productName: OpenChat Client
+asar: true
+
+directories:
+  output: release
+
+files:
+  - out/**
+  - package.json
+
+extraMetadata:
+  main: out/main/index.js
+
+artifactName: openchat-client-${version}-${os}-${arch}.${ext}
+
+mac:
+  category: public.app-category.social-networking
+  target:
+    - dmg
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+linux:
+  category: Network
+  target:
+    - AppImage
+    - deb
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

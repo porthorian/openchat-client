@@ -10,3 +10,4 @@ coverage/
 *.tsbuildinfo
 
 .yarn
+release

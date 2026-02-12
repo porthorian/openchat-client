@@ -4,7 +4,7 @@ OpenChat Client is an open-source Electron desktop app that provides a Discord-l
 
 ## Status
 - Early implementation phase (Milestone 0 scaffolding).
-- No production-ready binaries yet.
+- Desktop installer pipeline is configured (tag-based GitHub Actions builds).
 - Repository now includes initial Electron + Vue runtime plus planning docs.
 
 ## Scope
@@ -42,6 +42,18 @@ This repo does not include backend service code.
 4. Start desktop app in dev mode: `yarn dev`
 5. Type-check renderer/main/preload code: `yarn typecheck`
 6. Use `docs/features/FEATURE_TEMPLATE.md` for new feature proposals.
+
+## Desktop Installers
+Users should install release binaries, not build from source.
+
+Tag-based release process:
+1. Push a tag in the format `client-vX.X.X`.
+2. GitHub Actions workflow `.github/workflows/release-desktop.yml` builds installers for macOS, Windows, and Linux.
+3. The workflow publishes assets to a GitHub Release for that tag.
+
+Local packaging (maintainers):
+- `yarn pack`: builds unpacked app output.
+- `yarn dist`: builds platform installer artifacts in `release/`.
 
 ## Open Source Contribution
 Contributions are welcome. Start with `CONTRIBUTING.md`, then open an issue or proposal before major changes.
