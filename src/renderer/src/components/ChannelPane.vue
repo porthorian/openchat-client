@@ -1,31 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
-  mdiAccessPoint,
-  mdiCheckboxBlankOutline,
-  mdiCheckboxMarked,
   mdiChevronDown,
   mdiChevronRight,
   mdiCogOutline,
-  mdiDeleteOutline,
-  mdiDotsGrid,
   mdiHeadphones,
   mdiHeadphonesOff,
   mdiMessage,
   mdiMicrophone,
   mdiMicrophoneOff,
-  mdiMonitorShare,
-  mdiPencilOutline,
-  mdiPhoneHangup,
   mdiPlus,
-  mdiPlusCircleOutline,
   mdiPound,
-  mdiVolumeHigh,
-  mdiVideo,
-  mdiWaveform
+  mdiVolumeHigh
 } from "@mdi/js";
 import type { UIDMode } from "@renderer/types/models";
 import AppIcon from "./AppIcon.vue";
+import ChannelCategoryMenu from "./ChannelCategoryMenu.vue";
+import ChannelVoiceConnectedCard from "./ChannelVoiceConnectedCard.vue";
+import ProfilePanelCard from "./ProfilePanelCard.vue";
+import VoicePresencePopover from "./VoicePresencePopover.vue";
 
 type Channel = {
   id: string;
@@ -85,35 +78,6 @@ const emit = defineEmits<{
   leaveVoiceChannel: [];
 }>();
 
-const voiceMoodOrder: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
-const voiceMoodCatalog: Record<VoiceMood, { label: string; icon: string }> = {
-  chilling: { label: "chilling", icon: "🛋️" },
-  gaming: { label: "gaming", icon: "🎮" },
-  studying: { label: "studying", icon: "📘" },
-  brb: { label: "brb", icon: "🍽️" },
-  "watching stuff": { label: "watching stuff", icon: "🍿" }
-};
-const presenceOptions: Array<{ value: PresenceStatus; label: string; description?: string }> = [
-  { value: "online", label: "Online" },
-  { value: "idle", label: "Idle" },
-  {
-    value: "busy",
-    label: "Do Not Disturb",
-    description: "You will not receive desktop notifications"
-  },
-  {
-    value: "invisible",
-    label: "Invisible",
-    description: "You will appear offline"
-  }
-];
-const presenceLabels: Record<PresenceStatus, string> = {
-  online: "Online",
-  idle: "Idle",
-  busy: "Do Not Disturb",
-  invisible: "Invisible"
-};
-
 type CategoryMenuState = {
   open: boolean;
   x: number;
@@ -126,11 +90,6 @@ type VoicePresencePopoverState = {
   x: number;
   y: number;
   participant: VoiceParticipant | null;
-};
-
-type FloatingMenuPosition = {
-  x: number;
-  y: number;
 };
 
 const collapsedGroupIds = ref<Set<string>>(new Set());
@@ -150,17 +109,10 @@ const voicePresencePopover = ref<VoicePresencePopoverState>({
 const channelPaneRef = ref<HTMLElement | null>(null);
 const profileCardOpen = ref(false);
 const presenceStatus = ref<PresenceStatus>("online");
-const statusMenuOpen = ref(false);
-const statusTriggerRef = ref<HTMLElement | null>(null);
-const statusMenuPosition = ref<FloatingMenuPosition>({ x: 0, y: 0 });
 const inputSettingsMenuOpen = ref(false);
 const inputGain = ref(100);
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
-let statusMenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
-const presenceLabel = computed(() => presenceLabels[presenceStatus.value]);
-const isVoiceConnected = computed(() => props.callState === "active" && Boolean(props.activeVoiceChannelName));
-const shouldShowVoiceConnectedCard = computed(() => props.callState !== "idle" || Boolean(props.activeVoiceChannelName));
 const profileDisplayName = computed(() => {
   const uid = props.currentUid.trim();
   if (!uid) return "Unknown User";
@@ -169,26 +121,6 @@ const profileDisplayName = computed(() => {
 });
 const profileAvatarText = computed(() => profileDisplayName.value.slice(0, 1).toUpperCase());
 const profileHandle = computed(() => `@${props.currentUid.trim() || "uid_unbound"}`);
-const profileNote = computed(() => {
-  return props.uidMode === "server_scoped" ? "Server-scoped identity active" : "Global identity active";
-});
-const profileBio = computed(() => {
-  return `Active on ${props.serverName}.`;
-});
-const voiceConnectedTitle = computed(() => {
-  switch (props.callState) {
-    case "active":
-      return "Voice Connected";
-    case "joining":
-      return "Connecting...";
-    case "reconnecting":
-      return "Reconnecting...";
-    case "error":
-      return "Voice Error";
-    default:
-      return "Voice Idle";
-  }
-});
 
 function isGroupCollapsed(groupId: string): boolean {
   return collapsedGroupIds.value.has(groupId);
@@ -265,18 +197,6 @@ function hasVoiceParticipants(channelId: string): boolean {
   return participantsForVoiceChannel(channelId).length > 0;
 }
 
-function moodLabel(mood: VoiceMood): string {
-  return voiceMoodCatalog[mood].label;
-}
-
-function moodIcon(mood: VoiceMood): string {
-  return voiceMoodCatalog[mood].icon;
-}
-
-function isPopoverMood(mood: VoiceMood): boolean {
-  return voicePresencePopover.value.participant?.mood === mood;
-}
-
 function clearVoicePopoverCloseTimer(): void {
   if (voicePopoverCloseTimer !== null) {
     clearTimeout(voicePopoverCloseTimer);
@@ -320,57 +240,6 @@ function openVoicePresencePopover(participant: VoiceParticipant, event: MouseEve
   };
 }
 
-function clearStatusMenuCloseTimer(): void {
-  if (statusMenuCloseTimer !== null) {
-    clearTimeout(statusMenuCloseTimer);
-    statusMenuCloseTimer = null;
-  }
-}
-
-function openStatusMenu(): void {
-  clearStatusMenuCloseTimer();
-  closeInputSettingsMenu();
-  updateStatusMenuPosition();
-  statusMenuOpen.value = true;
-}
-
-function scheduleStatusMenuClose(): void {
-  clearStatusMenuCloseTimer();
-  statusMenuCloseTimer = setTimeout(() => {
-    statusMenuOpen.value = false;
-  }, 120);
-}
-
-function closeStatusMenu(): void {
-  clearStatusMenuCloseTimer();
-  statusMenuOpen.value = false;
-}
-
-function updateStatusMenuPosition(): void {
-  const triggerRect = statusTriggerRef.value?.getBoundingClientRect();
-  if (!triggerRect) return;
-
-  const menuWidth = 300;
-  const menuHeight = 224;
-  const gap = 12;
-  let x = triggerRect.right + gap;
-  if (x + menuWidth > window.innerWidth - 8) {
-    x = triggerRect.left - menuWidth - gap;
-  }
-  x = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
-
-  let y = triggerRect.top - 8;
-  y = Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8));
-
-  statusMenuPosition.value = { x, y };
-}
-
-function onWindowResize(): void {
-  if (statusMenuOpen.value) {
-    updateStatusMenuPosition();
-  }
-}
-
 function onWindowPointerDown(event: PointerEvent): void {
   const target = event.target as HTMLElement | null;
   if (!target?.closest(".category-menu") && !target?.closest(".category-header")) {
@@ -385,10 +254,6 @@ function onWindowPointerDown(event: PointerEvent): void {
     closeProfileCard();
   }
 
-  if (!target?.closest(".status-hover-menu") && !target?.closest(".profile-status-trigger")) {
-    closeStatusMenu();
-  }
-
   if (!target?.closest(".input-settings-menu") && !target?.closest(".input-settings-trigger")) {
     closeInputSettingsMenu();
   }
@@ -399,16 +264,12 @@ function onWindowKeydown(event: KeyboardEvent): void {
     closeCategoryMenu();
     closeVoicePresencePopover();
     closeProfileCard();
-    closeStatusMenu();
     closeInputSettingsMenu();
   }
 }
 
 function toggleProfileCard(): void {
   profileCardOpen.value = !profileCardOpen.value;
-  if (!profileCardOpen.value) {
-    closeStatusMenu();
-  }
   closeCategoryMenu();
   closeVoicePresencePopover();
   closeInputSettingsMenu();
@@ -416,13 +277,11 @@ function toggleProfileCard(): void {
 
 function closeProfileCard(): void {
   profileCardOpen.value = false;
-  closeStatusMenu();
   closeInputSettingsMenu();
 }
 
 function setPresenceStatus(status: PresenceStatus): void {
   presenceStatus.value = status;
-  closeStatusMenu();
 }
 
 function toggleInputSettingsMenu(): void {
@@ -436,17 +295,12 @@ function closeInputSettingsMenu(): void {
 onMounted(() => {
   window.addEventListener("pointerdown", onWindowPointerDown);
   window.addEventListener("keydown", onWindowKeydown);
-  window.addEventListener("resize", onWindowResize);
-  window.addEventListener("scroll", onWindowResize, true);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("pointerdown", onWindowPointerDown);
   window.removeEventListener("keydown", onWindowKeydown);
-  window.removeEventListener("resize", onWindowResize);
-  window.removeEventListener("scroll", onWindowResize, true);
   clearVoicePopoverCloseTimer();
-  clearStatusMenuCloseTimer();
   closeInputSettingsMenu();
 });
 </script>
@@ -542,135 +396,36 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <div
-        v-if="categoryMenu.open"
-        class="category-menu"
-        role="menu"
-        aria-label="Category options"
-        :style="{ left: `${categoryMenu.x}px`, top: `${categoryMenu.y}px` }"
-      >
-        <button type="button" class="category-menu-item" @click="runMarkAsRead">
-          <span>Mark As Read</span>
-        </button>
+      <ChannelCategoryMenu
+        :open="categoryMenu.open"
+        :x="categoryMenu.x"
+        :y="categoryMenu.y"
+        :is-collapsed="isMenuGroupCollapsed()"
+        @mark-as-read="runMarkAsRead"
+        @collapse-category="runCollapseCategory"
+        @collapse-all="collapseAllGroups"
+        @close="closeCategoryMenu"
+      />
 
-        <div class="category-menu-divider" />
-
-        <button type="button" class="category-menu-item" @click="runCollapseCategory">
-          <span>Collapse Category</span>
-          <span class="category-menu-trailing">
-            <AppIcon :path="isMenuGroupCollapsed() ? mdiCheckboxMarked : mdiCheckboxBlankOutline" :size="16" />
-          </span>
-        </button>
-
-        <button type="button" class="category-menu-item" @click="collapseAllGroups">
-          <span>Collapse All Categories</span>
-        </button>
-
-        <div class="category-menu-divider" />
-
-        <button type="button" class="category-menu-item" @click="closeCategoryMenu">
-          <span>Mute Category</span>
-          <span class="category-menu-trailing">
-            <AppIcon :path="mdiChevronRight" :size="16" />
-          </span>
-        </button>
-
-        <button type="button" class="category-menu-item is-notification" @click="closeCategoryMenu">
-          <span class="category-menu-copy">
-            <span>Notification Settings</span>
-            <small>Only @mentions</small>
-          </span>
-          <span class="category-menu-trailing">
-            <AppIcon :path="mdiChevronRight" :size="16" />
-          </span>
-        </button>
-      </div>
-
-      <div
-        v-if="voicePresencePopover.open && voicePresencePopover.participant"
-        class="voice-presence-popover"
-        role="dialog"
-        aria-label="Voice presence details"
-        :style="{ left: `${voicePresencePopover.x}px`, top: `${voicePresencePopover.y}px` }"
+      <VoicePresencePopover
+        :open="voicePresencePopover.open"
+        :x="voicePresencePopover.x"
+        :y="voicePresencePopover.y"
+        :participant="voicePresencePopover.participant"
         @mouseenter="clearVoicePopoverCloseTimer"
         @mouseleave="scheduleVoicePresencePopoverClose"
-      >
-        <div class="voice-presence-current">
-          <div class="voice-presence-pill">
-            <span class="voice-presence-emoji">{{ moodIcon(voicePresencePopover.participant.mood) }}</span>
-            <span>{{ moodLabel(voicePresencePopover.participant.mood) }}</span>
-          </div>
-
-          <div class="voice-presence-actions">
-            <button type="button" aria-label="Clear status">
-              <AppIcon :path="mdiDeleteOutline" :size="14" />
-            </button>
-            <button type="button" aria-label="More status options">
-              <AppIcon :path="mdiDotsGrid" :size="14" />
-            </button>
-          </div>
-        </div>
-
-        <button
-          v-for="mood in voiceMoodOrder"
-          :key="mood"
-          type="button"
-          class="voice-presence-option"
-          :class="{ 'is-active': isPopoverMood(mood) }"
-        >
-          <span class="voice-presence-emoji">{{ moodIcon(mood) }}</span>
-          <span>{{ moodLabel(mood) }}</span>
-        </button>
-      </div>
+      />
     </div>
 
     <footer class="user-dock">
-      <section
-        v-if="shouldShowVoiceConnectedCard"
-        class="voice-connected-card"
-        :class="{
-          'is-active': isVoiceConnected,
-          'is-joining': callState === 'joining' || callState === 'reconnecting',
-          'is-error': callState === 'error'
-        }"
-      >
-        <header class="voice-connected-header">
-          <div class="voice-connected-copy">
-            <span class="voice-connected-icon">
-              <AppIcon :path="mdiAccessPoint" :size="15" />
-            </span>
-            <div class="voice-connected-text">
-              <strong>{{ voiceConnectedTitle }}</strong>
-              <small>
-                {{ activeVoiceChannelName ?? "No active voice channel" }} / {{ serverName }}
-                <span v-if="callParticipantCount > 0"> · {{ callParticipantCount }} online</span>
-              </small>
-            </div>
-          </div>
-
-          <div class="voice-connected-header-actions">
-            <button
-              type="button"
-              class="voice-connected-header-btn is-danger"
-              aria-label="Leave voice channel"
-              @click="emit('leaveVoiceChannel')"
-            >
-              <AppIcon :path="mdiPhoneHangup" :size="16" />
-            </button>
-          </div>
-        </header>
-
-        <div class="voice-connected-actions">
-          <button type="button" class="voice-connected-action-btn" aria-label="Share screen">
-            <AppIcon :path="mdiVideo" :size="16" />
-          </button>
-          <button type="button" class="voice-connected-action-btn" aria-label="Share screen">
-            <AppIcon :path="mdiMonitorShare" :size="16" />
-          </button>
-        </div>
-
-        <p v-if="callErrorMessage" class="voice-connected-error">{{ callErrorMessage }}</p>
-      </section>
+      <ChannelVoiceConnectedCard
+        :server-name="serverName"
+        :active-voice-channel-name="activeVoiceChannelName"
+        :call-state="callState"
+        :call-participant-count="callParticipantCount"
+        :call-error-message="callErrorMessage"
+        @leave="emit('leaveVoiceChannel')"
+      />
 
       <div class="user-dock-main">
         <button type="button" class="user-identity-btn" @click="toggleProfileCard">
@@ -772,94 +527,19 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <section v-if="profileCardOpen" class="profile-card" role="dialog" aria-label="User profile and status">
-        <div class="profile-card-header">
-          <div class="profile-avatar">
-            {{ profileAvatarText }}
-            <span class="presence-dot is-large" :class="`is-${presenceStatus}`" />
-          </div>
-          <div class="profile-note-pill">
-            <AppIcon :path="mdiPlusCircleOutline" :size="14" />
-            <span>{{ profileNote }}</span>
-          </div>
-        </div>
-
-        <div class="profile-identity">
-          <strong>{{ profileDisplayName }}</strong>
-          <p class="profile-handle">{{ profileHandle }}</p>
-          <p class="profile-bio">{{ profileBio }}</p>
-        </div>
-
-        <div class="profile-panel">
-          <button type="button" class="profile-row">
-            <span class="profile-row-left">
-              <AppIcon :path="mdiPencilOutline" :size="14" />
-              <span>Edit Profile</span>
-            </span>
-          </button>
-
-          <div class="profile-divider" />
-
-          <div class="profile-status-wrap">
-            <button
-              ref="statusTriggerRef"
-              type="button"
-              class="profile-row profile-status-trigger"
-              :class="{ 'is-active': statusMenuOpen }"
-              @mouseenter="openStatusMenu"
-              @mouseleave="scheduleStatusMenuClose"
-            >
-              <span class="profile-row-left">
-                <span class="presence-dot" :class="`is-${presenceStatus}`" />
-                <span>{{ presenceLabel }}</span>
-              </span>
-              <AppIcon :path="mdiChevronRight" :size="14" />
-            </button>
-
-            <div
-              v-if="statusMenuOpen"
-              class="status-hover-menu"
-              :style="{ left: `${statusMenuPosition.x}px`, top: `${statusMenuPosition.y}px` }"
-              @mouseenter="openStatusMenu"
-              @mouseleave="scheduleStatusMenuClose"
-            >
-              <button
-                v-for="option in presenceOptions"
-                :key="option.value"
-                type="button"
-                class="status-menu-item"
-                :class="{ 'is-active': option.value === presenceStatus }"
-                @click="setPresenceStatus(option.value)"
-              >
-                <span class="status-menu-main">
-                  <span class="presence-dot" :class="`is-${option.value}`" />
-                  <span class="status-menu-copy">
-                    <strong>{{ option.label }}</strong>
-                    <small v-if="option.description">{{ option.description }}</small>
-                  </span>
-                </span>
-                <AppIcon :path="mdiChevronRight" :size="14" />
-              </button>
-            </div>
-          </div>
-
-          <div class="profile-divider" />
-
-          <section class="profile-disclosure-panel" aria-label="Identity disclosure">
-            <p class="profile-disclosure-title">Identity Disclosure</p>
-            <p v-if="startupError" class="profile-disclosure-error">{{ startupError }}</p>
-            <p class="profile-disclosure-copy">{{ disclosureMessage }}</p>
-            <p class="profile-disclosure-uid">
-              current UID:
-              <code>{{ currentUid }}</code>
-            </p>
-            <p class="profile-disclosure-meta">build {{ appVersion }} · {{ runtimeLabel }}</p>
-            <button type="button" class="profile-disclosure-btn" @click="emit('toggleUidMode')">
-              Switch UID mode ({{ uidMode }})
-            </button>
-          </section>
-        </div>
-      </section>
+      <ProfilePanelCard
+        v-if="profileCardOpen"
+        :server-name="serverName"
+        :current-uid="currentUid"
+        :uid-mode="uidMode"
+        :disclosure-message="disclosureMessage"
+        :app-version="appVersion"
+        :runtime-label="runtimeLabel"
+        :startup-error="startupError"
+        :presence-status="presenceStatus"
+        @update:presence-status="setPresenceStatus"
+        @toggle-uid-mode="emit('toggleUidMode')"
+      />
     </footer>
   </aside>
 </template>
