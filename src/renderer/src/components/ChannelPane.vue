@@ -17,6 +17,7 @@ import {
   mdiPound,
   mdiVolumeHigh
 } from "@mdi/js";
+import type { UIDMode } from "@renderer/types/models";
 import AppIcon from "./AppIcon.vue";
 
 type Channel = {
@@ -53,12 +54,19 @@ const props = defineProps<{
   activeVoiceChannelId: string | null;
   voiceParticipantsByChannel: Record<string, VoiceParticipant[]>;
   filterValue: string;
+  currentUid: string;
+  uidMode: UIDMode;
+  disclosureMessage: string;
+  appVersion: string;
+  runtimeLabel: string;
+  startupError?: string | null;
 }>();
 
 const emit = defineEmits<{
   selectChannel: [channelId: string];
   selectVoiceChannel: [channelId: string];
   updateFilter: [value: string];
+  toggleUidMode: [];
 }>();
 
 const voiceMoodOrder: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -755,6 +763,22 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
+
+          <div class="profile-divider" />
+
+          <section class="profile-disclosure-panel" aria-label="Identity disclosure">
+            <p class="profile-disclosure-title">Identity Disclosure</p>
+            <p v-if="startupError" class="profile-disclosure-error">{{ startupError }}</p>
+            <p class="profile-disclosure-copy">{{ disclosureMessage }}</p>
+            <p class="profile-disclosure-uid">
+              current UID:
+              <code>{{ currentUid }}</code>
+            </p>
+            <p class="profile-disclosure-meta">build {{ appVersion }} · {{ runtimeLabel }}</p>
+            <button type="button" class="profile-disclosure-btn" @click="emit('toggleUidMode')">
+              Switch UID mode ({{ uidMode }})
+            </button>
+          </section>
         </div>
       </section>
     </footer>

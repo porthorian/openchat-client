@@ -1006,6 +1006,69 @@ button {
   overflow: visible;
 }
 
+.profile-disclosure-panel {
+  border: 1px solid #3a4255;
+  border-radius: 9px;
+  background: #232a39;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.profile-disclosure-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9ab8fa;
+}
+
+.profile-disclosure-copy {
+  color: #dbe2f3;
+  font-size: 0.87rem;
+  line-height: 1.26;
+}
+
+.profile-disclosure-uid {
+  color: #c5cee4;
+  font-size: 0.8rem;
+}
+
+.profile-disclosure-uid code {
+  background: #171f30;
+  border: 1px solid #3c4f72;
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.profile-disclosure-meta {
+  color: #95a1bf;
+  font-size: 0.73rem;
+}
+
+.profile-disclosure-btn {
+  min-height: 30px;
+  border-radius: 7px;
+  border: 1px solid #516186;
+  background: #2f3a53;
+  color: #e7edfb;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.profile-disclosure-btn:hover {
+  background: #394865;
+}
+
+.profile-disclosure-error {
+  border-radius: 7px;
+  border: 1px solid #7a3a40;
+  background: #49262c;
+  color: #ffd2d7;
+  padding: 6px 8px;
+  font-size: 0.81rem;
+  overflow-wrap: anywhere;
+}
+
 .profile-status-wrap {
   position: relative;
 }
@@ -1431,12 +1494,9 @@ button {
 }
 
 .timeline {
-  max-height: 420px;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
-  display: grid;
-  gap: 8px;
+  padding: 8px 0 14px;
 }
 
 .timeline-status {
@@ -1451,26 +1511,77 @@ button {
 }
 
 .message-row {
-  border: 1px solid #2e3445;
-  border-radius: var(--radius-sm);
-  background: #151d2e;
-  padding: 10px;
   display: grid;
-  gap: 4px;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  padding: 3px 16px;
+  margin-top: 1px;
+  align-items: start;
 }
 
-.message-row header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #8d96ab;
+.message-row:hover {
+  background: rgb(255 255 255 / 2.8%);
+}
+
+.message-row.is-compact {
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.message-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--avatar-bg);
+  display: grid;
+  place-items: center;
+  font-size: 0.83rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.message-avatar-spacer {
+  width: 40px;
+  height: 18px;
+}
+
+.message-content {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.message-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.message-author {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #eff2fa;
+}
+
+.message-time {
+  color: #8d94a7;
   font-size: 0.74rem;
 }
 
-.message-row p {
-  color: #d8dfef;
-  font-size: 0.92rem;
+.message-text {
+  color: #d5dae6;
+  font-size: 1rem;
+  line-height: 1.34;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.message-time-inline {
+  margin-left: 9px;
+  color: #8d94a7;
+  font-size: 0.69rem;
 }
 
 .composer {

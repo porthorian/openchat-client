@@ -499,9 +499,16 @@ async function addServerManually(): Promise<void> {
         :active-voice-channel-id="activeVoiceChannelId"
         :voice-participants-by-channel="activeVoiceParticipants"
         :filter-value="appUI.channelFilter"
+        :current-uid="activeSession?.userUID ?? 'uid_unbound'"
+        :disclosure-message="identity.disclosureMessage"
+        :uid-mode="identity.uidMode"
+        :app-version="appVersion"
+        :runtime-label="runtime ? `${runtime.platform} / ${runtime.arch}` : 'runtime pending'"
+        :startup-error="startupError"
         @select-channel="selectChannel"
         @select-voice-channel="selectVoiceChannel"
         @update-filter="setChannelFilter"
+        @toggle-uid-mode="cycleUIDMode"
       />
 
       <header class="workspace-toolbar">
@@ -553,15 +560,8 @@ async function addServerManually(): Promise<void> {
         class="chat-pane-slot"
         :channel-id="activeChannelName"
         :messages="activeMessages"
-        :current-uid="activeSession?.userUID ?? 'uid_unbound'"
-        :disclosure-message="identity.disclosureMessage"
-        :uid-mode="identity.uidMode"
-        :app-version="appVersion"
-        :runtime-label="runtime ? `${runtime.platform} / ${runtime.arch}` : 'runtime pending'"
         :is-loading-messages="isLoadingMessages"
         :is-sending-message="isSendingMessage"
-        :startup-error="startupError"
-        @toggle-uid-mode="cycleUIDMode"
         @send-message="sendMessage"
       />
 
