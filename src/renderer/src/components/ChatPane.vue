@@ -2,7 +2,7 @@
 import { mdiEmoticonHappyOutline, mdiImageOutline, mdiPlusCircleOutline } from "@mdi/js";
 import type { ChatMessage } from "@renderer/types/chat";
 import AppIcon from "./AppIcon.vue";
-import { computed, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 type TimelineMessage = {
   message: ChatMessage;
@@ -23,7 +23,12 @@ const emit = defineEmits<{
 }>();
 
 const draftMessage = ref("");
+const composerInputRef = ref<HTMLInputElement | null>(null);
+const timelineRef = ref<HTMLElement | null>(null);
+const isTimelineScrolling = ref(false);
 const compactWindowMS = 5 * 60 * 1000;
+let scrollFrame = 0;
+let timelineScrollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const sortedMessages = computed(() => {
   return [...props.messages].sort((left, right) => {
@@ -99,11 +104,114 @@ function submitMessage(): void {
   emit("sendMessage", body);
   draftMessage.value = "";
 }
+
+function scrollTimelineToBottom(): void {
+  const timeline = timelineRef.value;
+  if (!timeline) return;
+  timeline.scrollTop = timeline.scrollHeight;
+}
+
+function queueScrollTimelineToBottom(): void {
+  if (scrollFrame) {
+    cancelAnimationFrame(scrollFrame);
+  }
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0;
+    scrollTimelineToBottom();
+  });
+}
+
+function clearTimelineScrollTimer(): void {
+  if (timelineScrollTimer === null) return;
+  clearTimeout(timelineScrollTimer);
+  timelineScrollTimer = null;
+}
+
+function markTimelineScrolling(): void {
+  isTimelineScrolling.value = true;
+  clearTimelineScrollTimer();
+  timelineScrollTimer = setTimeout(() => {
+    isTimelineScrolling.value = false;
+    timelineScrollTimer = null;
+  }, 680);
+}
+
+function onTimelineScroll(): void {
+  markTimelineScrolling();
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [contenteditable='plaintext-only']")) {
+    return true;
+  }
+  return target.getAttribute("role") === "textbox";
+}
+
+function handleGlobalTyping(event: KeyboardEvent): void {
+  if (props.isSendingMessage) return;
+  if (event.defaultPrevented) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  if (event.key.length !== 1) return;
+  if (isEditableTarget(event.target)) return;
+
+  const input = composerInputRef.value;
+  if (!input) return;
+
+  event.preventDefault();
+  const currentValue = draftMessage.value;
+  const nextCursor = currentValue.length + event.key.length;
+  draftMessage.value = `${currentValue}${event.key}`;
+  input.focus();
+  requestAnimationFrame(() => {
+    input.setSelectionRange(nextCursor, nextCursor);
+  });
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", handleGlobalTyping);
+  window.addEventListener("resize", queueScrollTimelineToBottom);
+  void nextTick(() => {
+    queueScrollTimelineToBottom();
+  });
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleGlobalTyping);
+  window.removeEventListener("resize", queueScrollTimelineToBottom);
+  if (scrollFrame) {
+    cancelAnimationFrame(scrollFrame);
+    scrollFrame = 0;
+  }
+  clearTimelineScrollTimer();
+});
+
+watch(
+  () => ({
+    channelId: props.channelId,
+    loading: props.isLoadingMessages,
+    total: timelineMessages.value.length,
+    lastMessageId: timelineMessages.value[timelineMessages.value.length - 1]?.message.id ?? ""
+  }),
+  (state) => {
+    if (state.loading) return;
+    void nextTick(() => {
+      queueScrollTimelineToBottom();
+    });
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
   <main class="chat-pane">
-    <section class="chat-stage timeline" aria-label="Message timeline">
+    <section
+      ref="timelineRef"
+      class="chat-stage timeline"
+      :class="{ 'is-scrolling': isTimelineScrolling }"
+      aria-label="Message timeline"
+      @scroll.passive="onTimelineScroll"
+    >
       <p v-if="isLoadingMessages" class="timeline-status">Loading messages...</p>
       <p v-else-if="timelineMessages.length === 0" class="timeline-status">No messages yet.</p>
       <article
@@ -140,6 +248,7 @@ function submitMessage(): void {
         <AppIcon :path="mdiPlusCircleOutline" :size="18" />
       </button>
       <input
+        ref="composerInputRef"
         v-model="draftMessage"
         type="text"
         :placeholder="`Message #${channelId}`"

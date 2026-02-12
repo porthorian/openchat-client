@@ -1419,9 +1419,86 @@ button {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 18px 16px 12px;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
   background:
     linear-gradient(180deg, rgb(25 27 35 / 98%), rgb(29 30 37 / 95%)),
     linear-gradient(120deg, #1f234f, #2d1f46);
+}
+
+.chat-stage:hover,
+.chat-stage.is-scrolling {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(220 225 236 / 62%) transparent;
+}
+
+.chat-stage::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.chat-stage:hover::-webkit-scrollbar,
+.chat-stage.is-scrolling::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-stage::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-stage::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  background-color: transparent;
+  min-height: 42px;
+}
+
+.chat-stage:hover::-webkit-scrollbar-thumb,
+.chat-stage.is-scrolling::-webkit-scrollbar-thumb {
+  background-color: rgb(228 232 240 / 58%);
+}
+
+.chat-stage:hover::-webkit-scrollbar-thumb:hover,
+.chat-stage.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(236 239 246 / 72%);
+}
+
+.chat-stage::-webkit-scrollbar-corner,
+.channel-list::-webkit-scrollbar-corner,
+.member-list::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.channel-list::-webkit-scrollbar,
+.member-list::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.channel-list::-webkit-scrollbar-track,
+.member-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.channel-list::-webkit-scrollbar-thumb,
+.member-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  background-color: rgb(228 232 240 / 58%);
+  min-height: 42px;
+}
+
+.channel-list::-webkit-scrollbar-thumb:hover,
+.member-list::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(236 239 246 / 72%);
+}
+
+.channel-list::-webkit-scrollbar-corner,
+.member-list::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .chat-stage-inner {
