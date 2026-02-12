@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
+  mdiAccessPoint,
   mdiCheckboxBlankOutline,
   mdiCheckboxMarked,
   mdiChevronDown,
@@ -9,13 +10,19 @@ import {
   mdiDeleteOutline,
   mdiDotsGrid,
   mdiHeadphones,
+  mdiHeadphonesOff,
   mdiMessage,
   mdiMicrophone,
+  mdiMicrophoneOff,
+  mdiMonitorShare,
   mdiPencilOutline,
+  mdiPhoneHangup,
   mdiPlus,
   mdiPlusCircleOutline,
   mdiPound,
-  mdiVolumeHigh
+  mdiVolumeHigh,
+  mdiVideo,
+  mdiWaveform
 } from "@mdi/js";
 import type { UIDMode } from "@renderer/types/models";
 import AppIcon from "./AppIcon.vue";
@@ -52,6 +59,12 @@ const props = defineProps<{
   groups: ChannelGroup[];
   activeChannelId: string;
   activeVoiceChannelId: string | null;
+  activeVoiceChannelName: string | null;
+  callState: "idle" | "joining" | "active" | "reconnecting" | "error";
+  callParticipantCount: number;
+  micMuted: boolean;
+  deafened: boolean;
+  callErrorMessage?: string | null;
   voiceParticipantsByChannel: Record<string, VoiceParticipant[]>;
   filterValue: string;
   currentUid: string;
@@ -67,6 +80,9 @@ const emit = defineEmits<{
   selectVoiceChannel: [channelId: string];
   updateFilter: [value: string];
   toggleUidMode: [];
+  toggleMic: [];
+  toggleDeafen: [];
+  leaveVoiceChannel: [];
 }>();
 
 const voiceMoodOrder: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -137,14 +153,28 @@ const presenceStatus = ref<PresenceStatus>("online");
 const statusMenuOpen = ref(false);
 const statusTriggerRef = ref<HTMLElement | null>(null);
 const statusMenuPosition = ref<FloatingMenuPosition>({ x: 0, y: 0 });
-const micMuted = ref(false);
-const outputDeafened = ref(false);
 const inputSettingsMenuOpen = ref(false);
 const inputGain = ref(100);
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
 let statusMenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const presenceLabel = computed(() => presenceLabels[presenceStatus.value]);
+const isVoiceConnected = computed(() => props.callState === "active" && Boolean(props.activeVoiceChannelName));
+const shouldShowVoiceConnectedCard = computed(() => props.callState !== "idle" || Boolean(props.activeVoiceChannelName));
+const voiceConnectedTitle = computed(() => {
+  switch (props.callState) {
+    case "active":
+      return "Voice Connected";
+    case "joining":
+      return "Connecting...";
+    case "reconnecting":
+      return "Reconnecting...";
+    case "error":
+      return "Voice Error";
+    default:
+      return "Voice Idle";
+  }
+});
 
 function isGroupCollapsed(groupId: string): boolean {
   return collapsedGroupIds.value.has(groupId);
@@ -381,20 +411,6 @@ function setPresenceStatus(status: PresenceStatus): void {
   closeStatusMenu();
 }
 
-function toggleMicMute(): void {
-  micMuted.value = !micMuted.value;
-  if (!micMuted.value && outputDeafened.value) {
-    outputDeafened.value = false;
-  }
-}
-
-function toggleOutputDeafen(): void {
-  outputDeafened.value = !outputDeafened.value;
-  if (outputDeafened.value) {
-    micMuted.value = true;
-  }
-}
-
 function toggleInputSettingsMenu(): void {
   inputSettingsMenuOpen.value = !inputSettingsMenuOpen.value;
 }
@@ -595,102 +611,151 @@ onBeforeUnmount(() => {
     </div>
 
     <footer class="user-dock">
-      <button type="button" class="user-identity-btn" @click="toggleProfileCard">
-        <div class="avatar-pill">
-          V
-          <span class="presence-dot" :class="`is-${presenceStatus}`" />
-        </div>
-        <div class="user-meta">
-          <strong>V. Marone</strong>
-          <small>{{ presenceLabel }}</small>
-        </div>
-      </button>
-
-      <div class="user-actions">
-        <div class="voice-control-group input-control-wrap" :class="{ 'is-muted': micMuted }">
-          <button
-            type="button"
-            class="voice-control-btn"
-            :aria-label="micMuted ? 'Unmute microphone' : 'Mute microphone'"
-            @click="toggleMicMute"
-          >
-            <AppIcon :path="mdiMicrophone" :size="16" />
-          </button>
-          <button
-            type="button"
-            class="voice-control-btn voice-control-caret input-settings-trigger"
-            :class="{ 'is-open': inputSettingsMenuOpen }"
-            aria-label="Input options"
-            :aria-expanded="inputSettingsMenuOpen"
-            aria-controls="input-settings-menu"
-            @click.stop="toggleInputSettingsMenu"
-          >
-            <AppIcon :path="mdiChevronDown" :size="14" />
-            <span class="icon-tooltip">Input Options</span>
-          </button>
-
-          <section
-            v-if="inputSettingsMenuOpen"
-            id="input-settings-menu"
-            class="input-settings-menu"
-            role="dialog"
-            aria-label="Input settings"
-          >
-            <button type="button" class="input-settings-row">
-              <span class="input-settings-copy">
-                <strong>Input Device</strong>
-                <small>macOS Default (MacBook Pro Microphone)</small>
-              </span>
-              <AppIcon :path="mdiChevronRight" :size="16" />
-            </button>
-
-            <button type="button" class="input-settings-row">
-              <span class="input-settings-copy">
-                <strong>Input Profile</strong>
-                <small>Custom</small>
-              </span>
-              <AppIcon :path="mdiChevronRight" :size="16" />
-            </button>
-
-            <div class="input-settings-divider" />
-
-            <div class="input-volume-group">
-              <p>Input Volume</p>
-              <label class="input-volume-slider">
-                <span class="sr-only">Input volume</span>
-                <input v-model.number="inputGain" type="range" min="0" max="100" />
-              </label>
+      <section
+        v-if="shouldShowVoiceConnectedCard"
+        class="voice-connected-card"
+        :class="{
+          'is-active': isVoiceConnected,
+          'is-joining': callState === 'joining' || callState === 'reconnecting',
+          'is-error': callState === 'error'
+        }"
+      >
+        <header class="voice-connected-header">
+          <div class="voice-connected-copy">
+            <span class="voice-connected-icon">
+              <AppIcon :path="mdiAccessPoint" :size="15" />
+            </span>
+            <div class="voice-connected-text">
+              <strong>{{ voiceConnectedTitle }}</strong>
+              <small>
+                {{ activeVoiceChannelName ?? "No active voice channel" }} / {{ serverName }}
+                <span v-if="callParticipantCount > 0"> · {{ callParticipantCount }} online</span>
+              </small>
             </div>
+          </div>
 
-            <div class="input-settings-divider" />
-
-            <button type="button" class="input-settings-row is-settings">
-              <span class="input-settings-copy">
-                <strong>Voice Settings</strong>
-              </span>
-              <AppIcon :path="mdiCogOutline" :size="16" />
+          <div class="voice-connected-header-actions">
+            <button
+              type="button"
+              class="voice-connected-header-btn is-danger"
+              aria-label="Leave voice channel"
+              @click="emit('leaveVoiceChannel')"
+            >
+              <AppIcon :path="mdiPhoneHangup" :size="16" />
             </button>
-          </section>
-        </div>
+          </div>
+        </header>
 
-        <div class="voice-control-group" :class="{ 'is-muted': outputDeafened }">
-          <button
-            type="button"
-            class="voice-control-btn"
-            :aria-label="outputDeafened ? 'Undeafen audio' : 'Deafen audio'"
-            @click="toggleOutputDeafen"
-          >
-            <AppIcon :path="mdiHeadphones" :size="16" />
+        <div class="voice-connected-actions">
+          <button type="button" class="voice-connected-action-btn" aria-label="Share screen">
+            <AppIcon :path="mdiVideo" :size="16" />
           </button>
-          <button type="button" class="voice-control-btn voice-control-caret" aria-label="Output options">
-            <AppIcon :path="mdiChevronDown" :size="14" />
-            <span class="icon-tooltip">Output Options</span>
+          <button type="button" class="voice-connected-action-btn" aria-label="Share screen">
+            <AppIcon :path="mdiMonitorShare" :size="16" />
           </button>
         </div>
 
-        <button type="button" class="user-settings-btn">
-          <AppIcon :path="mdiCogOutline" :size="16" />
+        <p v-if="callErrorMessage" class="voice-connected-error">{{ callErrorMessage }}</p>
+      </section>
+
+      <div class="user-dock-main">
+        <button type="button" class="user-identity-btn" @click="toggleProfileCard">
+          <div class="avatar-pill">
+            V
+            <span class="presence-dot" :class="`is-${presenceStatus}`" />
+          </div>
+          <div class="user-meta">
+            <strong>V. Marone</strong>
+            <small>{{ presenceLabel }}</small>
+          </div>
         </button>
+
+        <div class="user-actions">
+          <div class="voice-control-group input-control-wrap" :class="{ 'is-muted': micMuted }">
+            <button
+              type="button"
+              class="voice-control-btn"
+              :aria-label="micMuted ? 'Unmute microphone' : 'Mute microphone'"
+              @click="emit('toggleMic')"
+            >
+              <AppIcon :path="micMuted ? mdiMicrophoneOff : mdiMicrophone" :size="16" />
+            </button>
+            <button
+              type="button"
+              class="voice-control-btn voice-control-caret input-settings-trigger"
+              :class="{ 'is-open': inputSettingsMenuOpen }"
+              aria-label="Input options"
+              :aria-expanded="inputSettingsMenuOpen"
+              aria-controls="input-settings-menu"
+              @click.stop="toggleInputSettingsMenu"
+            >
+              <AppIcon :path="mdiChevronDown" :size="14" />
+              <span class="icon-tooltip">Input Options</span>
+            </button>
+
+            <section
+              v-if="inputSettingsMenuOpen"
+              id="input-settings-menu"
+              class="input-settings-menu"
+              role="dialog"
+              aria-label="Input settings"
+            >
+              <button type="button" class="input-settings-row">
+                <span class="input-settings-copy">
+                  <strong>Input Device</strong>
+                  <small>macOS Default (MacBook Pro Microphone)</small>
+                </span>
+                <AppIcon :path="mdiChevronRight" :size="16" />
+              </button>
+
+              <button type="button" class="input-settings-row">
+                <span class="input-settings-copy">
+                  <strong>Input Profile</strong>
+                  <small>Custom</small>
+                </span>
+                <AppIcon :path="mdiChevronRight" :size="16" />
+              </button>
+
+              <div class="input-settings-divider" />
+
+              <div class="input-volume-group">
+                <p>Input Volume</p>
+                <label class="input-volume-slider">
+                  <span class="sr-only">Input volume</span>
+                  <input v-model.number="inputGain" type="range" min="0" max="100" />
+                </label>
+              </div>
+
+              <div class="input-settings-divider" />
+
+              <button type="button" class="input-settings-row is-settings">
+                <span class="input-settings-copy">
+                  <strong>Voice Settings</strong>
+                </span>
+                <AppIcon :path="mdiCogOutline" :size="16" />
+              </button>
+            </section>
+          </div>
+
+          <div class="voice-control-group" :class="{ 'is-muted': deafened }">
+            <button
+              type="button"
+              class="voice-control-btn"
+              :aria-label="deafened ? 'Undeafen audio' : 'Deafen audio'"
+              @click="emit('toggleDeafen')"
+            >
+              <AppIcon :path="deafened ? mdiHeadphonesOff : mdiHeadphones" :size="16" />
+            </button>
+            <button type="button" class="voice-control-btn voice-control-caret" aria-label="Output options">
+              <AppIcon :path="mdiChevronDown" :size="14" />
+              <span class="icon-tooltip">Output Options</span>
+            </button>
+          </div>
+
+          <button type="button" class="user-settings-btn">
+            <AppIcon :path="mdiCogOutline" :size="16" />
+          </button>
+        </div>
       </div>
 
       <section v-if="profileCardOpen" class="profile-card" role="dialog" aria-label="User profile and status">

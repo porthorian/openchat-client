@@ -20,7 +20,6 @@ import ServerRail from "./ServerRail.vue";
 import ChannelPane from "./ChannelPane.vue";
 import ChatPane from "./ChatPane.vue";
 import MembersPane from "./MembersPane.vue";
-import CallBar from "./CallBar.vue";
 
 type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
 
@@ -497,6 +496,12 @@ async function addServerManually(): Promise<void> {
         :groups="filteredChannelGroups"
         :active-channel-id="appUI.activeChannelId"
         :active-voice-channel-id="activeVoiceChannelId"
+        :active-voice-channel-name="activeVoiceChannelName"
+        :call-state="activeCallSession?.state ?? 'idle'"
+        :call-participant-count="activeCallSession?.participants.length ?? 0"
+        :mic-muted="activeCallSession?.micMuted ?? false"
+        :deafened="activeCallSession?.deafened ?? false"
+        :call-error-message="activeCallSession?.errorMessage ?? null"
         :voice-participants-by-channel="activeVoiceParticipants"
         :filter-value="appUI.channelFilter"
         :current-uid="activeSession?.userUID ?? 'uid_unbound'"
@@ -509,6 +514,9 @@ async function addServerManually(): Promise<void> {
         @select-voice-channel="selectVoiceChannel"
         @update-filter="setChannelFilter"
         @toggle-uid-mode="cycleUIDMode"
+        @toggle-mic="toggleMic"
+        @toggle-deafen="toggleDeafen"
+        @leave-voice-channel="leaveVoiceChannel"
       />
 
       <header class="workspace-toolbar">
@@ -542,19 +550,6 @@ async function addServerManually(): Promise<void> {
           </label>
         </div>
       </header>
-
-      <CallBar
-        class="call-bar-slot"
-        :active-voice-channel-name="activeVoiceChannelName"
-        :call-state="activeCallSession?.state ?? 'idle'"
-        :participant-count="activeCallSession?.participants.length ?? 0"
-        :mic-muted="activeCallSession?.micMuted ?? false"
-        :deafened="activeCallSession?.deafened ?? false"
-        :error-message="activeCallSession?.errorMessage ?? null"
-        @toggle-mic="toggleMic"
-        @toggle-deafen="toggleDeafen"
-        @leave-call="leaveVoiceChannel"
-      />
 
       <ChatPane
         class="chat-pane-slot"
