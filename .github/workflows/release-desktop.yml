@@ -31,14 +31,17 @@ jobs:
           node-version: "20"
           cache: "yarn"
 
-      - name: Enable Corepack
-        run: corepack enable
+      - name: Enable Corepack + Yarn 4
+        run: |
+          corepack enable
+          corepack prepare yarn@4.12.0 --activate
+          corepack yarn --version
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: corepack yarn install --immutable
 
       - name: Build installers
-        run: yarn dist
+        run: corepack yarn dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
