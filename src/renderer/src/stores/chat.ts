@@ -12,6 +12,9 @@ import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, MemberI
 
 type ServerRealtimeState = {
   connected: boolean;
+  reconnecting: boolean;
+  reconnectAttempt: number;
+  lastConnectedAt: string | null;
   errorMessage: string | null;
 };
 
@@ -25,10 +28,15 @@ type ChatStoreState = {
   sendingByChannel: Record<string, boolean>;
   realtimeByServer: Record<string, ServerRealtimeState>;
   subscribedChannelByServer: Record<string, string | null>;
+  unreadByChannel: Record<string, number>;
+  currentUserUIDByServer: Record<string, string>;
 };
 
 const socketsByServer = new Map<string, WebSocket>();
 const intentionallyClosedSockets = new Set<string>();
+const reconnectTimersByServer = new Map<string, ReturnType<typeof setTimeout>>();
+const realtimeConnectParamsByServer = new Map<string, { serverId: string; backendUrl: string; userUID: string; deviceID: string }>();
+const reconnectBackoffMS = [1000, 2000, 5000, 10000, 15000];
 
 function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
   try {
@@ -87,6 +95,25 @@ function firstTextChannel(groups: ChannelGroup[]): Channel | null {
   return null;
 }
 
+function isDocumentVisible(): boolean {
+  if (typeof document === "undefined") return true;
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+function messageMentionsUID(body: string, userUID: string): boolean {
+  const normalizedBody = body.toLowerCase();
+  const normalizedUID = userUID.trim().toLowerCase();
+  if (!normalizedUID) return false;
+  return normalizedBody.includes(`@${normalizedUID}`) || normalizedBody.includes(normalizedUID);
+}
+
+function clearReconnectTimer(serverId: string): void {
+  const timer = reconnectTimersByServer.get(serverId);
+  if (!timer) return;
+  clearTimeout(timer);
+  reconnectTimersByServer.delete(serverId);
+}
+
 export const useChatStore = defineStore("chat", {
   state: (): ChatStoreState => ({
     groupsByServer: {},
@@ -97,7 +124,9 @@ export const useChatStore = defineStore("chat", {
     loadingMessagesByChannel: {},
     sendingByChannel: {},
     realtimeByServer: {},
-    subscribedChannelByServer: {}
+    subscribedChannelByServer: {},
+    unreadByChannel: {},
+    currentUserUIDByServer: {}
   }),
   getters: {
     groupsFor:
@@ -139,6 +168,37 @@ export const useChatStore = defineStore("chat", {
       (state) =>
       (serverId: string): string | null => {
         return state.subscribedChannelByServer[serverId] ?? null;
+      },
+    unreadCountForChannel:
+      (state) =>
+      (channelId: string): number => {
+        return state.unreadByChannel[channelId] ?? 0;
+      },
+    unreadCountForServer:
+      (state) =>
+      (serverId: string): number => {
+        const groups = state.groupsByServer[serverId] ?? [];
+        let total = 0;
+        groups.forEach((group) => {
+          group.channels.forEach((channel) => {
+            if (channel.type !== "text") return;
+            total += state.unreadByChannel[channel.id] ?? 0;
+          });
+        });
+        return total;
+      },
+    realtimeStateFor:
+      (state) =>
+      (serverId: string): ServerRealtimeState => {
+        return (
+          state.realtimeByServer[serverId] ?? {
+            connected: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            lastConnectedAt: null,
+            errorMessage: null
+          }
+        );
       }
   },
   actions: {
@@ -157,6 +217,13 @@ export const useChatStore = defineStore("chat", {
         ]);
         this.groupsByServer[params.serverId] = groups;
         this.membersByServer[params.serverId] = members;
+        groups.forEach((group) => {
+          group.channels.forEach((channel) => {
+            if (channel.type !== "text") return;
+            const currentUnread = this.unreadByChannel[channel.id] ?? 0;
+            this.unreadByChannel[channel.id] = channel.unreadCount ?? currentUnread;
+          });
+        });
         await this.connectRealtime(params);
         return firstTextChannel(groups)?.id ?? null;
       } finally {
@@ -202,6 +269,10 @@ export const useChatStore = defineStore("chat", {
         return;
       }
 
+      this.ensureRealtimeState(params.serverId);
+      clearReconnectTimer(params.serverId);
+      this.currentUserUIDByServer[params.serverId] = params.userUID;
+      realtimeConnectParamsByServer.set(params.serverId, params);
       const url = getRealtimeURL(params.backendUrl, params.userUID, params.deviceID);
       const socket = new WebSocket(url);
       socketsByServer.set(params.serverId, socket);
@@ -210,6 +281,9 @@ export const useChatStore = defineStore("chat", {
       socket.addEventListener("open", () => {
         this.ensureRealtimeState(params.serverId);
         this.realtimeByServer[params.serverId].connected = true;
+        this.realtimeByServer[params.serverId].reconnecting = false;
+        this.realtimeByServer[params.serverId].reconnectAttempt = 0;
+        this.realtimeByServer[params.serverId].lastConnectedAt = new Date().toISOString();
         this.realtimeByServer[params.serverId].errorMessage = null;
         const subscribedChannel = this.subscribedChannelByServer[params.serverId];
         if (subscribedChannel) {
@@ -231,8 +305,10 @@ export const useChatStore = defineStore("chat", {
         this.ensureRealtimeState(params.serverId);
         this.realtimeByServer[params.serverId].connected = false;
         if (!intentionallyClosedSockets.has(params.serverId)) {
-          this.realtimeByServer[params.serverId].errorMessage = "Realtime connection closed.";
+          this.scheduleRealtimeReconnect(params.serverId);
         } else {
+          this.realtimeByServer[params.serverId].reconnecting = false;
+          this.realtimeByServer[params.serverId].reconnectAttempt = 0;
           this.realtimeByServer[params.serverId].errorMessage = null;
           intentionallyClosedSockets.delete(params.serverId);
         }
@@ -241,12 +317,13 @@ export const useChatStore = defineStore("chat", {
 
       socket.addEventListener("error", () => {
         this.ensureRealtimeState(params.serverId);
-        this.realtimeByServer[params.serverId].errorMessage = "Realtime transport error.";
+        this.realtimeByServer[params.serverId].errorMessage = "Realtime transport error. Waiting to reconnect.";
       });
     },
     subscribeToChannel(serverId: string, channelId: string): void {
       this.subscribedChannelByServer[serverId] = channelId;
       this.presenceByChannel[channelId] = [];
+      this.markChannelRead(channelId);
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendRealtime(socket, {
@@ -277,6 +354,15 @@ export const useChatStore = defineStore("chat", {
         const existing = this.messagesByChannel[message.channelId] ?? [];
         if (hasMessage(existing, message.id)) return;
         this.messagesByChannel[message.channelId] = [...existing, message];
+        const subscribedChannel = this.subscribedChannelByServer[serverId];
+        const channelIsActive = subscribedChannel === message.channelId;
+        const windowVisible = isDocumentVisible();
+        if (!channelIsActive || !windowVisible) {
+          this.incrementUnread(message.channelId);
+        } else {
+          this.markChannelRead(message.channelId);
+        }
+        void this.notifyIncomingMessage(serverId, message, channelIsActive);
         return;
       }
       if (envelope.type === "chat.presence.snapshot") {
@@ -318,24 +404,110 @@ export const useChatStore = defineStore("chat", {
         this.realtimeByServer[serverId].errorMessage = String(payload.message ?? "Realtime error");
       }
     },
+    markChannelRead(channelId: string): void {
+      this.unreadByChannel[channelId] = 0;
+    },
+    markChannelsRead(channelIds: string[]): void {
+      channelIds.forEach((channelId) => {
+        this.markChannelRead(channelId);
+      });
+    },
+    incrementUnread(channelId: string): void {
+      this.unreadByChannel[channelId] = (this.unreadByChannel[channelId] ?? 0) + 1;
+    },
+    findChannelName(serverId: string, channelId: string): string {
+      const groups = this.groupsByServer[serverId] ?? [];
+      for (const group of groups) {
+        const match = group.channels.find((channel) => channel.id === channelId);
+        if (match) return match.name;
+      }
+      return channelId;
+    },
+    scheduleRealtimeReconnect(serverId: string): void {
+      this.ensureRealtimeState(serverId);
+      const params = realtimeConnectParamsByServer.get(serverId);
+      if (!params) {
+        this.realtimeByServer[serverId].reconnecting = false;
+        this.realtimeByServer[serverId].errorMessage = "Realtime disconnected.";
+        return;
+      }
+      clearReconnectTimer(serverId);
+      const nextAttempt = this.realtimeByServer[serverId].reconnectAttempt + 1;
+      this.realtimeByServer[serverId].reconnectAttempt = nextAttempt;
+      this.realtimeByServer[serverId].reconnecting = true;
+      const delay = reconnectBackoffMS[Math.min(nextAttempt - 1, reconnectBackoffMS.length - 1)];
+      const seconds = Math.ceil(delay / 1000);
+      this.realtimeByServer[serverId].errorMessage = `Realtime disconnected. Reconnecting in ${seconds}s...`;
+
+      const timer = setTimeout(() => {
+        reconnectTimersByServer.delete(serverId);
+        void this.connectRealtime(params);
+      }, delay);
+      reconnectTimersByServer.set(serverId, timer);
+    },
+    async notifyIncomingMessage(serverId: string, message: ChatMessage, channelIsActive: boolean): Promise<void> {
+      if (typeof window === "undefined" || typeof Notification === "undefined") return;
+      const currentUID = this.currentUserUIDByServer[serverId] ?? "";
+      if (currentUID && message.authorUID === currentUID) return;
+
+      const windowVisible = isDocumentVisible();
+      const isMention = messageMentionsUID(message.body, currentUID);
+      if (windowVisible && channelIsActive && !isMention) return;
+
+      if (Notification.permission === "denied") return;
+      if (Notification.permission === "default") {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") return;
+      }
+
+      const channelName = this.findChannelName(serverId, message.channelId);
+      const title = `${message.authorUID} in #${channelName}`;
+      const body = message.body.length > 120 ? `${message.body.slice(0, 117)}...` : message.body;
+      const notification = new Notification(title, {
+        body,
+        tag: `openchat:${serverId}:${message.channelId}`,
+        silent: true
+      });
+      notification.onclick = () => {
+        if (typeof window !== "undefined") {
+          window.focus();
+        }
+      };
+    },
     disconnectServerRealtime(serverId: string): void {
       const socket = socketsByServer.get(serverId);
-      if (!socket) return;
-      intentionallyClosedSockets.add(serverId);
-      socket.close();
-      socketsByServer.delete(serverId);
+      clearReconnectTimer(serverId);
+      if (socket) {
+        intentionallyClosedSockets.add(serverId);
+        socket.close();
+        socketsByServer.delete(serverId);
+      }
+      this.ensureRealtimeState(serverId);
+      this.realtimeByServer[serverId].connected = false;
+      this.realtimeByServer[serverId].reconnecting = false;
+      this.realtimeByServer[serverId].reconnectAttempt = 0;
+      this.realtimeByServer[serverId].errorMessage = null;
       this.clearPresenceForServer(serverId);
+      realtimeConnectParamsByServer.delete(serverId);
     },
     disconnectAllRealtime(): void {
       [...socketsByServer.keys()].forEach((serverId) => {
         this.disconnectServerRealtime(serverId);
       });
       this.presenceByChannel = {};
+      reconnectTimersByServer.forEach((timer) => {
+        clearTimeout(timer);
+      });
+      reconnectTimersByServer.clear();
+      realtimeConnectParamsByServer.clear();
     },
     ensureRealtimeState(serverId: string): void {
       if (!this.realtimeByServer[serverId]) {
         this.realtimeByServer[serverId] = {
           connected: false,
+          reconnecting: false,
+          reconnectAttempt: 0,
+          lastConnectedAt: null,
           errorMessage: null
         };
       }

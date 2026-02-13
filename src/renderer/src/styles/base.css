@@ -260,6 +260,7 @@ button {
   font-weight: 700;
   display: grid;
   place-items: center;
+  position: relative;
   padding: 0;
   line-height: 1;
   transition: all 150ms ease;
@@ -285,6 +286,25 @@ button {
 .server-dot.utility {
   background: #1f2027;
   color: #b8bbca;
+}
+
+.server-unread-badge {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid #171921;
+  background: #ec535b;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.61rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 4px;
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
 }
 
 .channel-pane {
@@ -1670,6 +1690,41 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.toolbar-connection-chip {
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #4b5162;
+  background: #303643;
+  color: #e3e8f6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.toolbar-connection-chip.is-live {
+  border-color: #2d7452;
+  background: #1f4e37;
+  color: #b9f5d4;
+}
+
+.toolbar-connection-chip.is-degraded {
+  border-color: #7a5b36;
+  background: #4b3823;
+  color: #f8deb9;
+}
+
+.toolbar-connection-chip.is-offline {
+  border-color: #70424a;
+  background: #432830;
+  color: #ffc9d3;
 }
 
 .toolbar-divider {

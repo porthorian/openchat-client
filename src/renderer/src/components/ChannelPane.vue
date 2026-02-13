@@ -82,6 +82,7 @@ const emit = defineEmits<{
   selectChannel: [channelId: string];
   selectVoiceChannel: [channelId: string];
   updateFilter: [value: string];
+  markChannelsRead: [channelIds: string[]];
   toggleUidMode: [];
   toggleMic: [];
   toggleDeafen: [];
@@ -106,7 +107,6 @@ type VoicePresencePopoverState = {
 };
 
 const collapsedGroupIds = ref<Set<string>>(new Set());
-const readGroupIds = ref<Set<string>>(new Set());
 const categoryMenu = ref<CategoryMenuState>({
   open: false,
   x: 0,
@@ -176,14 +176,12 @@ function collapseAllGroups(): void {
   closeCategoryMenu();
 }
 
-function isGroupRead(groupId: string): boolean {
-  return readGroupIds.value.has(groupId);
-}
-
 function markGroupAsRead(groupId: string): void {
-  const next = new Set(readGroupIds.value);
-  next.add(groupId);
-  readGroupIds.value = next;
+  const targetGroup = props.groups.find((group) => group.id === groupId);
+  if (targetGroup) {
+    const textChannelIDs = targetGroup.channels.filter((channel) => channel.type === "text").map((channel) => channel.id);
+    emit("markChannelsRead", textChannelIDs);
+  }
   closeCategoryMenu();
 }
 
@@ -549,7 +547,7 @@ onBeforeUnmount(() => {
                 <AppIcon :path="mdiMessage" :size="14" />
               </span>
               <span
-                v-if="channel.type === 'text' && !isGroupRead(group.id) && (channel.unreadCount ?? 0) > 0"
+                v-if="channel.type === 'text' && (channel.unreadCount ?? 0) > 0"
                 class="badge"
               >
                 {{ channel.unreadCount }}

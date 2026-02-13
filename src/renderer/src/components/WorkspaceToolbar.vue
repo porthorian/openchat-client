@@ -6,6 +6,9 @@ defineProps<{
   activeChannelName: string;
   serverName: string;
   membersPaneOpen: boolean;
+  connectionLabel: string;
+  connectionTone: "live" | "degraded" | "offline";
+  connectionDetail: string;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +22,7 @@ const emit = defineEmits<{
       <h2># {{ activeChannelName }}</h2>
       <span class="toolbar-divider" />
       <small>{{ serverName }}</small>
+      <span class="toolbar-connection-chip" :class="`is-${connectionTone}`" :title="connectionDetail">{{ connectionLabel }}</span>
     </div>
     <div class="chat-toolbar-right">
       <button type="button" class="toolbar-icon">

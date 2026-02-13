@@ -13,11 +13,11 @@ All user-facing features must have a feature spec before implementation.
 - Example: `0001-server-join-flow.md`
 
 ## MVP Specs
-- `0001-auth-session-ui.md` (Draft)
-- `0002-server-join-registry.md` (Draft)
-- `0003-channel-navigation.md` (Draft)
-- `0004-message-timeline-composer.md` (Draft)
-- `0005-notifications.md` (Draft)
+- `0001-auth-session-ui.md` (Implemented baseline)
+- `0002-server-join-registry.md` (Implemented baseline)
+- `0003-channel-navigation.md` (Implemented M2 baseline)
+- `0004-message-timeline-composer.md` (Implemented M2 baseline)
+- `0005-notifications.md` (Implemented M2 baseline)
 - `0006-settings-accessibility.md` (Draft)
 - `0007-voice-video-webrtc.md` (Draft)
 - `0008-moderation-and-governance.md` (Draft)

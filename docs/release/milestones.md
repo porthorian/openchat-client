@@ -44,7 +44,7 @@ Last updated: 2026-02-13
   - Implemented: per-server UI context isolation for active channel/filter during server switching.
 
 ### M2: Core Messaging UX
-- Status: `in_progress`
+- Status: `done`
 - Goals:
   - Channel navigation.
   - Message timeline rendering and composer.
@@ -52,12 +52,12 @@ Last updated: 2026-02-13
 - Exit criteria:
   - Core chat loop is usable across multiple servers.
   - Reconnect and degraded states tested for primary surfaces.
-- Progress notes:
-  - Implemented: channel navigation/filtering and active channel switching.
+- Completion notes:
+  - Implemented: channel navigation/filtering and active channel switching across server contexts.
   - Implemented: message timeline + composer with send/receive over realtime channel updates.
-  - Implemented: text-channel member presence panel and baseline voice channel join controls.
-  - Implemented: voice output/input options UI and output device selection/volume path.
-  - Remaining: notifications/unread polish and reconnect/degraded validation depth.
+  - Implemented: unread behavior by channel and aggregate unread indicators in server rail.
+  - Implemented: desktop notification delivery for incoming realtime messages with mention-aware behavior.
+  - Implemented: realtime reconnect/backoff handling and degraded/offline connection state surfacing in primary toolbar UI.
 
 ### M3: Hardening and Open-Source Readiness
 - Status: `in_progress`
@@ -78,9 +78,9 @@ Last updated: 2026-02-13
 | --- | --- | --- |
 | `docs/features/0001-auth-session-ui.md` | M1 | done |
 | `docs/features/0002-server-join-registry.md` | M1 | done |
-| `docs/features/0003-channel-navigation.md` | M2 | in_progress |
-| `docs/features/0004-message-timeline-composer.md` | M2 | in_progress |
-| `docs/features/0005-notifications.md` | M2 | planned |
+| `docs/features/0003-channel-navigation.md` | M2 | done |
+| `docs/features/0004-message-timeline-composer.md` | M2 | done |
+| `docs/features/0005-notifications.md` | M2 | done |
 | `docs/features/0006-settings-accessibility.md` | M3 | planned |
 | `docs/features/0007-voice-video-webrtc.md` | M2 | in_progress |
 | `docs/features/0008-moderation-and-governance.md` | M3 | planned |

@@ -125,6 +125,7 @@ export function useWorkspaceShell() {
 
   const activeServer = computed(() => registry.byId(appUI.activeServerId));
   const activeSession = computed(() => session.sessionsByServer[appUI.activeServerId]);
+  const activeRealtimeState = computed(() => chat.realtimeStateFor(appUI.activeServerId));
 
   function orderChannelGroups(groups: ChannelGroup[]): ChannelGroup[] {
     const voiceGroups = groups.filter((group) => group.kind === "voice");
@@ -135,7 +136,13 @@ export function useWorkspaceShell() {
   const rawChannelGroups = computed(() => chat.groupsFor(appUI.activeServerId));
 
   const filteredChannelGroups = computed(() => {
-    const groups = orderChannelGroups(rawChannelGroups.value);
+    const groups = orderChannelGroups(rawChannelGroups.value).map((group) => ({
+      ...group,
+      channels: group.channels.map((channel) => ({
+        ...channel,
+        unreadCount: channel.type === "text" ? chat.unreadCountForChannel(channel.id) : channel.unreadCount
+      }))
+    }));
     const filter = appUI.channelFilter.trim().toLowerCase();
     if (!filter) return groups;
     return groups
@@ -215,6 +222,40 @@ export function useWorkspaceShell() {
     return chat.isSendingInChannel(appUI.activeChannelId);
   });
 
+  const toolbarConnectionState = computed(() => {
+    const state = activeRealtimeState.value;
+    if (state.connected) {
+      return {
+        label: "Live",
+        tone: "live" as const,
+        detail: "Realtime connected"
+      };
+    }
+    if (state.reconnecting) {
+      return {
+        label: "Reconnecting",
+        tone: "degraded" as const,
+        detail: state.errorMessage ?? `Reconnect attempt ${state.reconnectAttempt}`
+      };
+    }
+    return {
+      label: "Offline",
+      tone: "offline" as const,
+      detail: state.errorMessage ?? "Realtime offline"
+    };
+  });
+
+  const unreadByServer = computed<Record<string, number>>(() => {
+    const summary: Record<string, number> = {};
+    registry.servers.forEach((server) => {
+      const unreadCount = chat.unreadCountForServer(server.serverId);
+      if (unreadCount > 0) {
+        summary[server.serverId] = unreadCount;
+      }
+    });
+    return summary;
+  });
+
   async function hydrateServer(serverId: string): Promise<void> {
     const server = registry.byId(serverId);
     if (!server) return;
@@ -255,6 +296,7 @@ export function useWorkspaceShell() {
           channelId: targetChannelID
         });
         chat.subscribeToChannel(serverId, targetChannelID);
+        chat.markChannelRead(targetChannelID);
       }
     } finally {
       isHydrating.value = false;
@@ -321,6 +363,7 @@ export function useWorkspaceShell() {
       channelId
     });
     chat.subscribeToChannel(appUI.activeServerId, channelId);
+    chat.markChannelRead(channelId);
   }
 
   function selectVoiceChannel(channelId: string): void {
@@ -398,6 +441,11 @@ export function useWorkspaceShell() {
       userUID: currentUID,
       deviceID: localDeviceID.value
     });
+    chat.markChannelRead(appUI.activeChannelId);
+  }
+
+  function markChannelsRead(channelIds: string[]): void {
+    chat.markChannelsRead(channelIds);
   }
 
   function toIconText(value: string): string {
@@ -680,7 +728,8 @@ export function useWorkspaceShell() {
 
   const serverRailProps = computed(() => ({
     servers: registry.servers,
-    activeServerId: appUI.activeServerId
+    activeServerId: appUI.activeServerId,
+    unreadByServer: unreadByServer.value
   }));
 
   const channelPaneProps = computed(() => ({
@@ -712,7 +761,10 @@ export function useWorkspaceShell() {
   const workspaceToolbarProps = computed(() => ({
     activeChannelName: activeChannelName.value,
     serverName: activeServer.value?.displayName ?? "Unknown Server",
-    membersPaneOpen: appUI.membersPaneOpen
+    membersPaneOpen: appUI.membersPaneOpen,
+    connectionLabel: toolbarConnectionState.value.label,
+    connectionTone: toolbarConnectionState.value.tone,
+    connectionDetail: toolbarConnectionState.value.detail
   }));
 
   const chatPaneProps = computed(() => ({
@@ -751,6 +803,7 @@ export function useWorkspaceShell() {
     selectChannel,
     selectVoiceChannel,
     updateFilter: setChannelFilter,
+    markChannelsRead,
     toggleUidMode: cycleUIDMode,
     toggleMic,
     toggleDeafen,

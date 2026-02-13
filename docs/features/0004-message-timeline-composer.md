@@ -1,8 +1,8 @@
 # Feature: Message Timeline and Composer
 
-- Status: Draft
+- Status: Implemented (M2 baseline)
 - Owners: Maintainers
-- Last Updated: 2026-02-09
+- Last Updated: 2026-02-13
 - Related ADRs: `docs/architecture/adrs/0001-electron-vue-primevue-unstyled.md`, `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0005-user-owned-identity.md`
 - Related Issues: TBD
 

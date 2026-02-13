@@ -6,6 +6,7 @@ import AppIcon from "./AppIcon.vue";
 defineProps<{
   servers: ServerProfile[];
   activeServerId: string;
+  unreadByServer: Record<string, number>;
 }>();
 
 const emit = defineEmits<{
@@ -31,7 +32,10 @@ const emit = defineEmits<{
       }"
       @click="emit('selectServer', server.serverId)"
     >
-      {{ server.iconText }}
+      <span>{{ server.iconText }}</span>
+      <span v-if="(unreadByServer[server.serverId] ?? 0) > 0" class="server-unread-badge">
+        {{ unreadByServer[server.serverId] > 99 ? "99+" : unreadByServer[server.serverId] }}
+      </span>
     </button>
 
     <button type="button" class="server-dot utility" aria-label="Add server" @click="emit('addServer')">
