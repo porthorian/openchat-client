@@ -16,10 +16,12 @@ const props = defineProps<{
   messages: ChatMessage[];
   isLoadingMessages: boolean;
   isSendingMessage: boolean;
+  typingUsers: string[];
 }>();
 
 const emit = defineEmits<{
   sendMessage: [body: string];
+  typingActivity: [isTyping: boolean];
 }>();
 
 const timelineRef = ref<HTMLElement | null>(null);
@@ -52,6 +54,19 @@ const timelineMessages = computed<TimelineMessage[]>(() => {
       avatarColor: toAvatarColor(message.authorUID)
     };
   });
+});
+
+const typingLabel = computed(() => {
+  const users = props.typingUsers;
+  const total = users.length;
+  if (total === 0) return "";
+  if (total === 1) return `${users[0]} is typing...`;
+  if (total === 2) return `${users[0]} and ${users[1]} are typing...`;
+  if (total > 5) {
+    return `${users[0]} and ${users[1]} plus ${total - 2} others are typing...`;
+  }
+  const allButLast = users.slice(0, -1).join(", ");
+  return `${allButLast}, and ${users[total - 1]} are typing...`;
 });
 
 function toAvatarText(authorUID: string): string {
@@ -159,6 +174,20 @@ watch(
       />
     </section>
 
-    <ChatComposer :channel-id="channelId" :is-sending-message="isSendingMessage" @send-message="emit('sendMessage', $event)" />
+    <div v-if="typingLabel" class="typing-indicator" aria-live="polite">
+      <span class="typing-indicator-dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span class="typing-indicator-label">{{ typingLabel }}</span>
+    </div>
+
+    <ChatComposer
+      :channel-id="channelId"
+      :is-sending-message="isSendingMessage"
+      @send-message="emit('sendMessage', $event)"
+      @typing-activity="emit('typingActivity', $event)"
+    />
   </main>
 </template>

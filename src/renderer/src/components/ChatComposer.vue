@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { mdiEmoticonHappyOutline, mdiImageOutline, mdiPlusCircleOutline } from "@mdi/js";
 import AppIcon from "./AppIcon.vue";
 
@@ -10,16 +10,42 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   sendMessage: [body: string];
+  typingActivity: [isTyping: boolean];
 }>();
 
 const draftMessage = ref("");
 const composerInputRef = ref<HTMLInputElement | null>(null);
 const isDraftEmpty = computed(() => draftMessage.value.trim().length === 0);
+const typingRefreshMS = 2500;
+const typingActive = ref(false);
+const lastTypingSentAt = ref(0);
+
+function emitTypingActivity(isTyping: boolean, forceHeartbeat = false): void {
+  if (!forceHeartbeat && typingActive.value === isTyping) {
+    return;
+  }
+  typingActive.value = isTyping;
+  lastTypingSentAt.value = Date.now();
+  emit("typingActivity", isTyping);
+}
+
+function syncTypingActivity(): void {
+  const hasDraft = draftMessage.value.trim().length > 0;
+  if (!hasDraft) {
+    emitTypingActivity(false);
+    return;
+  }
+  const now = Date.now();
+  if (!typingActive.value || now - lastTypingSentAt.value >= typingRefreshMS) {
+    emitTypingActivity(true, true);
+  }
+}
 
 function submitMessage(): void {
   const body = draftMessage.value.trim();
   if (!body || props.isSendingMessage) return;
   emit("sendMessage", body);
+  emitTypingActivity(false);
   draftMessage.value = "";
 }
 
@@ -56,8 +82,23 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  emitTypingActivity(false);
   window.removeEventListener("keydown", handleGlobalTyping);
 });
+
+watch(
+  () => draftMessage.value,
+  () => {
+    syncTypingActivity();
+  }
+);
+
+watch(
+  () => props.channelId,
+  () => {
+    emitTypingActivity(false);
+  }
+);
 </script>
 
 <template>
@@ -72,6 +113,8 @@ onBeforeUnmount(() => {
       :placeholder="`Message #${channelId}`"
       aria-label="Message composer"
       :disabled="isSendingMessage"
+      @blur="emitTypingActivity(false)"
+      @focus="syncTypingActivity"
       @keydown.enter.prevent="submitMessage"
     />
     <div class="composer-actions">

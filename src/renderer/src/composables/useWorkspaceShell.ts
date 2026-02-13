@@ -157,6 +157,22 @@ export function useWorkspaceShell() {
     return chat.messagesFor(appUI.activeChannelId);
   });
 
+  const activeTypingUsers = computed<string[]>(() => {
+    if (!appUI.activeChannelId) return [];
+    const currentUID = activeSession.value?.userUID ?? "";
+    const members = chat.typingForChannel(appUI.activeChannelId);
+    const dedupedUIDs = new Set<string>();
+    const names: string[] = [];
+    members.forEach((member) => {
+      const userUID = member.userUID.trim();
+      if (!userUID || userUID === currentUID) return;
+      if (dedupedUIDs.has(userUID)) return;
+      dedupedUIDs.add(userUID);
+      names.push(toDisplayName(userUID));
+    });
+    return names;
+  });
+
   const connectedMembers = computed(() => {
     if (!appUI.activeChannelId) return [];
     const members = chat.channelPresenceFor(appUI.activeChannelId);
@@ -442,6 +458,13 @@ export function useWorkspaceShell() {
       deviceID: localDeviceID.value
     });
     chat.markChannelRead(appUI.activeChannelId);
+  }
+
+  function setTypingActivity(isTyping: boolean): void {
+    const serverId = appUI.activeServerId;
+    const channelId = appUI.activeChannelId;
+    if (!serverId || !channelId) return;
+    chat.sendTyping(serverId, channelId, isTyping);
   }
 
   function markChannelsRead(channelIds: string[]): void {
@@ -771,7 +794,8 @@ export function useWorkspaceShell() {
     channelId: activeChannelName.value,
     messages: activeMessages.value,
     isLoadingMessages: isLoadingMessages.value,
-    isSendingMessage: isSendingMessage.value
+    isSendingMessage: isSendingMessage.value,
+    typingUsers: activeTypingUsers.value
   }));
 
   const membersPaneProps = computed(() => ({
@@ -818,7 +842,8 @@ export function useWorkspaceShell() {
   };
 
   const chatPaneListeners = {
-    sendMessage
+    sendMessage,
+    typingActivity: setTypingActivity
   };
 
   const membersPaneListeners = {

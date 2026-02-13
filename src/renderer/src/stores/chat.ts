@@ -22,6 +22,7 @@ type ChatStoreState = {
   groupsByServer: Record<string, ChannelGroup[]>;
   membersByServer: Record<string, MemberItem[]>;
   presenceByChannel: Record<string, ChannelPresenceMember[]>;
+  typingByChannel: Record<string, ChannelPresenceMember[]>;
   messagesByChannel: Record<string, ChatMessage[]>;
   loadingByServer: Record<string, boolean>;
   loadingMessagesByChannel: Record<string, boolean>;
@@ -35,8 +36,10 @@ type ChatStoreState = {
 const socketsByServer = new Map<string, WebSocket>();
 const intentionallyClosedSockets = new Set<string>();
 const reconnectTimersByServer = new Map<string, ReturnType<typeof setTimeout>>();
+const typingTimersByMember = new Map<string, ReturnType<typeof setTimeout>>();
 const realtimeConnectParamsByServer = new Map<string, { serverId: string; backendUrl: string; userUID: string; deviceID: string }>();
 const reconnectBackoffMS = [1000, 2000, 5000, 10000, 15000];
+const typingExpiryMS = 6000;
 
 function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
   try {
@@ -114,11 +117,16 @@ function clearReconnectTimer(serverId: string): void {
   reconnectTimersByServer.delete(serverId);
 }
 
+function typingMemberTimerKey(channelId: string, member: ChannelPresenceMember): string {
+  return `${channelId}|${presenceMemberKey(member)}`;
+}
+
 export const useChatStore = defineStore("chat", {
   state: (): ChatStoreState => ({
     groupsByServer: {},
     membersByServer: {},
     presenceByChannel: {},
+    typingByChannel: {},
     messagesByChannel: {},
     loadingByServer: {},
     loadingMessagesByChannel: {},
@@ -143,6 +151,11 @@ export const useChatStore = defineStore("chat", {
       (state) =>
       (channelId: string): ChannelPresenceMember[] => {
         return state.presenceByChannel[channelId] ?? [];
+      },
+    typingForChannel:
+      (state) =>
+      (channelId: string): ChannelPresenceMember[] => {
+        return state.typingByChannel[channelId] ?? [];
       },
     messagesFor:
       (state) =>
@@ -323,6 +336,7 @@ export const useChatStore = defineStore("chat", {
     subscribeToChannel(serverId: string, channelId: string): void {
       this.subscribedChannelByServer[serverId] = channelId;
       this.presenceByChannel[channelId] = [];
+      this.clearTypingForChannel(channelId);
       this.markChannelRead(channelId);
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -338,12 +352,26 @@ export const useChatStore = defineStore("chat", {
         this.subscribedChannelByServer[serverId] = null;
       }
       this.presenceByChannel[channelId] = [];
+      this.clearTypingForChannel(channelId);
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendRealtime(socket, {
         type: "chat.unsubscribe",
         request_id: `unsub_${Date.now()}`,
         payload: { channel_id: channelId }
+      });
+    },
+    sendTyping(serverId: string, channelId: string, isTyping: boolean): void {
+      if (!channelId) return;
+      const socket = socketsByServer.get(serverId);
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      sendRealtime(socket, {
+        type: "chat.typing.update",
+        request_id: `typing_${Date.now()}`,
+        payload: {
+          channel_id: channelId,
+          is_typing: isTyping
+        }
       });
     },
     handleRealtimeEnvelope(serverId: string, envelope: RealtimeEnvelope): void {
@@ -375,6 +403,7 @@ export const useChatStore = defineStore("chat", {
               .filter((item): item is ChannelPresenceMember => item !== null)
           : [];
         this.presenceByChannel[channelID] = members;
+        this.syncTypingMembersWithPresence(channelID, members);
         return;
       }
       if (envelope.type === "chat.presence.joined") {
@@ -396,6 +425,23 @@ export const useChatStore = defineStore("chat", {
         const existing = this.presenceByChannel[channelID] ?? [];
         const leavingKey = presenceMemberKey(member);
         this.presenceByChannel[channelID] = existing.filter((item) => presenceMemberKey(item) !== leavingKey);
+        this.removeTypingMember(channelID, member);
+        return;
+      }
+      if (envelope.type === "chat.typing.updated") {
+        const payload = (envelope.payload ?? {}) as Record<string, unknown>;
+        const channelID = String(payload.channel_id ?? "").trim();
+        const member = normalizePresenceMember(payload.member);
+        if (!channelID || !member) return;
+        const isTyping = Boolean(payload.is_typing);
+        const currentUID = this.currentUserUIDByServer[serverId] ?? "";
+        if (currentUID && member.userUID === currentUID) return;
+        if (isTyping) {
+          this.upsertTypingMember(channelID, member);
+          this.scheduleTypingExpiry(channelID, member);
+        } else {
+          this.removeTypingMember(channelID, member);
+        }
         return;
       }
       if (envelope.type === "chat.error") {
@@ -403,6 +449,66 @@ export const useChatStore = defineStore("chat", {
         this.ensureRealtimeState(serverId);
         this.realtimeByServer[serverId].errorMessage = String(payload.message ?? "Realtime error");
       }
+    },
+    upsertTypingMember(channelId: string, member: ChannelPresenceMember): void {
+      const existing = this.typingByChannel[channelId] ?? [];
+      const key = presenceMemberKey(member);
+      const next = existing.filter((item) => presenceMemberKey(item) !== key);
+      next.push(member);
+      this.typingByChannel[channelId] = next;
+    },
+    removeTypingMember(channelId: string, member: ChannelPresenceMember): void {
+      const existing = this.typingByChannel[channelId] ?? [];
+      if (existing.length === 0) return;
+      const key = presenceMemberKey(member);
+      this.typingByChannel[channelId] = existing.filter((item) => presenceMemberKey(item) !== key);
+      this.clearTypingTimer(channelId, member);
+    },
+    scheduleTypingExpiry(channelId: string, member: ChannelPresenceMember): void {
+      this.clearTypingTimer(channelId, member);
+      const timerKey = typingMemberTimerKey(channelId, member);
+      const timer = setTimeout(() => {
+        typingTimersByMember.delete(timerKey);
+        this.removeTypingMember(channelId, member);
+      }, typingExpiryMS);
+      typingTimersByMember.set(timerKey, timer);
+    },
+    clearTypingTimer(channelId: string, member: ChannelPresenceMember): void {
+      const timerKey = typingMemberTimerKey(channelId, member);
+      const timer = typingTimersByMember.get(timerKey);
+      if (!timer) return;
+      clearTimeout(timer);
+      typingTimersByMember.delete(timerKey);
+    },
+    clearTypingForChannel(channelId: string): void {
+      delete this.typingByChannel[channelId];
+      const prefix = `${channelId}|`;
+      for (const [timerKey, timer] of typingTimersByMember.entries()) {
+        if (!timerKey.startsWith(prefix)) continue;
+        clearTimeout(timer);
+        typingTimersByMember.delete(timerKey);
+      }
+    },
+    clearTypingForServer(serverId: string): void {
+      const groups = this.groupsByServer[serverId] ?? [];
+      groups.forEach((group) => {
+        group.channels.forEach((channel) => {
+          this.clearTypingForChannel(channel.id);
+        });
+      });
+    },
+    syncTypingMembersWithPresence(channelId: string, members: ChannelPresenceMember[]): void {
+      const presenceKeys = new Set(members.map((member) => presenceMemberKey(member)));
+      const typingMembers = this.typingByChannel[channelId] ?? [];
+      const nextTypingMembers = typingMembers.filter((member) => presenceKeys.has(presenceMemberKey(member)));
+      if (nextTypingMembers.length === typingMembers.length) {
+        return;
+      }
+      this.typingByChannel[channelId] = nextTypingMembers;
+      typingMembers.forEach((member) => {
+        if (presenceKeys.has(presenceMemberKey(member))) return;
+        this.clearTypingTimer(channelId, member);
+      });
     },
     markChannelRead(channelId: string): void {
       this.unreadByChannel[channelId] = 0;
@@ -488,6 +594,7 @@ export const useChatStore = defineStore("chat", {
       this.realtimeByServer[serverId].reconnectAttempt = 0;
       this.realtimeByServer[serverId].errorMessage = null;
       this.clearPresenceForServer(serverId);
+      this.clearTypingForServer(serverId);
       realtimeConnectParamsByServer.delete(serverId);
     },
     disconnectAllRealtime(): void {
@@ -495,6 +602,11 @@ export const useChatStore = defineStore("chat", {
         this.disconnectServerRealtime(serverId);
       });
       this.presenceByChannel = {};
+      this.typingByChannel = {};
+      typingTimersByMember.forEach((timer) => {
+        clearTimeout(timer);
+      });
+      typingTimersByMember.clear();
       reconnectTimersByServer.forEach((timer) => {
         clearTimeout(timer);
       });
@@ -517,6 +629,7 @@ export const useChatStore = defineStore("chat", {
       groups.forEach((group) => {
         group.channels.forEach((channel) => {
           delete this.presenceByChannel[channel.id];
+          this.clearTypingForChannel(channel.id);
         });
       });
     }
