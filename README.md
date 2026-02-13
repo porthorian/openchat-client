@@ -1,8 +1,11 @@
 # OpenChat Client
 
-![OpenChat](logo.png)
+<div style="display: flex; width: 100%">
+    <img src="logo.png" alt="OpenChat" width="428" style="margin-left: auto; margin-right: auto;" /> 
+</div>
 
 OpenChat Client is an open-source Electron desktop app that provides a Discord-like experience while connecting each joined server to its own independent backend.
+
 ![OpenChat Client](image.png)
 
 ## Status
