@@ -126,6 +126,15 @@ const inputSettingsMenuOpen = ref(false);
 const inputGain = ref(100);
 const outputSettingsMenuOpen = ref(false);
 const outputDeviceListOpen = ref(false);
+const inputDeviceListOpen = ref(false);
+const inputDevices = ref<OutputDevice[]>([
+  {
+    deviceId: "default",
+    label: "System Default (Microphone)"
+  }
+]);
+const selectedInputDeviceId = ref("default");
+const inputDevicesError = ref<string | null>(null);
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const profileDisplayName = computed(() => {
@@ -140,6 +149,11 @@ const selectedOutputDeviceLabel = computed(() => {
   const selected = props.outputDevices.find((device) => device.deviceId === props.selectedOutputDeviceId);
   if (selected) return selected.label;
   return props.outputDevices[0]?.label ?? "System Default";
+});
+const selectedInputDeviceLabel = computed(() => {
+  const selected = inputDevices.value.find((device) => device.deviceId === selectedInputDeviceId.value);
+  if (selected) return selected.label;
+  return inputDevices.value[0]?.label ?? "System Default (Microphone)";
 });
 const canSelectOutputDevice = computed(() => props.outputSelectionSupported && props.outputDevices.length > 1);
 
@@ -284,6 +298,14 @@ function onWindowPointerDown(event: PointerEvent): void {
   if (!target?.closest(".output-settings-menu") && !target?.closest(".output-settings-trigger")) {
     closeOutputSettingsMenu();
   }
+
+  if (!target?.closest(".input-device-popout") && !target?.closest(".input-device-trigger")) {
+    inputDeviceListOpen.value = false;
+  }
+
+  if (!target?.closest(".output-device-popout") && !target?.closest(".output-device-trigger")) {
+    outputDeviceListOpen.value = false;
+  }
 }
 
 function onWindowKeydown(event: KeyboardEvent): void {
@@ -319,11 +341,14 @@ function toggleInputSettingsMenu(): void {
     closeVoicePresencePopover();
     profileCardOpen.value = false;
     closeOutputSettingsMenu();
+  } else {
+    inputDeviceListOpen.value = false;
   }
 }
 
 function closeInputSettingsMenu(): void {
   inputSettingsMenuOpen.value = false;
+  inputDeviceListOpen.value = false;
 }
 
 function toggleOutputSettingsMenu(): void {
@@ -334,7 +359,10 @@ function toggleOutputSettingsMenu(): void {
     closeVoicePresencePopover();
     profileCardOpen.value = false;
     closeInputSettingsMenu();
+    outputDeviceListOpen.value = false;
     emit("openOutputOptions");
+  } else {
+    outputDeviceListOpen.value = false;
   }
 }
 
@@ -346,6 +374,9 @@ function closeOutputSettingsMenu(): void {
 function toggleOutputDeviceList(): void {
   if (!canSelectOutputDevice.value) return;
   outputDeviceListOpen.value = !outputDeviceListOpen.value;
+  if (outputDeviceListOpen.value) {
+    inputDeviceListOpen.value = false;
+  }
 }
 
 function chooseOutputDevice(deviceId: string): void {
@@ -353,9 +384,97 @@ function chooseOutputDevice(deviceId: string): void {
   outputDeviceListOpen.value = false;
 }
 
+function splitDeviceLabel(label: string): { primary: string; secondary: string | null } {
+  const normalized = label.trim();
+  if (!normalized) {
+    return {
+      primary: "Unknown Device",
+      secondary: null
+    };
+  }
+
+  if (normalized.includes(" - ")) {
+    const [head, ...tail] = normalized.split(" - ");
+    return {
+      primary: head.trim(),
+      secondary: tail.join(" - ").trim() || null
+    };
+  }
+
+  const parenStart = normalized.indexOf(" (");
+  if (parenStart > 0 && normalized.endsWith(")")) {
+    return {
+      primary: normalized.slice(0, parenStart).trim(),
+      secondary: normalized.slice(parenStart + 2, -1).trim() || null
+    };
+  }
+
+  return {
+    primary: normalized,
+    secondary: null
+  };
+}
+
+async function refreshInputDevices(): Promise<void> {
+  try {
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+      inputDevices.value = [
+        {
+          deviceId: "default",
+          label: "System Default (Microphone)"
+        }
+      ];
+      inputDevicesError.value = null;
+      return;
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const entries = devices.filter((device) => device.kind === "audioinput");
+    const deduped = new Map<string, OutputDevice>();
+    entries.forEach((device, index) => {
+      const deviceId = device.deviceId || "default";
+      deduped.set(deviceId, {
+        deviceId,
+        label: device.label.trim() || (deviceId === "default" ? "System Default (Microphone)" : `Input Device ${index + 1}`)
+      });
+    });
+    if (!deduped.has("default")) {
+      deduped.set("default", {
+        deviceId: "default",
+        label: "System Default (Microphone)"
+      });
+    }
+    inputDevices.value = Array.from(deduped.values()).sort((left, right) => {
+      if (left.deviceId === "default") return -1;
+      if (right.deviceId === "default") return 1;
+      return left.label.localeCompare(right.label);
+    });
+    if (!inputDevices.value.some((device) => device.deviceId === selectedInputDeviceId.value)) {
+      selectedInputDeviceId.value = "default";
+    }
+    inputDevicesError.value = null;
+  } catch (error) {
+    inputDevicesError.value = (error as Error).message;
+  }
+}
+
+function toggleInputDeviceList(): void {
+  inputDeviceListOpen.value = !inputDeviceListOpen.value;
+  if (inputDeviceListOpen.value) {
+    outputDeviceListOpen.value = false;
+    void refreshInputDevices();
+  }
+}
+
+function chooseInputDevice(deviceId: string): void {
+  selectedInputDeviceId.value = deviceId;
+  inputDeviceListOpen.value = false;
+}
+
 onMounted(() => {
   window.addEventListener("pointerdown", onWindowPointerDown);
   window.addEventListener("keydown", onWindowKeydown);
+  void refreshInputDevices();
 });
 
 onBeforeUnmount(() => {
@@ -531,13 +650,41 @@ onBeforeUnmount(() => {
               role="dialog"
               aria-label="Input settings"
             >
-              <button type="button" class="input-settings-row">
-                <span class="input-settings-copy">
-                  <strong>Input Device</strong>
-                  <small>macOS Default (MacBook Pro Microphone)</small>
-                </span>
-                <AppIcon :path="mdiChevronRight" :size="16" />
-              </button>
+              <div class="device-row-wrap">
+                <button
+                  type="button"
+                  class="input-settings-row input-device-trigger"
+                  :aria-expanded="inputDeviceListOpen"
+                  @click.stop="toggleInputDeviceList"
+                >
+                  <span class="input-settings-copy">
+                    <strong>Input Device</strong>
+                    <small>{{ selectedInputDeviceLabel }}</small>
+                  </span>
+                  <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': inputDeviceListOpen }" />
+                </button>
+
+                <section v-if="inputDeviceListOpen" class="device-selection-popout input-device-popout" role="dialog">
+                  <button
+                    v-for="device in inputDevices"
+                    :key="device.deviceId"
+                    type="button"
+                    class="device-selection-option"
+                    :class="{ 'is-active': device.deviceId === selectedInputDeviceId }"
+                    @click="chooseInputDevice(device.deviceId)"
+                  >
+                    <span class="device-selection-copy">
+                      <strong>{{ splitDeviceLabel(device.label).primary }}</strong>
+                      <small v-if="splitDeviceLabel(device.label).secondary">
+                        {{ splitDeviceLabel(device.label).secondary }}
+                      </small>
+                    </span>
+                    <span class="device-selection-indicator" :class="{ 'is-active': device.deviceId === selectedInputDeviceId }" />
+                  </button>
+                  <button type="button" class="device-selection-more" @click="refreshInputDevices">Show more...</button>
+                  <p v-if="inputDevicesError" class="output-settings-error">{{ inputDevicesError }}</p>
+                </section>
+              </div>
 
               <button type="button" class="input-settings-row">
                 <span class="input-settings-copy">
@@ -597,31 +744,47 @@ onBeforeUnmount(() => {
               role="dialog"
               aria-label="Output settings"
             >
-              <button
-                type="button"
-                class="output-settings-row"
-                :disabled="!canSelectOutputDevice"
-                :aria-expanded="outputDeviceListOpen"
-                @click="toggleOutputDeviceList"
-              >
-                <span class="output-settings-copy">
-                  <strong>Output Device</strong>
-                  <small>{{ selectedOutputDeviceLabel }}</small>
-                </span>
-                <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': outputDeviceListOpen }" />
-              </button>
-
-              <div v-if="outputDeviceListOpen && canSelectOutputDevice" class="output-device-list">
+              <div class="device-row-wrap">
                 <button
-                  v-for="device in outputDevices"
-                  :key="device.deviceId"
                   type="button"
-                  class="output-device-option"
-                  :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
-                  @click="chooseOutputDevice(device.deviceId)"
+                  class="output-settings-row output-device-trigger"
+                  :disabled="!canSelectOutputDevice"
+                  :aria-expanded="outputDeviceListOpen"
+                  @click.stop="toggleOutputDeviceList"
                 >
-                  {{ device.label }}
+                  <span class="output-settings-copy">
+                    <strong>Output Device</strong>
+                    <small>{{ selectedOutputDeviceLabel }}</small>
+                  </span>
+                  <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': outputDeviceListOpen }" />
                 </button>
+
+                <section
+                  v-if="outputDeviceListOpen && canSelectOutputDevice"
+                  class="device-selection-popout output-device-popout"
+                  role="dialog"
+                >
+                  <button
+                    v-for="device in outputDevices"
+                    :key="device.deviceId"
+                    type="button"
+                    class="device-selection-option"
+                    :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
+                    @click="chooseOutputDevice(device.deviceId)"
+                  >
+                    <span class="device-selection-copy">
+                      <strong>{{ splitDeviceLabel(device.label).primary }}</strong>
+                      <small v-if="splitDeviceLabel(device.label).secondary">
+                        {{ splitDeviceLabel(device.label).secondary }}
+                      </small>
+                    </span>
+                    <span
+                      class="device-selection-indicator"
+                      :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
+                    />
+                  </button>
+                  <button type="button" class="device-selection-more" @click="emit('openOutputOptions')">Show more...</button>
+                </section>
               </div>
 
               <div class="output-settings-divider" />

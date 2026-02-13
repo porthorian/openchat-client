@@ -4,6 +4,15 @@
   box-sizing: border-box;
 }
 
+:root {
+  --ui-scrollbar-size: 12px;
+  --ui-scrollbar-thumb: rgb(228 232 240 / 58%);
+  --ui-scrollbar-thumb-hover: rgb(236 239 246 / 72%);
+  --ui-scrollbar-track: transparent;
+  --ui-scrollbar-thumb-border: 3px solid transparent;
+  --ui-scrollbar-thumb-min: 42px;
+}
+
 html,
 body,
 #app {
@@ -39,6 +48,36 @@ select {
 button {
   border: 0;
   cursor: pointer;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-scrollbar-thumb) var(--ui-scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--ui-scrollbar-size);
+  height: var(--ui-scrollbar-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--ui-scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: var(--ui-scrollbar-thumb-border);
+  background-clip: padding-box;
+  background-color: var(--ui-scrollbar-thumb);
+  min-height: var(--ui-scrollbar-thumb-min);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ui-scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .app-icon {
@@ -1034,7 +1073,6 @@ button {
 
 .output-settings-menu {
   position: absolute;
-  right: 0;
   bottom: calc(100% + 10px);
   width: 286px;
   border-radius: 12px;
@@ -1070,10 +1108,12 @@ button {
   cursor: default;
 }
 
+.input-settings-row .app-icon,
 .output-settings-row .app-icon {
   transition: transform 140ms ease;
 }
 
+.input-settings-row .app-icon.is-rotated,
 .output-settings-row .app-icon.is-rotated {
   transform: rotate(90deg);
 }
@@ -1101,35 +1141,127 @@ button {
   margin: 5px 2px;
 }
 
-.output-device-list {
+.device-row-wrap {
+  position: relative;
+}
+
+.device-selection-popout {
   display: grid;
   gap: 2px;
-  margin: -1px 2px 2px;
-  padding: 6px;
+  position: absolute;
+  top: -1px;
+  left: calc(100% + 8px);
+  width: 232px;
+  z-index: 80;
+  margin: 0;
+  padding: 8px;
   border-radius: 8px;
-  border: 1px solid #3b4050;
-  background: #222531;
-  max-height: 148px;
+  border: 1px solid #3a3f4e;
+  background: linear-gradient(180deg, #2d303d, #232632);
+  box-shadow: 0 16px 28px rgb(0 0 0 / 42%);
+  max-height: 192px;
   overflow-y: auto;
 }
 
-.output-device-option {
+.device-selection-option {
   width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   border-radius: 6px;
-  color: #cfd3e0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #dde2ee;
   text-align: left;
   padding: 6px 8px;
-  font-size: 0.84rem;
-  line-height: 1.2;
+  min-height: 34px;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
-.output-device-option:hover {
-  background: #373b49;
+.device-selection-option:hover {
+  border-color: #4b5266;
+  background: #353949;
   color: #f2f4fb;
 }
 
-.output-device-option.is-active {
-  background: #364366;
+.device-selection-option.is-active {
+  border-color: #5f6881;
+  background: #3b4154;
+  color: #f2f4fb;
+}
+
+.device-selection-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.device-selection-copy strong {
+  font-size: 0.94rem;
+  font-weight: 700;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-selection-copy small {
+  color: #b9c0d2;
+  font-size: 0.82rem;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-selection-indicator {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid #777f92;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.device-selection-indicator.is-active {
+  border-color: #9ea9f9;
+}
+
+.device-selection-indicator.is-active::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  background: #7b8bff;
+}
+
+.device-selection-more {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  color: #f2f4fb;
+  padding: 6px 8px;
+  font-size: 0.96rem;
+  font-weight: 600;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.device-selection-more:hover {
+  border-color: #4b5266;
+  background: #353949;
   color: #f2f4fb;
 }
 
@@ -1722,7 +1854,7 @@ button {
 .chat-stage:hover,
 .chat-stage.is-scrolling {
   scrollbar-width: thin;
-  scrollbar-color: rgb(220 225 236 / 62%) transparent;
+  scrollbar-color: var(--ui-scrollbar-thumb) var(--ui-scrollbar-track);
 }
 
 .chat-stage::-webkit-scrollbar {
@@ -1737,61 +1869,21 @@ button {
 }
 
 .chat-stage::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--ui-scrollbar-track);
 }
 
 .chat-stage::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
   background-color: transparent;
-  min-height: 42px;
 }
 
 .chat-stage:hover::-webkit-scrollbar-thumb,
 .chat-stage.is-scrolling::-webkit-scrollbar-thumb {
-  background-color: rgb(228 232 240 / 58%);
+  background-color: var(--ui-scrollbar-thumb);
 }
 
 .chat-stage:hover::-webkit-scrollbar-thumb:hover,
 .chat-stage.is-scrolling::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(236 239 246 / 72%);
-}
-
-.chat-stage::-webkit-scrollbar-corner,
-.channel-list::-webkit-scrollbar-corner,
-.member-list::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-.channel-list::-webkit-scrollbar,
-.member-list::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
-}
-
-.channel-list::-webkit-scrollbar-track,
-.member-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.channel-list::-webkit-scrollbar-thumb,
-.member-list::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
-  background-color: rgb(228 232 240 / 58%);
-  min-height: 42px;
-}
-
-.channel-list::-webkit-scrollbar-thumb:hover,
-.member-list::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(236 239 246 / 72%);
-}
-
-.channel-list::-webkit-scrollbar-corner,
-.member-list::-webkit-scrollbar-corner {
-  background: transparent;
+  background-color: var(--ui-scrollbar-thumb-hover);
 }
 
 .chat-stage-inner {
