@@ -856,7 +856,8 @@ button {
   background: transparent;
 }
 
-.input-control-wrap {
+.input-control-wrap,
+.output-control-wrap {
   position: relative;
 }
 
@@ -1029,6 +1030,139 @@ button {
 
 .input-settings-row.is-settings {
   min-height: 38px;
+}
+
+.output-settings-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: 286px;
+  border-radius: 12px;
+  border: 1px solid #383d4d;
+  background: linear-gradient(180deg, #2f3342, #252833);
+  box-shadow: 0 16px 30px rgb(0 0 0 / 45%);
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+  z-index: 74;
+}
+
+.output-settings-row {
+  width: 100%;
+  min-height: 42px;
+  border-radius: 8px;
+  background: transparent;
+  color: #edf0f6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.output-settings-row:hover {
+  background: #3a3e4d;
+}
+
+.output-settings-row:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.output-settings-row .app-icon {
+  transition: transform 140ms ease;
+}
+
+.output-settings-row .app-icon.is-rotated {
+  transform: rotate(90deg);
+}
+
+.output-settings-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.output-settings-copy strong {
+  font-size: 1.06rem;
+  line-height: 1.1;
+}
+
+.output-settings-copy small {
+  color: #b4b9c9;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.output-settings-divider {
+  height: 1px;
+  background: #3b4050;
+  margin: 5px 2px;
+}
+
+.output-device-list {
+  display: grid;
+  gap: 2px;
+  margin: -1px 2px 2px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid #3b4050;
+  background: #222531;
+  max-height: 148px;
+  overflow-y: auto;
+}
+
+.output-device-option {
+  width: 100%;
+  border-radius: 6px;
+  color: #cfd3e0;
+  text-align: left;
+  padding: 6px 8px;
+  font-size: 0.84rem;
+  line-height: 1.2;
+}
+
+.output-device-option:hover {
+  background: #373b49;
+  color: #f2f4fb;
+}
+
+.output-device-option.is-active {
+  background: #364366;
+  color: #f2f4fb;
+}
+
+.output-volume-group {
+  display: grid;
+  gap: 8px;
+  padding: 4px 10px;
+}
+
+.output-volume-group p {
+  color: #edf0f6;
+  font-size: 1.04rem;
+  font-weight: 700;
+}
+
+.output-volume-slider {
+  display: block;
+}
+
+.output-volume-slider input {
+  width: 100%;
+  accent-color: #7a76ff;
+}
+
+.output-settings-row.is-settings {
+  min-height: 38px;
+}
+
+.output-settings-error {
+  color: #f1a9b2;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  padding: 0 10px 6px;
 }
 
 .user-settings-btn {

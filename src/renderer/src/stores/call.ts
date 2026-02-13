@@ -22,16 +22,36 @@ export type ChannelCallSession = {
   lastEventAt: string | null;
 };
 
+export type AudioOutputDevice = {
+  deviceId: string;
+  label: string;
+};
+
 type CallState = {
   activeVoiceChannelByServer: Record<string, string | null>;
   sessionsByKey: Record<string, ChannelCallSession>;
+  outputDevices: AudioOutputDevice[];
+  selectedOutputDeviceId: string;
+  outputVolume: number;
+  outputSelectionSupported: boolean;
+  outputDeviceError: string | null;
 };
 
+const DEFAULT_OUTPUT_DEVICE_ID = "default";
+const DEFAULT_OUTPUT_DEVICE_LABEL = "System Default";
 const socketsByKey = new Map<string, WebSocket>();
 const intentionallyClosed = new Set<string>();
 const nextPlaybackTimeByStream = new Map<string, number>();
 let playbackAudioContext: AudioContext | null = null;
 let playbackGainNode: GainNode | null = null;
+let playbackDestinationNode: MediaStreamAudioDestinationNode | null = null;
+let playbackAudioElement: HTMLAudioElement | null = null;
+let playbackMuted = false;
+let playbackVolume = 0.5;
+
+type AudioElementWithSink = HTMLAudioElement & {
+  setSinkId?: (deviceId: string) => Promise<void>;
+};
 
 function sessionKey(serverId: string, channelId: string): string {
   return `${serverId}:${channelId}`;
@@ -63,6 +83,19 @@ function toNumber(value: unknown, fallback: number): number {
   return fallback;
 }
 
+function supportsOutputSelection(): boolean {
+  if (typeof window === "undefined") return false;
+  const mediaElementProto = HTMLMediaElement.prototype as HTMLMediaElement & {
+    setSinkId?: (deviceId: string) => Promise<void>;
+  };
+  return typeof mediaElementProto.setSinkId === "function";
+}
+
+function applyPlaybackGain(): void {
+  if (!playbackGainNode) return;
+  playbackGainNode.gain.value = playbackMuted ? 0 : playbackVolume;
+}
+
 function ensureAudioPlayback(): AudioContext | null {
   if (typeof window === "undefined") return null;
   if (!playbackAudioContext) {
@@ -72,17 +105,86 @@ function ensureAudioPlayback(): AudioContext | null {
   }
   if (!playbackGainNode) {
     playbackGainNode = playbackAudioContext.createGain();
-    playbackGainNode.connect(playbackAudioContext.destination);
+  }
+  if (!playbackDestinationNode) {
+    playbackDestinationNode = playbackAudioContext.createMediaStreamDestination();
+  }
+  try {
+    playbackGainNode.disconnect();
+  } catch (_error) {
+    // No-op; disconnect can throw when there are no existing connections.
+  }
+  playbackGainNode.connect(playbackDestinationNode);
+
+  if (!playbackAudioElement) {
+    playbackAudioElement = new Audio();
+    playbackAudioElement.autoplay = true;
+    playbackAudioElement.preload = "auto";
+  }
+  if (playbackAudioElement.srcObject !== playbackDestinationNode.stream) {
+    playbackAudioElement.srcObject = playbackDestinationNode.stream;
   }
   if (playbackAudioContext.state === "suspended") {
     void playbackAudioContext.resume();
   }
+  applyPlaybackGain();
+  void playbackAudioElement.play().catch(() => {});
   return playbackAudioContext;
 }
 
 function setPlaybackMuted(isMuted: boolean): void {
-  if (!playbackGainNode) return;
-  playbackGainNode.gain.value = isMuted ? 0 : 1;
+  playbackMuted = isMuted;
+  applyPlaybackGain();
+}
+
+function setPlaybackVolume(volume: number): void {
+  playbackVolume = Math.max(0, Math.min(1, volume));
+  applyPlaybackGain();
+}
+
+async function setPlaybackSinkDevice(deviceId: string): Promise<boolean> {
+  ensureAudioPlayback();
+  if (!playbackAudioElement) return false;
+  const sinkElement = playbackAudioElement as AudioElementWithSink;
+  if (typeof sinkElement.setSinkId !== "function") return false;
+  await sinkElement.setSinkId(deviceId || DEFAULT_OUTPUT_DEVICE_ID);
+  return true;
+}
+
+async function listAudioOutputDevices(): Promise<AudioOutputDevice[]> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+    return [
+      {
+        deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+        label: DEFAULT_OUTPUT_DEVICE_LABEL
+      }
+    ];
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const outputs = devices.filter((device) => device.kind === "audiooutput");
+  const deduped = new Map<string, AudioOutputDevice>();
+  outputs.forEach((device, index) => {
+    const deviceId = device.deviceId || DEFAULT_OUTPUT_DEVICE_ID;
+    const fallbackLabel = deviceId === DEFAULT_OUTPUT_DEVICE_ID ? DEFAULT_OUTPUT_DEVICE_LABEL : `Output Device ${index + 1}`;
+    deduped.set(deviceId, {
+      deviceId,
+      label: device.label.trim() || fallbackLabel
+    });
+  });
+
+  if (!deduped.has(DEFAULT_OUTPUT_DEVICE_ID)) {
+    deduped.set(DEFAULT_OUTPUT_DEVICE_ID, {
+      deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+      label: DEFAULT_OUTPUT_DEVICE_LABEL
+    });
+  }
+
+  return Array.from(deduped.values()).sort((left, right) => {
+    if (left.deviceId === DEFAULT_OUTPUT_DEVICE_ID) return -1;
+    if (right.deviceId === DEFAULT_OUTPUT_DEVICE_ID) return 1;
+    return left.label.localeCompare(right.label);
+  });
 }
 
 function clearPlaybackState(): void {
@@ -163,7 +265,17 @@ function toParticipant(payload: Record<string, unknown>, isLocal: boolean): Call
 export const useCallStore = defineStore("call", {
   state: (): CallState => ({
     activeVoiceChannelByServer: {},
-    sessionsByKey: {}
+    sessionsByKey: {},
+    outputDevices: [
+      {
+        deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+        label: DEFAULT_OUTPUT_DEVICE_LABEL
+      }
+    ],
+    selectedOutputDeviceId: DEFAULT_OUTPUT_DEVICE_ID,
+    outputVolume: 50,
+    outputSelectionSupported: supportsOutputSelection(),
+    outputDeviceError: null
   }),
   getters: {
     sessionFor: (state) => (serverId: string, channelId: string): ChannelCallSession => {
@@ -185,6 +297,44 @@ export const useCallStore = defineStore("call", {
         this.sessionsByKey[key] = createEmptySession();
       }
       return key;
+    },
+    async refreshOutputDevices(): Promise<void> {
+      try {
+        this.outputDevices = await listAudioOutputDevices();
+        if (!this.outputDevices.some((device) => device.deviceId === this.selectedOutputDeviceId)) {
+          this.selectedOutputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+        }
+        this.outputDeviceError = null;
+      } catch (error) {
+        this.outputDevices = [
+          {
+            deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+            label: DEFAULT_OUTPUT_DEVICE_LABEL
+          }
+        ];
+        this.selectedOutputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+        this.outputDeviceError = (error as Error).message;
+      }
+    },
+    async selectOutputDevice(deviceId: string): Promise<void> {
+      const nextDeviceID = deviceId.trim() || DEFAULT_OUTPUT_DEVICE_ID;
+      try {
+        const applied = await setPlaybackSinkDevice(nextDeviceID);
+        if (!applied && nextDeviceID !== DEFAULT_OUTPUT_DEVICE_ID) {
+          this.outputSelectionSupported = false;
+          this.outputDeviceError = "Output device switching is not supported on this runtime.";
+          return;
+        }
+        this.selectedOutputDeviceId = nextDeviceID;
+        this.outputDeviceError = null;
+      } catch (error) {
+        this.outputDeviceError = (error as Error).message;
+      }
+    },
+    setOutputVolume(volume: number): void {
+      const normalized = Math.max(0, Math.min(100, Math.round(volume)));
+      this.outputVolume = normalized;
+      setPlaybackVolume(normalized / 100);
     },
     async toggleVoiceChannel(params: {
       serverId: string;
@@ -211,6 +361,9 @@ export const useCallStore = defineStore("call", {
       deviceID: string;
     }): Promise<void> {
       ensureAudioPlayback();
+      setPlaybackVolume(this.outputVolume / 100);
+      void this.refreshOutputDevices();
+      void this.selectOutputDevice(this.selectedOutputDeviceId);
       const key = this.ensureSession(params.serverId, params.channelId);
       const session = this.sessionsByKey[key];
       session.state = "joining";

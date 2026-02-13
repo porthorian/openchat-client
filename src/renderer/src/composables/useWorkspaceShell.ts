@@ -239,6 +239,7 @@ export function useWorkspaceShell() {
 
   onMounted(async () => {
     identity.initializeIdentity();
+    void call.refreshOutputDevices();
     try {
       appVersion.value = await window.openchat.getAppVersion();
       runtime.value = await window.openchat.getRuntimeInfo();
@@ -348,6 +349,18 @@ export function useWorkspaceShell() {
   function leaveVoiceChannel(): void {
     if (!activeVoiceChannelId.value) return;
     call.leaveChannel(appUI.activeServerId, activeVoiceChannelId.value);
+  }
+
+  function openOutputOptions(): void {
+    void call.refreshOutputDevices();
+  }
+
+  function selectOutputDevice(deviceId: string): void {
+    void call.selectOutputDevice(deviceId);
+  }
+
+  function updateOutputVolume(volume: number): void {
+    call.setOutputVolume(volume);
   }
 
   async function sendMessage(body: string): Promise<void> {
@@ -504,6 +517,11 @@ export function useWorkspaceShell() {
     callParticipantCount: activeCallSession.value?.participants.length ?? 0,
     micMuted: activeCallSession.value?.micMuted ?? false,
     deafened: activeCallSession.value?.deafened ?? false,
+    outputDevices: call.outputDevices,
+    selectedOutputDeviceId: call.selectedOutputDeviceId,
+    outputSelectionSupported: call.outputSelectionSupported,
+    outputVolume: call.outputVolume,
+    outputDeviceError: call.outputDeviceError,
     callErrorMessage: activeCallSession.value?.errorMessage ?? null,
     voiceParticipantsByChannel: activeVoiceParticipants.value,
     filterValue: appUI.channelFilter,
@@ -557,7 +575,10 @@ export function useWorkspaceShell() {
     toggleUidMode: cycleUIDMode,
     toggleMic,
     toggleDeafen,
-    leaveVoiceChannel
+    leaveVoiceChannel,
+    openOutputOptions,
+    selectOutputDevice,
+    updateOutputVolume
   };
 
   const workspaceToolbarListeners = {

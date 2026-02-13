@@ -45,6 +45,11 @@ type VoiceParticipant = {
   badgeEmoji?: string;
 };
 
+type OutputDevice = {
+  deviceId: string;
+  label: string;
+};
+
 type PresenceStatus = "online" | "idle" | "busy" | "invisible";
 
 const props = defineProps<{
@@ -57,6 +62,11 @@ const props = defineProps<{
   callParticipantCount: number;
   micMuted: boolean;
   deafened: boolean;
+  outputDevices: OutputDevice[];
+  selectedOutputDeviceId: string;
+  outputSelectionSupported: boolean;
+  outputVolume: number;
+  outputDeviceError?: string | null;
   callErrorMessage?: string | null;
   voiceParticipantsByChannel: Record<string, VoiceParticipant[]>;
   filterValue: string;
@@ -76,6 +86,9 @@ const emit = defineEmits<{
   toggleMic: [];
   toggleDeafen: [];
   leaveVoiceChannel: [];
+  openOutputOptions: [];
+  selectOutputDevice: [deviceId: string];
+  updateOutputVolume: [value: number];
 }>();
 
 type CategoryMenuState = {
@@ -111,6 +124,8 @@ const profileCardOpen = ref(false);
 const presenceStatus = ref<PresenceStatus>("online");
 const inputSettingsMenuOpen = ref(false);
 const inputGain = ref(100);
+const outputSettingsMenuOpen = ref(false);
+const outputDeviceListOpen = ref(false);
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const profileDisplayName = computed(() => {
@@ -121,6 +136,12 @@ const profileDisplayName = computed(() => {
 });
 const profileAvatarText = computed(() => profileDisplayName.value.slice(0, 1).toUpperCase());
 const profileHandle = computed(() => `@${props.currentUid.trim() || "uid_unbound"}`);
+const selectedOutputDeviceLabel = computed(() => {
+  const selected = props.outputDevices.find((device) => device.deviceId === props.selectedOutputDeviceId);
+  if (selected) return selected.label;
+  return props.outputDevices[0]?.label ?? "System Default";
+});
+const canSelectOutputDevice = computed(() => props.outputSelectionSupported && props.outputDevices.length > 1);
 
 function isGroupCollapsed(groupId: string): boolean {
   return collapsedGroupIds.value.has(groupId);
@@ -156,6 +177,7 @@ function openCategoryMenu(groupId: string, event: MouseEvent): void {
   closeVoicePresencePopover();
   closeProfileCard();
   closeInputSettingsMenu();
+  closeOutputSettingsMenu();
   const menuWidth = 240;
   const menuHeight = 246;
   const boundedX = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
@@ -222,6 +244,7 @@ function openVoicePresencePopover(participant: VoiceParticipant, event: MouseEve
   closeCategoryMenu();
   closeProfileCard();
   closeInputSettingsMenu();
+  closeOutputSettingsMenu();
   clearVoicePopoverCloseTimer();
 
   const channelPaneRect = channelPaneRef.value?.getBoundingClientRect();
@@ -257,6 +280,10 @@ function onWindowPointerDown(event: PointerEvent): void {
   if (!target?.closest(".input-settings-menu") && !target?.closest(".input-settings-trigger")) {
     closeInputSettingsMenu();
   }
+
+  if (!target?.closest(".output-settings-menu") && !target?.closest(".output-settings-trigger")) {
+    closeOutputSettingsMenu();
+  }
 }
 
 function onWindowKeydown(event: KeyboardEvent): void {
@@ -265,6 +292,7 @@ function onWindowKeydown(event: KeyboardEvent): void {
     closeVoicePresencePopover();
     closeProfileCard();
     closeInputSettingsMenu();
+    closeOutputSettingsMenu();
   }
 }
 
@@ -273,11 +301,11 @@ function toggleProfileCard(): void {
   closeCategoryMenu();
   closeVoicePresencePopover();
   closeInputSettingsMenu();
+  closeOutputSettingsMenu();
 }
 
 function closeProfileCard(): void {
   profileCardOpen.value = false;
-  closeInputSettingsMenu();
 }
 
 function setPresenceStatus(status: PresenceStatus): void {
@@ -286,10 +314,43 @@ function setPresenceStatus(status: PresenceStatus): void {
 
 function toggleInputSettingsMenu(): void {
   inputSettingsMenuOpen.value = !inputSettingsMenuOpen.value;
+  if (inputSettingsMenuOpen.value) {
+    closeCategoryMenu();
+    closeVoicePresencePopover();
+    profileCardOpen.value = false;
+    closeOutputSettingsMenu();
+  }
 }
 
 function closeInputSettingsMenu(): void {
   inputSettingsMenuOpen.value = false;
+}
+
+function toggleOutputSettingsMenu(): void {
+  outputSettingsMenuOpen.value = !outputSettingsMenuOpen.value;
+  if (outputSettingsMenuOpen.value) {
+    outputDeviceListOpen.value = false;
+    closeCategoryMenu();
+    closeVoicePresencePopover();
+    profileCardOpen.value = false;
+    closeInputSettingsMenu();
+    emit("openOutputOptions");
+  }
+}
+
+function closeOutputSettingsMenu(): void {
+  outputSettingsMenuOpen.value = false;
+  outputDeviceListOpen.value = false;
+}
+
+function toggleOutputDeviceList(): void {
+  if (!canSelectOutputDevice.value) return;
+  outputDeviceListOpen.value = !outputDeviceListOpen.value;
+}
+
+function chooseOutputDevice(deviceId: string): void {
+  emit("selectOutputDevice", deviceId);
+  outputDeviceListOpen.value = false;
 }
 
 onMounted(() => {
@@ -302,6 +363,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onWindowKeydown);
   clearVoicePopoverCloseTimer();
   closeInputSettingsMenu();
+  closeOutputSettingsMenu();
 });
 </script>
 
@@ -506,7 +568,7 @@ onBeforeUnmount(() => {
             </section>
           </div>
 
-          <div class="voice-control-group" :class="{ 'is-muted': deafened }">
+          <div class="voice-control-group output-control-wrap" :class="{ 'is-muted': deafened }">
             <button
               type="button"
               class="voice-control-btn"
@@ -515,10 +577,80 @@ onBeforeUnmount(() => {
             >
               <AppIcon :path="deafened ? mdiHeadphonesOff : mdiHeadphones" :size="16" />
             </button>
-            <button type="button" class="voice-control-btn voice-control-caret" aria-label="Output options">
+            <button
+              type="button"
+              class="voice-control-btn voice-control-caret output-settings-trigger"
+              :class="{ 'is-open': outputSettingsMenuOpen }"
+              aria-label="Output options"
+              :aria-expanded="outputSettingsMenuOpen"
+              aria-controls="output-settings-menu"
+              @click.stop="toggleOutputSettingsMenu"
+            >
               <AppIcon :path="mdiChevronDown" :size="14" />
               <span class="icon-tooltip">Output Options</span>
             </button>
+
+            <section
+              v-if="outputSettingsMenuOpen"
+              id="output-settings-menu"
+              class="output-settings-menu"
+              role="dialog"
+              aria-label="Output settings"
+            >
+              <button
+                type="button"
+                class="output-settings-row"
+                :disabled="!canSelectOutputDevice"
+                :aria-expanded="outputDeviceListOpen"
+                @click="toggleOutputDeviceList"
+              >
+                <span class="output-settings-copy">
+                  <strong>Output Device</strong>
+                  <small>{{ selectedOutputDeviceLabel }}</small>
+                </span>
+                <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': outputDeviceListOpen }" />
+              </button>
+
+              <div v-if="outputDeviceListOpen && canSelectOutputDevice" class="output-device-list">
+                <button
+                  v-for="device in outputDevices"
+                  :key="device.deviceId"
+                  type="button"
+                  class="output-device-option"
+                  :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
+                  @click="chooseOutputDevice(device.deviceId)"
+                >
+                  {{ device.label }}
+                </button>
+              </div>
+
+              <div class="output-settings-divider" />
+
+              <div class="output-volume-group">
+                <p>Output Volume</p>
+                <label class="output-volume-slider">
+                  <span class="sr-only">Output volume</span>
+                  <input
+                    :value="outputVolume"
+                    type="range"
+                    min="0"
+                    max="100"
+                    @input="emit('updateOutputVolume', Number(($event.target as HTMLInputElement).value))"
+                  />
+                </label>
+              </div>
+
+              <div class="output-settings-divider" />
+
+              <button type="button" class="output-settings-row is-settings">
+                <span class="output-settings-copy">
+                  <strong>Voice Settings</strong>
+                </span>
+                <AppIcon :path="mdiCogOutline" :size="16" />
+              </button>
+
+              <p v-if="outputDeviceError" class="output-settings-error">{{ outputDeviceError }}</p>
+            </section>
           </div>
 
           <button type="button" class="user-settings-btn">
