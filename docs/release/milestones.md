@@ -2,6 +2,8 @@
 
 This document tracks delivery milestones for the OpenChat client planning and implementation roadmap.
 
+Last updated: 2026-02-13
+
 ## Status Key
 - `planned`: defined but not started
 - `in_progress`: active work
@@ -11,7 +13,7 @@ This document tracks delivery milestones for the OpenChat client planning and im
 ## Milestone Overview
 
 ### M0: Project Foundation
-- Status: `in_progress`
+- Status: `done`
 - Goals:
   - Repository scaffolding and documentation baseline.
   - Architecture decisions recorded.
@@ -21,9 +23,13 @@ This document tracks delivery milestones for the OpenChat client planning and im
   - Initial ADR set accepted.
   - MVP feature specs drafted.
   - Runtime scaffold exists for Electron + Vue + Pinia + PrimeVue (unstyled).
+- Completion notes:
+  - Runtime scaffold exists and is actively used (`electron-vite`, Vue renderer, Pinia stores).
+  - Core documentation and architecture records are present and linked from `README.md`.
+  - Feature spec set is drafted and versioned in `docs/features/`.
 
 ### M1: Multi-Server Shell
-- Status: `planned`
+- Status: `in_progress`
 - Goals:
   - Server rail and server registry UI.
   - Join flow with capability probe and trust states.
@@ -31,9 +37,13 @@ This document tracks delivery milestones for the OpenChat client planning and im
 - Exit criteria:
   - Server management flows implemented and tested.
   - Multi-server switching validated for isolation behavior.
+- Progress notes:
+  - Implemented: server rail, add-server dialog, backend discovery/manual add flow, active server switching.
+  - Implemented: server-scoped session binding and UID projection flow.
+  - Remaining: trust/warning UX depth and stronger isolation test coverage.
 
 ### M2: Core Messaging UX
-- Status: `planned`
+- Status: `in_progress`
 - Goals:
   - Channel navigation.
   - Message timeline rendering and composer.
@@ -41,9 +51,15 @@ This document tracks delivery milestones for the OpenChat client planning and im
 - Exit criteria:
   - Core chat loop is usable across multiple servers.
   - Reconnect and degraded states tested for primary surfaces.
+- Progress notes:
+  - Implemented: channel navigation/filtering and active channel switching.
+  - Implemented: message timeline + composer with send/receive over realtime channel updates.
+  - Implemented: text-channel member presence panel and baseline voice channel join controls.
+  - Implemented: voice output/input options UI and output device selection/volume path.
+  - Remaining: notifications/unread polish and reconnect/degraded validation depth.
 
 ### M3: Hardening and Open-Source Readiness
-- Status: `planned`
+- Status: `in_progress`
 - Goals:
   - Security hardening baseline complete.
   - CI/CD pipeline stabilized.
@@ -51,18 +67,24 @@ This document tracks delivery milestones for the OpenChat client planning and im
 - Exit criteria:
   - Required quality gates enforced.
   - Release process documented and trialed.
+- Progress notes:
+  - Implemented: desktop installer release workflow (`client-vX.X.X`) for macOS/Windows/Linux.
+  - Implemented: signing/notarization secret wiring and unsigned fallbacks in CI.
+  - Remaining: hardening checklist completion, full quality-gate enforcement, and release runbook maturity.
 
 ## Feature-to-Milestone Mapping
 | Feature Spec | Target Milestone | Status |
 | --- | --- | --- |
-| `docs/features/0001-auth-session-ui.md` | M1 | planned |
-| `docs/features/0002-server-join-registry.md` | M1 | planned |
-| `docs/features/0003-channel-navigation.md` | M2 | planned |
-| `docs/features/0004-message-timeline-composer.md` | M2 | planned |
+| `docs/features/0001-auth-session-ui.md` | M1 | in_progress |
+| `docs/features/0002-server-join-registry.md` | M1 | in_progress |
+| `docs/features/0003-channel-navigation.md` | M2 | in_progress |
+| `docs/features/0004-message-timeline-composer.md` | M2 | in_progress |
 | `docs/features/0005-notifications.md` | M2 | planned |
 | `docs/features/0006-settings-accessibility.md` | M3 | planned |
+| `docs/features/0007-voice-video-webrtc.md` | M2 | in_progress |
+| `docs/features/0008-moderation-and-governance.md` | M3 | planned |
 
 ## Notes
-- Milestone assignments are provisional and should be updated when implementation starts.
-- Backend contract dependencies must be resolved in parallel with feature implementation planning.
+- Milestone assignments are implementation-driven and should be revalidated after each release tag.
+- Backend contract dependencies continue to gate completion for parts of M1/M2/M3.
 - Identity-related work must enforce the UID-only server disclosure model documented in ADR-0005.
