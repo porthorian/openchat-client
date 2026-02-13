@@ -2366,6 +2366,7 @@ button {
 .server-modal-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .server-modal-btn {
@@ -2400,6 +2401,116 @@ button {
 .server-modal-divider {
   height: 1px;
   background: #33394a;
+}
+
+.server-discovery-list {
+  display: grid;
+  gap: 6px;
+}
+
+.server-discovery-item {
+  width: 100%;
+  min-height: 42px;
+  border-radius: 8px;
+  border: 1px solid #3a4052;
+  background: #262b39;
+  color: #e7ebf8;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  padding: 6px 10px;
+}
+
+.server-discovery-item:hover {
+  background: #2d3344;
+}
+
+.server-discovery-item.is-active {
+  border-color: #64729b;
+  background: #30384c;
+}
+
+.server-discovery-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.server-discovery-copy strong {
+  font-size: 0.9rem;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.server-discovery-copy small {
+  color: #b8c0d6;
+  font-size: 0.76rem;
+  line-height: 1.1;
+}
+
+.server-trust-pill {
+  min-width: 76px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid #4f5568;
+  background: #363c4b;
+  color: #e6ebfa;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  padding: 0 8px;
+}
+
+.server-trust-pill.is-verified {
+  border-color: #2f7050;
+  background: #1f4734;
+  color: #b8f6d2;
+}
+
+.server-trust-pill.is-unverified {
+  border-color: #7a5b36;
+  background: #4a3621;
+  color: #f8ddb7;
+}
+
+.server-probe-summary {
+  border-radius: 10px;
+  border: 1px solid #37415a;
+  background: linear-gradient(180deg, #21314f, #1c2840);
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.server-probe-summary > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.server-probe-summary > header strong {
+  font-size: 0.92rem;
+}
+
+.server-probe-summary p {
+  color: #d6def0;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.server-probe-warning {
+  border-radius: 8px;
+  border: 1px solid #7a5b36;
+  background: #4a3621;
+  color: #f8ddb7;
+  padding: 6px 8px;
 }
 
 @media (max-width: 1240px) {

@@ -29,7 +29,7 @@ Last updated: 2026-02-13
   - Feature spec set is drafted and versioned in `docs/features/`.
 
 ### M1: Multi-Server Shell
-- Status: `in_progress`
+- Status: `done`
 - Goals:
   - Server rail and server registry UI.
   - Join flow with capability probe and trust states.
@@ -37,10 +37,11 @@ Last updated: 2026-02-13
 - Exit criteria:
   - Server management flows implemented and tested.
   - Multi-server switching validated for isolation behavior.
-- Progress notes:
-  - Implemented: server rail, add-server dialog, backend discovery/manual add flow, active server switching.
+- Completion notes:
+  - Implemented: server rail and registry UX with backend discovery and manual add flow.
+  - Implemented: capability probe + trust-state visibility in add-server join flow.
   - Implemented: server-scoped session binding and UID projection flow.
-  - Remaining: trust/warning UX depth and stronger isolation test coverage.
+  - Implemented: per-server UI context isolation for active channel/filter during server switching.
 
 ### M2: Core Messaging UX
 - Status: `in_progress`
@@ -75,8 +76,8 @@ Last updated: 2026-02-13
 ## Feature-to-Milestone Mapping
 | Feature Spec | Target Milestone | Status |
 | --- | --- | --- |
-| `docs/features/0001-auth-session-ui.md` | M1 | in_progress |
-| `docs/features/0002-server-join-registry.md` | M1 | in_progress |
+| `docs/features/0001-auth-session-ui.md` | M1 | done |
+| `docs/features/0002-server-join-registry.md` | M1 | done |
 | `docs/features/0003-channel-navigation.md` | M2 | in_progress |
 | `docs/features/0004-message-timeline-composer.md` | M2 | in_progress |
 | `docs/features/0005-notifications.md` | M2 | planned |

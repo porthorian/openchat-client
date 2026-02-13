@@ -4,7 +4,8 @@ OpenChat Client is an open-source Electron desktop app that provides a Discord-l
 ![OpenChat Client](image.png)
 
 ## Status
-- Early implementation phase (Milestone 0 scaffolding).
+- Milestone 1 (Multi-Server Shell) complete.
+- Milestone 2 (Core Messaging UX) in active implementation.
 - Desktop installer pipeline is configured (tag-based GitHub Actions builds).
 - Repository now includes initial Electron + Vue runtime plus planning docs.
 

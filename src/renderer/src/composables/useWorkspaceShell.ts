@@ -1,8 +1,10 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { RuntimeInfo } from "@shared/ipc";
 import type { Channel, ChannelGroup } from "@renderer/types/chat";
+import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
+import { fetchServerCapabilities } from "@renderer/services/rtcClient";
 import { useAppUIStore, useCallStore, useChatStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
 
 type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
@@ -22,6 +24,24 @@ type AddServerFormState = {
   displayName: string;
   errorMessage: string | null;
   isSubmitting: boolean;
+  discoveredServers: ServerProfile[];
+  selectedDiscoveredServerId: string;
+  probeSummary: ServerJoinProbeSummary | null;
+  probedCapabilities: ServerCapabilities | null;
+};
+
+type ServerJoinProbeSummary = {
+  serverId: string;
+  serverName: string;
+  backendUrl: string;
+  trustState: ServerProfile["trustState"];
+  userUidPolicy: ServerCapabilities["userUidPolicy"];
+  identityHandshakeMode: ServerProfile["identityHandshakeStrategy"];
+  messagingEnabled: boolean;
+  presenceEnabled: boolean;
+  rtcEnabled: boolean;
+  warningMessage: string | null;
+  probedAt: string;
 };
 
 export function useWorkspaceShell() {
@@ -43,7 +63,11 @@ export function useWorkspaceShell() {
     serverId: "",
     displayName: "",
     errorMessage: null,
-    isSubmitting: false
+    isSubmitting: false,
+    discoveredServers: [],
+    selectedDiscoveredServerId: "",
+    probeSummary: null,
+    probedCapabilities: null
   });
 
   const moodCatalog: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -382,13 +406,131 @@ export function useWorkspaceShell() {
     return normalized.slice(0, 2);
   }
 
+  function normalizeBackendURL(value: string): string {
+    return value.trim().replace(/\/$/, "");
+  }
+
+  function isLikelyLocalhost(url: URL): boolean {
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  }
+
+  function resolveTrustWarning(backendUrl: string, capabilities: ServerCapabilities): string | null {
+    let parsedURL: URL;
+    try {
+      parsedURL = new URL(backendUrl);
+    } catch (_error) {
+      return "Backend URL is invalid.";
+    }
+
+    const insecureScheme = parsedURL.protocol !== "https:";
+    const localhost = isLikelyLocalhost(parsedURL);
+
+    if (capabilities.security.httpsRequired && insecureScheme && !localhost) {
+      return "Server requires HTTPS. Update the backend URL to an HTTPS endpoint.";
+    }
+
+    if (insecureScheme && !localhost) {
+      return "Connection is not HTTPS. Network operators and server admins may inspect traffic metadata.";
+    }
+
+    return null;
+  }
+
+  function toHandshakeStrategy(capabilities: ServerCapabilities): ServerProfile["identityHandshakeStrategy"] {
+    if (capabilities.identityHandshakeModes.includes("challenge_signature")) {
+      return "challenge_signature";
+    }
+    return "token_proof";
+  }
+
+  async function probeServerBackend(
+    backendUrl: string,
+    trustState: ServerProfile["trustState"]
+  ): Promise<{ summary: ServerJoinProbeSummary; capabilities: ServerCapabilities }> {
+    const capabilities = await fetchServerCapabilities(backendUrl);
+    return {
+      summary: {
+      serverId: capabilities.serverId,
+      serverName: capabilities.serverName,
+      backendUrl,
+      trustState,
+      userUidPolicy: capabilities.userUidPolicy,
+      identityHandshakeMode: toHandshakeStrategy(capabilities),
+      messagingEnabled: capabilities.features.messaging,
+      presenceEnabled: capabilities.features.presence,
+      rtcEnabled: capabilities.rtc !== null,
+      warningMessage: resolveTrustWarning(backendUrl, capabilities),
+      probedAt: new Date().toISOString()
+      },
+      capabilities
+    };
+  }
+
+  function selectedDiscoveredServer(): ServerProfile | null {
+    const selectedId = addServerForm.value.selectedDiscoveredServerId;
+    if (!selectedId) return null;
+    return addServerForm.value.discoveredServers.find((server) => server.serverId === selectedId) ?? null;
+  }
+
+  function selectDiscoveredServer(serverId: string): void {
+    const selected = addServerForm.value.discoveredServers.find((server) => server.serverId === serverId);
+    if (!selected) return;
+    addServerForm.value.selectedDiscoveredServerId = selected.serverId;
+    addServerForm.value.serverId = selected.serverId;
+    addServerForm.value.displayName = selected.displayName;
+    addServerForm.value.probeSummary = null;
+    addServerForm.value.probedCapabilities = null;
+    addServerForm.value.errorMessage = null;
+  }
+
+  async function probeAddServerTarget(manageSubmitting = true): Promise<ServerJoinProbeSummary | null> {
+    const backendUrl = normalizeBackendURL(addServerForm.value.backendUrl);
+    if (!backendUrl) {
+      addServerForm.value.errorMessage = "Backend URL is required.";
+      return null;
+    }
+
+    const discovered = selectedDiscoveredServer();
+    const trustState = discovered?.trustState ?? "unverified";
+    if (manageSubmitting) {
+      addServerForm.value.isSubmitting = true;
+    }
+    addServerForm.value.errorMessage = null;
+    try {
+      const result = await probeServerBackend(backendUrl, trustState);
+      const summary = result.summary;
+      addServerForm.value.probeSummary = summary;
+      addServerForm.value.probedCapabilities = result.capabilities;
+      if (!addServerForm.value.serverId.trim()) {
+        addServerForm.value.serverId = summary.serverId;
+      }
+      if (!addServerForm.value.displayName.trim()) {
+        addServerForm.value.displayName = summary.serverName;
+      }
+      return summary;
+    } catch (error) {
+      addServerForm.value.errorMessage = (error as Error).message;
+      addServerForm.value.probeSummary = null;
+      addServerForm.value.probedCapabilities = null;
+      return null;
+    } finally {
+      if (manageSubmitting) {
+        addServerForm.value.isSubmitting = false;
+      }
+    }
+  }
+
   function resetAddServerForm(): void {
     addServerForm.value = {
       backendUrl: DEFAULT_BACKEND_URL,
       serverId: "",
       displayName: "",
       errorMessage: null,
-      isSubmitting: false
+      isSubmitting: false,
+      discoveredServers: [],
+      selectedDiscoveredServerId: "",
+      probeSummary: null,
+      probedCapabilities: null
     };
   }
 
@@ -403,7 +545,7 @@ export function useWorkspaceShell() {
   }
 
   async function discoverServersFromURL(): Promise<void> {
-    const backendUrl = addServerForm.value.backendUrl.trim().replace(/\/$/, "");
+    const backendUrl = normalizeBackendURL(addServerForm.value.backendUrl);
     if (!backendUrl) {
       addServerForm.value.errorMessage = "Backend URL is required.";
       return;
@@ -415,22 +557,19 @@ export function useWorkspaceShell() {
       const discovered = await fetchServerDirectory(backendUrl);
       if (discovered.length === 0) {
         addServerForm.value.errorMessage = `No servers available at ${backendUrl}/v1/servers`;
+        addServerForm.value.discoveredServers = [];
+        addServerForm.value.selectedDiscoveredServerId = "";
+        addServerForm.value.probedCapabilities = null;
         return;
       }
 
-      let addedCount = 0;
-      discovered.forEach((profile) => {
-        if (registry.addServer(profile)) {
-          addedCount += 1;
-        }
-      });
-
-      const first = discovered[0];
-      appUI.setActiveServer(first.serverId);
-      startupError.value = addedCount === 0 ? `Server already added: ${first.displayName}` : null;
-      isAddServerDialogOpen.value = false;
-      await hydrateServer(first.serverId);
+      addServerForm.value.discoveredServers = discovered;
+      selectDiscoveredServer(discovered[0].serverId);
+      await probeAddServerTarget();
     } catch (directoryError) {
+      addServerForm.value.discoveredServers = [];
+      addServerForm.value.selectedDiscoveredServerId = "";
+      addServerForm.value.probedCapabilities = null;
       addServerForm.value.errorMessage = (directoryError as Error).message;
     } finally {
       addServerForm.value.isSubmitting = false;
@@ -438,7 +577,7 @@ export function useWorkspaceShell() {
   }
 
   async function addServerManually(): Promise<void> {
-    const backendUrl = addServerForm.value.backendUrl.trim().replace(/\/$/, "");
+    const backendUrl = normalizeBackendURL(addServerForm.value.backendUrl);
     const serverId = addServerForm.value.serverId.trim();
     const displayName = addServerForm.value.displayName.trim();
 
@@ -451,38 +590,75 @@ export function useWorkspaceShell() {
       return;
     }
 
-    const profile: ServerProfile = {
-      serverId,
-      displayName: displayName || serverId,
-      backendUrl,
-      iconText: toIconText(displayName || serverId),
-      trustState: "unverified",
-      identityHandshakeStrategy: "challenge_signature",
-      userIdentifierPolicy: "server_scoped"
-    };
+    addServerForm.value.isSubmitting = true;
+    addServerForm.value.errorMessage = null;
+    try {
+      let probe = addServerForm.value.probeSummary;
+      let capabilities = addServerForm.value.probedCapabilities;
+      if (!probe || probe.backendUrl !== backendUrl || probe.serverId !== serverId) {
+        probe = await probeAddServerTarget(false);
+        capabilities = addServerForm.value.probedCapabilities;
+      }
+      if (!probe || !capabilities) {
+        return;
+      }
 
-    const added = registry.addServer(profile);
-    if (!added) {
-      addServerForm.value.errorMessage = `Server already added: ${serverId}`;
-      return;
+      const discovered = selectedDiscoveredServer();
+      const profile: ServerProfile = {
+        serverId,
+        displayName: displayName || serverId,
+        backendUrl,
+        iconText: discovered?.iconText ?? toIconText(displayName || serverId),
+        trustState: discovered?.trustState ?? probe.trustState,
+        identityHandshakeStrategy: probe.identityHandshakeMode,
+        userIdentifierPolicy: probe.userUidPolicy
+      };
+
+      const added = registry.addServer(profile);
+      if (!added) {
+        addServerForm.value.errorMessage = `Server already added: ${serverId}`;
+        return;
+      }
+
+      registry.setCapabilities(profile.serverId, capabilities);
+
+      appUI.setActiveServer(profile.serverId);
+      startupError.value = probe.warningMessage;
+      isAddServerDialogOpen.value = false;
+      await hydrateServer(profile.serverId);
+    } catch (error) {
+      addServerForm.value.errorMessage = (error as Error).message;
+    } finally {
+      addServerForm.value.isSubmitting = false;
     }
-
-    appUI.setActiveServer(profile.serverId);
-    startupError.value = null;
-    isAddServerDialogOpen.value = false;
-    await hydrateServer(profile.serverId);
   }
 
   function setAddServerBackendUrl(value: string): void {
     addServerForm.value.backendUrl = value;
+    addServerForm.value.discoveredServers = [];
+    addServerForm.value.selectedDiscoveredServerId = "";
+    addServerForm.value.probeSummary = null;
+    addServerForm.value.probedCapabilities = null;
+    addServerForm.value.errorMessage = null;
   }
 
   function setAddServerId(value: string): void {
     addServerForm.value.serverId = value;
+    if (addServerForm.value.selectedDiscoveredServerId && addServerForm.value.selectedDiscoveredServerId !== value) {
+      addServerForm.value.selectedDiscoveredServerId = "";
+    }
+    addServerForm.value.probeSummary = null;
+    addServerForm.value.probedCapabilities = null;
+    addServerForm.value.errorMessage = null;
   }
 
   function setAddServerDisplayName(value: string): void {
     addServerForm.value.displayName = value;
+    addServerForm.value.errorMessage = null;
+  }
+
+  async function probeServerJoinTarget(): Promise<void> {
+    await probeAddServerTarget();
   }
 
   const appShellClasses = computed(() => ({
@@ -560,7 +736,10 @@ export function useWorkspaceShell() {
     serverId: addServerForm.value.serverId,
     displayName: addServerForm.value.displayName,
     errorMessage: addServerForm.value.errorMessage,
-    isSubmitting: addServerForm.value.isSubmitting
+    isSubmitting: addServerForm.value.isSubmitting,
+    discoveredServers: addServerForm.value.discoveredServers,
+    selectedDiscoveredServerId: addServerForm.value.selectedDiscoveredServerId,
+    probeSummary: addServerForm.value.probeSummary
   }));
 
   const serverRailListeners = {
@@ -596,7 +775,9 @@ export function useWorkspaceShell() {
   const addServerDialogListeners = {
     close: closeAddServerDialog,
     discover: discoverServersFromURL,
+    probe: probeServerJoinTarget,
     addManually: addServerManually,
+    selectDiscoveredServer,
     "update:backendUrl": setAddServerBackendUrl,
     "update:serverId": setAddServerId,
     "update:displayName": setAddServerDisplayName
