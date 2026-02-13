@@ -1,82 +1,148 @@
-# OpenChat Client
-
 ![OpenChat Logo](logo_sideways.png)
-OpenChat Client is an open-source Electron desktop app that provides a Discord-like experience while connecting each joined server to its own independent backend.
+
+OpenChat Client is an open-source Electron desktop app with a Discord-like UX where each joined server maps to an independent backend endpoint.
 
 ![OpenChat Client](image.png)
 
-## Status
-- Milestone 1 (Multi-Server Shell) complete.
-- Milestone 2 (Core Messaging UX) complete.
-- Milestone 3 (Hardening and Open-Source Readiness) in active implementation.
-- Desktop installer pipeline is configured (tag-based GitHub Actions builds).
-- Repository now includes initial Electron + Vue runtime plus planning docs.
+## What This Repository Is
+- A desktop client built with `Electron`, `Vue 3`, `Pinia`, and `PrimeVue` (unstyled).
+- A multi-server client with isolated server-scoped state and trust boundaries.
+- A frontend-first open-source project with ADRs, feature specs, and milestone tracking.
 
-## Scope
-- Client-side desktop application only.
-- Frontend stack direction: Electron + Vue 3 + PrimeVue (unstyled) + Pinia.
-- Multi-server UX where each server entry maps to a distinct backend endpoint.
-- User data ownership model: personal identity/profile remains local; servers know only `user_uid` plus required protocol proofs.
-- Package manager/runtime mode: Yarn v4 with `node-modules` linker.
+## What This Repository Is Not
+- Not a backend service repository.
+- Not a deployment/infrastructure repo for backend runtime.
+- Not a place for server-side business logic implementation.
 
-This repo does not include backend service code.
+## Current Project Status
+- Milestone `M0` (Project Foundation): `done`
+- Milestone `M1` (Multi-Server Shell): `done`
+- Milestone `M2` (Core Messaging UX): `done`
+- Milestone `M3` (Hardening and Open-Source Readiness): `in_progress`
 
-## Project Principles
-- Keep user experience familiar, fast, and keyboard-friendly.
-- Isolate server data and trust boundaries per server.
-- Keep user identity/profile ownership local to the client by default.
-- Ship with strong security defaults for Electron and credentials.
-- Require documentation for user-facing features before implementation.
+Details: `docs/release/milestones.md`
+
+## Feature Snapshot
+| Area | Status |
+| --- | --- |
+| Server discovery/join + trust probe | Implemented |
+| Multi-server switching/isolation | Implemented |
+| Text channels + message timeline/composer | Implemented |
+| Realtime messaging + typing + presence | Implemented |
+| Voice channel join + audio relay controls | In progress |
+| Settings/accessibility deep pass | Planned |
+| Moderation/governance UX | Planned |
+
+## Quickstart (Development)
+Prerequisites:
+- Node.js `>= 20`
+- Corepack enabled (`corepack enable`)
+
+Install and run:
+```bash
+corepack prepare yarn@4 --activate
+corepack yarn install --immutable
+corepack yarn dev
+```
+
+Quality checks:
+```bash
+corepack yarn typecheck
+corepack yarn build
+```
+
+## Backend Connection for Local Testing
+- Default backend URL: `http://localhost:8080`
+- Override with env var: `VITE_OPENCHAT_BACKEND_URL`
+- Server directory endpoint expected by client: `/v1/servers`
+
+## Troubleshooting
+### App shows `Unknown Server` / fails to fetch server list
+- Verify backend is running and reachable at `VITE_OPENCHAT_BACKEND_URL` (default `http://localhost:8080`).
+- Confirm `GET /v1/servers` returns a valid response.
+- If browser works but Electron does not, check CSP settings for local HTTP dev endpoints.
+
+### Electron reports preload/runtime bridge errors
+- Symptom: preload load failure, `Cannot use import statement outside a module`, or runtime bridge unavailable.
+- Rebuild and restart dev runtime:
+```bash
+corepack yarn build
+corepack yarn dev
+```
+- Ensure preload output format and Electron preload path are aligned with current build config.
+
+### Electron blocks backend calls with CSP error
+- Symptom: `Refused to connect to 'http://localhost:8080' ... connect-src ...`
+- Update renderer CSP to allow your local backend origin during development.
+- Keep production CSP strict and only relax dev origins intentionally.
+
+### Add-server action fails in Electron
+- Symptom: UI action throws on `prompt()` or similar browser-only behavior.
+- Use in-app modal/dialog based flows instead of browser global prompts.
+
+### No audio when joining voice
+- Check OS microphone permission for the app.
+- Confirm input device is selected in Input Options.
+- Verify output device and output volume are set correctly.
+- If output device switching is unsupported in your runtime, use system default output.
+
+### Others cannot hear your mic
+- Ensure mic is unmuted in the call controls.
+- Confirm input volume is above `0`.
+- Speak and verify speaking indicator (green ring) appears.
+- Re-select input device to restart capture if hardware changed while connected.
+
+### macOS installer says app is damaged / cannot be opened
+- This usually indicates unsigned/unnotarized artifacts.
+- For distribution, use signed + notarized release artifacts from CI.
+- For local/dev artifacts, Gatekeeper warnings are expected unless signing is configured.
+
+### Windows shows SmartScreen/untrusted publisher warning
+- Unsigned builds trigger reputation/publisher warnings.
+- Use code-signed release artifacts for normal end-user install experience.
+
+## Production Builds and Installers
+For end users, use release artifacts from GitHub Releases.
+
+Maintainer local packaging:
+```bash
+corepack yarn pack   # unpacked app output
+corepack yarn dist   # platform installer artifacts in release/
+```
+
+Release pipeline:
+- Tag format: `client-vX.X.X`
+- Workflow: `.github/workflows/release-desktop.yml`
+- Targets: macOS, Windows, Linux installers + release asset publish
+
+Signing/notarization secrets (optional but recommended):
+- macOS: `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
+- Windows: `WINDOWS_CERT_PFX_BASE64`, `WINDOWS_CERT_PASSWORD`
+
+Unsigned builds still generate artifacts, but OS trust warnings are expected.
 
 ## Documentation Map
-- Planning document: `AGENTS.md`
-- Contributing guide: `CONTRIBUTING.md`
+- Planning and constraints: `AGENTS.md`
+- Contributing: `CONTRIBUTING.md`
 - Security policy: `SECURITY.md`
-- Support policy: `SUPPORT.md`
-- Architecture docs: `docs/architecture/README.md`
+- Support: `SUPPORT.md`
+- Architecture index: `docs/architecture/README.md`
 - ADR index: `docs/architecture/adrs/README.md`
 - Backend contract: `docs/architecture/backend-contract.md`
-- Design system architecture: `docs/architecture/design-system.md`
+- Design system notes: `docs/architecture/design-system.md`
 - Feature specs: `docs/features/README.md`
-- Milestones: `docs/release/milestones.md`
+- Release milestones: `docs/release/milestones.md`
 
-## Getting Started (Current Phase)
-1. Read `AGENTS.md` for scope and milestones.
-2. Read `docs/architecture/adrs/README.md` for accepted technical decisions.
-3. Install dependencies: `yarn install`
-4. Start desktop app in dev mode: `yarn dev`
-5. Type-check renderer/main/preload code: `yarn typecheck`
-6. Use `docs/features/FEATURE_TEMPLATE.md` for new feature proposals.
+## Contributing
+Contributions are welcome.
 
-## Desktop Installers
-Users should install release binaries, not build from source.
+Start here:
+1. Read `CONTRIBUTING.md`.
+2. Check open milestones and feature specs.
+3. Open an issue/proposal for major behavior changes.
 
-Tag-based release process:
-1. Push a tag in the format `client-vX.X.X`.
-2. GitHub Actions workflow `.github/workflows/release-desktop.yml` builds installers for macOS, Windows, and Linux.
-3. The workflow publishes assets to a GitHub Release for that tag.
-
-macOS signing/notarization (required for end-user install UX):
-- `APPLE_CERTIFICATE_P12_BASE64` (Developer ID Application cert exported as base64 `.p12`)
-- `APPLE_CERTIFICATE_PASSWORD` (password for the `.p12`)
-- `APPLE_ID` (Apple ID email)
-- `APPLE_APP_SPECIFIC_PASSWORD` (app-specific password for notarization)
-- `APPLE_TEAM_ID` (Apple Developer team id)
-
-If these are missing, CI still builds mac artifacts but they are unsigned and may be blocked by Gatekeeper as damaged/untrusted.
-
-Windows code signing (recommended for SmartScreen + verified publisher UX):
-- `WINDOWS_CERT_PFX_BASE64` (code-signing `.pfx` exported as base64)
-- `WINDOWS_CERT_PASSWORD` (password for the `.pfx`)
-
-If these are missing, CI still builds Windows artifacts but they are unsigned and Windows may show publisher/security warnings.
-
-Local packaging (maintainers):
-- `yarn pack`: builds unpacked app output.
-- `yarn dist`: builds platform installer artifacts in `release/`.
-
-## Open Source Contribution
-Contributions are welcome. Start with `CONTRIBUTING.md`, then open an issue or proposal before major changes.
+## Security
+For vulnerability reporting and policy, see `SECURITY.md`.
 
 ## License
-License to be added before first public release candidate.
+License will be finalized before first public release candidate.
