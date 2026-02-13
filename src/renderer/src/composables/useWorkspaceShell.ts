@@ -218,6 +218,22 @@ export function useWorkspaceShell() {
     return byChannel;
   });
 
+  const activeVoiceSpeakingParticipants = computed<Record<string, string[]>>(() => {
+    const byChannel: Record<string, string[]> = {};
+    if (!activeVoiceChannelId.value) return byChannel;
+    const speakingIds = activeCallSession.value?.activeSpeakerParticipantIds ?? [];
+    if (speakingIds.length === 0) return byChannel;
+    byChannel[activeVoiceChannelId.value] = [...speakingIds];
+    return byChannel;
+  });
+
+  const localVoiceTransmitting = computed(() => {
+    const session = activeCallSession.value;
+    const localParticipantId = session?.localParticipantId ?? "";
+    if (!localParticipantId) return false;
+    return (session?.activeSpeakerParticipantIds ?? []).includes(localParticipantId);
+  });
+
   const activeChannelName = computed(() => {
     const match = findChannelByID(rawChannelGroups.value, appUI.activeChannelId);
     if (!match) return "unknown";
@@ -321,6 +337,7 @@ export function useWorkspaceShell() {
 
   onMounted(async () => {
     identity.initializeIdentity();
+    void call.refreshInputDevices();
     void call.refreshOutputDevices();
     try {
       appVersion.value = await window.openchat.getAppVersion();
@@ -436,6 +453,18 @@ export function useWorkspaceShell() {
 
   function openOutputOptions(): void {
     void call.refreshOutputDevices();
+  }
+
+  function openInputOptions(): void {
+    void call.refreshInputDevices();
+  }
+
+  function selectInputDevice(deviceId: string): void {
+    void call.selectInputDevice(deviceId);
+  }
+
+  function updateInputVolume(volume: number): void {
+    call.setInputVolume(volume);
   }
 
   function selectOutputDevice(deviceId: string): void {
@@ -765,6 +794,10 @@ export function useWorkspaceShell() {
     callParticipantCount: activeCallSession.value?.participants.length ?? 0,
     micMuted: activeCallSession.value?.micMuted ?? false,
     deafened: activeCallSession.value?.deafened ?? false,
+    inputDevices: call.inputDevices,
+    selectedInputDeviceId: call.selectedInputDeviceId,
+    inputVolume: call.inputVolume,
+    inputDeviceError: call.inputDeviceError,
     outputDevices: call.outputDevices,
     selectedOutputDeviceId: call.selectedOutputDeviceId,
     outputSelectionSupported: call.outputSelectionSupported,
@@ -772,6 +805,8 @@ export function useWorkspaceShell() {
     outputDeviceError: call.outputDeviceError,
     callErrorMessage: activeCallSession.value?.errorMessage ?? null,
     voiceParticipantsByChannel: activeVoiceParticipants.value,
+    voiceSpeakingParticipantIdsByChannel: activeVoiceSpeakingParticipants.value,
+    localVoiceTransmitting: localVoiceTransmitting.value,
     filterValue: appUI.channelFilter,
     currentUid: activeSession.value?.userUID ?? "uid_unbound",
     disclosureMessage: identity.disclosureMessage,
@@ -832,6 +867,9 @@ export function useWorkspaceShell() {
     toggleMic,
     toggleDeafen,
     leaveVoiceChannel,
+    openInputOptions,
+    selectInputDevice,
+    updateInputVolume,
     openOutputOptions,
     selectOutputDevice,
     updateOutputVolume

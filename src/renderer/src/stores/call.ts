@@ -15,6 +15,8 @@ export type CallParticipant = {
 export type ChannelCallSession = {
   state: CallConnectionState;
   participants: CallParticipant[];
+  localParticipantId: string | null;
+  activeSpeakerParticipantIds: string[];
   micMuted: boolean;
   deafened: boolean;
   errorMessage: string | null;
@@ -27,9 +29,18 @@ export type AudioOutputDevice = {
   label: string;
 };
 
+export type AudioInputDevice = {
+  deviceId: string;
+  label: string;
+};
+
 type CallState = {
   activeVoiceChannelByServer: Record<string, string | null>;
   sessionsByKey: Record<string, ChannelCallSession>;
+  inputDevices: AudioInputDevice[];
+  selectedInputDeviceId: string;
+  inputVolume: number;
+  inputDeviceError: string | null;
   outputDevices: AudioOutputDevice[];
   selectedOutputDeviceId: string;
   outputVolume: number;
@@ -42,15 +53,30 @@ const DEFAULT_OUTPUT_DEVICE_LABEL = "System Default";
 const socketsByKey = new Map<string, WebSocket>();
 const intentionallyClosed = new Set<string>();
 const nextPlaybackTimeByStream = new Map<string, number>();
+const micUplinksByKey = new Map<string, MicUplink>();
+const speakingTimersByParticipant = new Map<string, ReturnType<typeof setTimeout>>();
 let playbackAudioContext: AudioContext | null = null;
 let playbackGainNode: GainNode | null = null;
 let playbackDestinationNode: MediaStreamAudioDestinationNode | null = null;
 let playbackAudioElement: HTMLAudioElement | null = null;
 let playbackMuted = false;
 let playbackVolume = 0.5;
+const speakingIndicatorHoldMS = 450;
+const speakingActivityThreshold = 0.018;
 
 type AudioElementWithSink = HTMLAudioElement & {
   setSinkId?: (deviceId: string) => Promise<void>;
+};
+
+type MicUplink = {
+  channelId: string;
+  streamId: string;
+  mediaStream: MediaStream;
+  audioContext: AudioContext;
+  sourceNode: MediaStreamAudioSourceNode;
+  processorNode: ScriptProcessorNode;
+  sinkNode: GainNode;
+  chunkSeq: number;
 };
 
 function sessionKey(serverId: string, channelId: string): string {
@@ -61,6 +87,8 @@ function createEmptySession(): ChannelCallSession {
   return {
     state: "idle",
     participants: [],
+    localParticipantId: null,
+    activeSpeakerParticipantIds: [],
     micMuted: false,
     deafened: false,
     errorMessage: null,
@@ -187,8 +215,93 @@ async function listAudioOutputDevices(): Promise<AudioOutputDevice[]> {
   });
 }
 
+async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+    return [
+      {
+        deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+        label: "System Default (Microphone)"
+      }
+    ];
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const inputs = devices.filter((device) => device.kind === "audioinput");
+  const deduped = new Map<string, AudioInputDevice>();
+  inputs.forEach((device, index) => {
+    const deviceId = device.deviceId || DEFAULT_OUTPUT_DEVICE_ID;
+    const fallbackLabel = deviceId === DEFAULT_OUTPUT_DEVICE_ID ? "System Default (Microphone)" : `Input Device ${index + 1}`;
+    deduped.set(deviceId, {
+      deviceId,
+      label: device.label.trim() || fallbackLabel
+    });
+  });
+
+  if (!deduped.has(DEFAULT_OUTPUT_DEVICE_ID)) {
+    deduped.set(DEFAULT_OUTPUT_DEVICE_ID, {
+      deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+      label: "System Default (Microphone)"
+    });
+  }
+
+  return Array.from(deduped.values()).sort((left, right) => {
+    if (left.deviceId === DEFAULT_OUTPUT_DEVICE_ID) return -1;
+    if (right.deviceId === DEFAULT_OUTPUT_DEVICE_ID) return 1;
+    return left.label.localeCompare(right.label);
+  });
+}
+
 function clearPlaybackState(): void {
   nextPlaybackTimeByStream.clear();
+}
+
+function speakingTimerKey(serverId: string, channelId: string, participantId: string): string {
+  return `${serverId}:${channelId}:${participantId}`;
+}
+
+function estimatePCM16Activity(bytes: Uint8Array): number {
+  if (bytes.length < 2) return 0;
+  let total = 0;
+  let samples = 0;
+  for (let index = 0; index + 1 < bytes.length; index += 2) {
+    const lo = bytes[index];
+    const hi = bytes[index + 1];
+    let value = (hi << 8) | lo;
+    if (value >= 0x8000) value -= 0x10000;
+    total += Math.abs(value) / 32768;
+    samples += 1;
+  }
+  if (samples === 0) return 0;
+  return total / samples;
+}
+
+function estimateFloat32Activity(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let total = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    total += Math.abs(samples[index]);
+  }
+  return total / samples.length;
+}
+
+function encodePCM16Mono(samples: Float32Array): Uint8Array {
+  const pcm = new Uint8Array(samples.length * 2);
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]));
+    const scaled = sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767);
+    const value = scaled < 0 ? scaled + 0x10000 : scaled;
+    pcm[index * 2] = value & 0xff;
+    pcm[index * 2 + 1] = (value >> 8) & 0xff;
+  }
+  return pcm;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return window.btoa(binary);
 }
 
 function decodeBase64Chunk(chunkB64: string): Uint8Array | null {
@@ -266,6 +379,15 @@ export const useCallStore = defineStore("call", {
   state: (): CallState => ({
     activeVoiceChannelByServer: {},
     sessionsByKey: {},
+    inputDevices: [
+      {
+        deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+        label: "System Default (Microphone)"
+      }
+    ],
+    selectedInputDeviceId: DEFAULT_OUTPUT_DEVICE_ID,
+    inputVolume: 100,
+    inputDeviceError: null,
     outputDevices: [
       {
         deviceId: DEFAULT_OUTPUT_DEVICE_ID,
@@ -297,6 +419,238 @@ export const useCallStore = defineStore("call", {
         this.sessionsByKey[key] = createEmptySession();
       }
       return key;
+    },
+    markParticipantSpeaking(serverId: string, channelId: string, participantId: string): void {
+      if (!participantId) return;
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session.activeSpeakerParticipantIds.includes(participantId)) {
+        session.activeSpeakerParticipantIds = [...session.activeSpeakerParticipantIds, participantId];
+      }
+      const timerKey = speakingTimerKey(serverId, channelId, participantId);
+      const existingTimer = speakingTimersByParticipant.get(timerKey);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+      const timer = setTimeout(() => {
+        speakingTimersByParticipant.delete(timerKey);
+        this.clearParticipantSpeaking(serverId, channelId, participantId);
+      }, speakingIndicatorHoldMS);
+      speakingTimersByParticipant.set(timerKey, timer);
+    },
+    clearParticipantSpeaking(serverId: string, channelId: string, participantId: string): void {
+      if (!participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      session.activeSpeakerParticipantIds = session.activeSpeakerParticipantIds.filter((id) => id !== participantId);
+      const timerKey = speakingTimerKey(serverId, channelId, participantId);
+      const timer = speakingTimersByParticipant.get(timerKey);
+      if (!timer) return;
+      clearTimeout(timer);
+      speakingTimersByParticipant.delete(timerKey);
+    },
+    clearSpeakingForSession(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (session) {
+        session.activeSpeakerParticipantIds = [];
+      }
+      const prefix = `${serverId}:${channelId}:`;
+      for (const [timerKey, timer] of speakingTimersByParticipant.entries()) {
+        if (!timerKey.startsWith(prefix)) continue;
+        clearTimeout(timer);
+        speakingTimersByParticipant.delete(timerKey);
+      }
+    },
+    async refreshInputDevices(): Promise<void> {
+      try {
+        this.inputDevices = await listAudioInputDevices();
+        if (!this.inputDevices.some((device) => device.deviceId === this.selectedInputDeviceId)) {
+          this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+        }
+        this.inputDeviceError = null;
+      } catch (error) {
+        this.inputDevices = [
+          {
+            deviceId: DEFAULT_OUTPUT_DEVICE_ID,
+            label: "System Default (Microphone)"
+          }
+        ];
+        this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+        this.inputDeviceError = (error as Error).message;
+      }
+    },
+    async selectInputDevice(deviceId: string): Promise<void> {
+      const nextDeviceId = deviceId.trim() || DEFAULT_OUTPUT_DEVICE_ID;
+      this.selectedInputDeviceId = nextDeviceId;
+      this.inputDeviceError = null;
+
+      for (const [serverId, channelId] of Object.entries(this.activeVoiceChannelByServer)) {
+        if (!channelId) continue;
+        const key = this.ensureSession(serverId, channelId);
+        const session = this.sessionsByKey[key];
+        if (session.state !== "active" || session.micMuted) continue;
+        this.stopMicUplink(serverId, channelId);
+        await this.startMicUplink(serverId, channelId);
+      }
+    },
+    setInputVolume(volume: number): void {
+      this.inputVolume = Math.max(0, Math.min(200, Math.round(volume)));
+    },
+    async startMicUplink(serverId: string, channelId: string): Promise<void> {
+      const key = this.ensureSession(serverId, channelId);
+      if (micUplinksByKey.has(key)) return;
+      const session = this.sessionsByKey[key];
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        session.errorMessage = "Microphone capture is not supported in this runtime.";
+        return;
+      }
+
+      const socket = socketsByKey.get(key);
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      try {
+        const useCustomInputDevice = this.selectedInputDeviceId && this.selectedInputDeviceId !== DEFAULT_OUTPUT_DEVICE_ID;
+        const baseAudioConstraints: MediaTrackConstraints = {
+          channelCount: 1,
+          sampleRate: 48000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        };
+        let mediaStream: MediaStream;
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              ...baseAudioConstraints,
+              ...(useCustomInputDevice ? { deviceId: { exact: this.selectedInputDeviceId } } : {})
+            }
+          });
+        } catch (firstError) {
+          if (!useCustomInputDevice) {
+            throw firstError;
+          }
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: baseAudioConstraints
+          });
+          this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+          this.inputDeviceError = "Selected input device was unavailable; using system default microphone.";
+        }
+        const audioContext = new AudioContext({ sampleRate: 48000 });
+        if (audioContext.state === "suspended") {
+          await audioContext.resume();
+        }
+
+        const activeSession = this.sessionsByKey[key];
+        const activeSocket = socketsByKey.get(key);
+        if (!activeSession || activeSession.state !== "active" || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+          mediaStream.getTracks().forEach((track) => {
+            track.stop();
+          });
+          if (audioContext.state !== "closed") {
+            void audioContext.close().catch(() => {});
+          }
+          return;
+        }
+
+        const sourceNode = audioContext.createMediaStreamSource(mediaStream);
+        const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+        const sinkNode = audioContext.createGain();
+        sinkNode.gain.value = 0;
+
+        sourceNode.connect(processorNode);
+        processorNode.connect(sinkNode);
+        sinkNode.connect(audioContext.destination);
+
+        const uplink: MicUplink = {
+          channelId,
+          streamId: `mic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+          mediaStream,
+          audioContext,
+          sourceNode,
+          processorNode,
+          sinkNode,
+          chunkSeq: 0
+        };
+        micUplinksByKey.set(key, uplink);
+        session.errorMessage = null;
+
+        processorNode.onaudioprocess = (event) => {
+          const activeSession = this.sessionsByKey[key];
+          if (!activeSession) return;
+          if (activeSession.state !== "active" || activeSession.micMuted) return;
+          const activeSocket = socketsByKey.get(key);
+          if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) return;
+
+          const input = event.inputBuffer.getChannelData(0);
+          if (input.length === 0) return;
+
+          const volumeScale = Math.max(0, this.inputVolume / 100);
+          const scaledInput = new Float32Array(input.length);
+          for (let index = 0; index < input.length; index += 1) {
+            scaledInput[index] = input[index] * volumeScale;
+          }
+
+          const activity = estimateFloat32Activity(scaledInput);
+          if (activity >= speakingActivityThreshold && activeSession.localParticipantId) {
+            this.markParticipantSpeaking(serverId, channelId, activeSession.localParticipantId);
+          }
+
+          const chunk = encodePCM16Mono(scaledInput);
+          const chunkB64 = encodeBase64(chunk);
+          const seq = uplink.chunkSeq;
+          uplink.chunkSeq += 1;
+
+          sendSignal(activeSocket, {
+            type: "rtc.media.state",
+            request_id: `pcm_${Date.now()}_${seq}`,
+            channel_id: uplink.channelId,
+            payload: {
+              stream_id: uplink.streamId,
+              stream_kind: "audio_pcm_s16le_48k_mono",
+              sample_rate_hz: event.inputBuffer.sampleRate,
+              channels: 1,
+              encoding: "pcm_s16le",
+              chunk_seq: seq,
+              chunk_b64: chunkB64
+            }
+          });
+        };
+      } catch (error) {
+        session.errorMessage = `Microphone unavailable: ${(error as Error).message}`;
+      }
+    },
+    stopMicUplink(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const uplink = micUplinksByKey.get(key);
+      if (!uplink) return;
+
+      uplink.processorNode.onaudioprocess = null;
+      try {
+        uplink.sourceNode.disconnect();
+      } catch (_error) {
+        // No-op
+      }
+      try {
+        uplink.processorNode.disconnect();
+      } catch (_error) {
+        // No-op
+      }
+      try {
+        uplink.sinkNode.disconnect();
+      } catch (_error) {
+        // No-op
+      }
+      uplink.mediaStream.getTracks().forEach((track) => {
+        track.stop();
+      });
+      if (uplink.audioContext.state !== "closed") {
+        void uplink.audioContext.close().catch(() => {});
+      }
+      micUplinksByKey.delete(key);
     },
     async refreshOutputDevices(): Promise<void> {
       try {
@@ -362,13 +716,17 @@ export const useCallStore = defineStore("call", {
     }): Promise<void> {
       ensureAudioPlayback();
       setPlaybackVolume(this.outputVolume / 100);
+      void this.refreshInputDevices();
       void this.refreshOutputDevices();
       void this.selectOutputDevice(this.selectedOutputDeviceId);
       const key = this.ensureSession(params.serverId, params.channelId);
       const session = this.sessionsByKey[key];
+      this.stopMicUplink(params.serverId, params.channelId);
       session.state = "joining";
       session.errorMessage = null;
       session.participants = [];
+      session.localParticipantId = null;
+      this.clearSpeakingForSession(params.serverId, params.channelId);
       session.joinedAt = null;
       session.lastEventAt = new Date().toISOString();
 
@@ -414,6 +772,7 @@ export const useCallStore = defineStore("call", {
         });
 
         socket.addEventListener("close", () => {
+          this.stopMicUplink(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
           if (!localSession) return;
           localSession.lastEventAt = new Date().toISOString();
@@ -421,20 +780,26 @@ export const useCallStore = defineStore("call", {
             intentionallyClosed.delete(key);
             localSession.state = "idle";
             localSession.participants = [];
+            localSession.localParticipantId = null;
+            this.clearSpeakingForSession(params.serverId, params.channelId);
             localSession.errorMessage = null;
             return;
           }
           localSession.state = "error";
           localSession.errorMessage = "Call signaling disconnected.";
           localSession.participants = [];
+          localSession.localParticipantId = null;
+          this.clearSpeakingForSession(params.serverId, params.channelId);
           this.activeVoiceChannelByServer[params.serverId] = null;
         });
 
         socket.addEventListener("error", () => {
+          this.stopMicUplink(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
           if (!localSession) return;
           localSession.state = "error";
           localSession.errorMessage = "Call signaling transport failed.";
+          this.clearSpeakingForSession(params.serverId, params.channelId);
           localSession.lastEventAt = new Date().toISOString();
         });
       } catch (error) {
@@ -475,8 +840,11 @@ export const useCallStore = defineStore("call", {
           }
           session.state = "active";
           session.participants = participants;
+          session.localParticipantId = localParticipantID || null;
+          session.activeSpeakerParticipantIds = [];
           setPlaybackMuted(session.deafened);
           session.joinedAt = new Date().toISOString();
+          void this.startMicUplink(params.serverId, params.channelId);
           return;
         }
         case "rtc.participant.joined": {
@@ -493,6 +861,7 @@ export const useCallStore = defineStore("call", {
           if (!participantPayload) return;
           const leavingParticipantID = String(participantPayload.participant_id ?? "");
           session.participants = session.participants.filter((item) => item.participantId !== leavingParticipantID);
+          this.clearParticipantSpeaking(params.serverId, params.channelId, leavingParticipantID);
           return;
         }
         case "rtc.error": {
@@ -505,6 +874,16 @@ export const useCallStore = defineStore("call", {
           const chunkB64 = String(payload.chunk_b64 ?? "");
           const participantID = String(payload.participant_id ?? "");
           if (streamKind !== "audio_pcm_s16le_48k_mono" || !chunkB64 || !participantID) {
+            return;
+          }
+          const chunkBytes = decodeBase64Chunk(chunkB64);
+          if (chunkBytes) {
+            const activity = estimatePCM16Activity(chunkBytes);
+            if (activity >= speakingActivityThreshold) {
+              this.markParticipantSpeaking(params.serverId, params.channelId, participantID);
+            }
+          }
+          if (session.localParticipantId && participantID === session.localParticipantId) {
             return;
           }
           if (session.deafened) return;
@@ -535,6 +914,9 @@ export const useCallStore = defineStore("call", {
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
       session.micMuted = !session.micMuted;
+      if (!session.micMuted && session.state === "active") {
+        void this.startMicUplink(serverId, channelId);
+      }
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendSignal(socket, {
@@ -568,6 +950,8 @@ export const useCallStore = defineStore("call", {
     },
     leaveChannel(serverId: string, channelId: string, options?: { reason?: string }): void {
       const key = sessionKey(serverId, channelId);
+      this.stopMicUplink(serverId, channelId);
+      this.clearSpeakingForSession(serverId, channelId);
       const socket = socketsByKey.get(key);
       if (socket) {
         intentionallyClosed.add(key);
@@ -584,6 +968,8 @@ export const useCallStore = defineStore("call", {
       if (session) {
         session.state = options?.reason ? "error" : "idle";
         session.participants = [];
+        session.localParticipantId = null;
+        session.activeSpeakerParticipantIds = [];
         session.errorMessage = options?.reason ?? null;
         session.lastEventAt = new Date().toISOString();
       }
@@ -598,6 +984,10 @@ export const useCallStore = defineStore("call", {
           this.leaveChannel(serverId, channelId);
         }
       });
+      speakingTimersByParticipant.forEach((timer) => {
+        clearTimeout(timer);
+      });
+      speakingTimersByParticipant.clear();
       clearPlaybackState();
     }
   }

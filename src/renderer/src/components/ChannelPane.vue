@@ -62,6 +62,10 @@ const props = defineProps<{
   callParticipantCount: number;
   micMuted: boolean;
   deafened: boolean;
+  inputDevices: OutputDevice[];
+  selectedInputDeviceId: string;
+  inputVolume: number;
+  inputDeviceError?: string | null;
   outputDevices: OutputDevice[];
   selectedOutputDeviceId: string;
   outputSelectionSupported: boolean;
@@ -69,6 +73,8 @@ const props = defineProps<{
   outputDeviceError?: string | null;
   callErrorMessage?: string | null;
   voiceParticipantsByChannel: Record<string, VoiceParticipant[]>;
+  voiceSpeakingParticipantIdsByChannel: Record<string, string[]>;
+  localVoiceTransmitting: boolean;
   filterValue: string;
   currentUid: string;
   uidMode: UIDMode;
@@ -87,6 +93,9 @@ const emit = defineEmits<{
   toggleMic: [];
   toggleDeafen: [];
   leaveVoiceChannel: [];
+  openInputOptions: [];
+  selectInputDevice: [deviceId: string];
+  updateInputVolume: [value: number];
   openOutputOptions: [];
   selectOutputDevice: [deviceId: string];
   updateOutputVolume: [value: number];
@@ -123,18 +132,9 @@ const channelPaneRef = ref<HTMLElement | null>(null);
 const profileCardOpen = ref(false);
 const presenceStatus = ref<PresenceStatus>("online");
 const inputSettingsMenuOpen = ref(false);
-const inputGain = ref(100);
 const outputSettingsMenuOpen = ref(false);
 const outputDeviceListOpen = ref(false);
 const inputDeviceListOpen = ref(false);
-const inputDevices = ref<OutputDevice[]>([
-  {
-    deviceId: "default",
-    label: "System Default (Microphone)"
-  }
-]);
-const selectedInputDeviceId = ref("default");
-const inputDevicesError = ref<string | null>(null);
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const profileDisplayName = computed(() => {
@@ -151,10 +151,11 @@ const selectedOutputDeviceLabel = computed(() => {
   return props.outputDevices[0]?.label ?? "System Default";
 });
 const selectedInputDeviceLabel = computed(() => {
-  const selected = inputDevices.value.find((device) => device.deviceId === selectedInputDeviceId.value);
+  const selected = props.inputDevices.find((device) => device.deviceId === props.selectedInputDeviceId);
   if (selected) return selected.label;
-  return inputDevices.value[0]?.label ?? "System Default (Microphone)";
+  return props.inputDevices[0]?.label ?? "System Default (Microphone)";
 });
+const canSelectInputDevice = computed(() => props.inputDevices.length > 1);
 const canSelectOutputDevice = computed(() => props.outputSelectionSupported && props.outputDevices.length > 1);
 
 function isGroupCollapsed(groupId: string): boolean {
@@ -225,6 +226,11 @@ function isMenuGroupCollapsed(): boolean {
 
 function participantsForVoiceChannel(channelId: string): VoiceParticipant[] {
   return props.voiceParticipantsByChannel[channelId] ?? [];
+}
+
+function isVoiceParticipantSpeaking(channelId: string, participantId: string): boolean {
+  const speaking = props.voiceSpeakingParticipantIdsByChannel[channelId] ?? [];
+  return speaking.includes(participantId);
 }
 
 function hasVoiceParticipants(channelId: string): boolean {
@@ -339,6 +345,7 @@ function toggleInputSettingsMenu(): void {
     closeVoicePresencePopover();
     profileCardOpen.value = false;
     closeOutputSettingsMenu();
+    emit("openInputOptions");
   } else {
     inputDeviceListOpen.value = false;
   }
@@ -413,66 +420,27 @@ function splitDeviceLabel(label: string): { primary: string; secondary: string |
   };
 }
 
-async function refreshInputDevices(): Promise<void> {
-  try {
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
-      inputDevices.value = [
-        {
-          deviceId: "default",
-          label: "System Default (Microphone)"
-        }
-      ];
-      inputDevicesError.value = null;
-      return;
-    }
-
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const entries = devices.filter((device) => device.kind === "audioinput");
-    const deduped = new Map<string, OutputDevice>();
-    entries.forEach((device, index) => {
-      const deviceId = device.deviceId || "default";
-      deduped.set(deviceId, {
-        deviceId,
-        label: device.label.trim() || (deviceId === "default" ? "System Default (Microphone)" : `Input Device ${index + 1}`)
-      });
-    });
-    if (!deduped.has("default")) {
-      deduped.set("default", {
-        deviceId: "default",
-        label: "System Default (Microphone)"
-      });
-    }
-    inputDevices.value = Array.from(deduped.values()).sort((left, right) => {
-      if (left.deviceId === "default") return -1;
-      if (right.deviceId === "default") return 1;
-      return left.label.localeCompare(right.label);
-    });
-    if (!inputDevices.value.some((device) => device.deviceId === selectedInputDeviceId.value)) {
-      selectedInputDeviceId.value = "default";
-    }
-    inputDevicesError.value = null;
-  } catch (error) {
-    inputDevicesError.value = (error as Error).message;
-  }
+function refreshInputDevices(): void {
+  emit("openInputOptions");
 }
 
 function toggleInputDeviceList(): void {
+  if (!canSelectInputDevice.value) return;
   inputDeviceListOpen.value = !inputDeviceListOpen.value;
   if (inputDeviceListOpen.value) {
     outputDeviceListOpen.value = false;
-    void refreshInputDevices();
+    refreshInputDevices();
   }
 }
 
 function chooseInputDevice(deviceId: string): void {
-  selectedInputDeviceId.value = deviceId;
+  emit("selectInputDevice", deviceId);
   inputDeviceListOpen.value = false;
 }
 
 onMounted(() => {
   window.addEventListener("pointerdown", onWindowPointerDown);
   window.addEventListener("keydown", onWindowKeydown);
-  void refreshInputDevices();
 });
 
 onBeforeUnmount(() => {
@@ -559,10 +527,15 @@ onBeforeUnmount(() => {
                 v-for="participant in participantsForVoiceChannel(channel.id)"
                 :key="participant.id"
                 class="voice-member-row"
+                :class="{ 'is-speaking': isVoiceParticipantSpeaking(channel.id, participant.id) }"
                 @mouseenter="openVoicePresencePopover(participant, $event)"
                 @mouseleave="scheduleVoicePresencePopoverClose"
               >
-                <span class="voice-member-avatar" :style="{ background: participant.avatarColor }">
+                <span
+                  class="voice-member-avatar"
+                  :class="{ 'is-speaking': isVoiceParticipantSpeaking(channel.id, participant.id) }"
+                  :style="{ background: participant.avatarColor }"
+                >
                   {{ participant.avatarText }}
                 </span>
                 <span class="voice-member-name">
@@ -608,7 +581,7 @@ onBeforeUnmount(() => {
 
       <div class="user-dock-main">
         <button type="button" class="user-identity-btn" @click="toggleProfileCard">
-          <div class="avatar-pill">
+          <div class="avatar-pill" :class="{ 'is-speaking': localVoiceTransmitting }">
             {{ profileAvatarText }}
             <span class="presence-dot" :class="`is-${presenceStatus}`" />
           </div>
@@ -652,6 +625,7 @@ onBeforeUnmount(() => {
                 <button
                   type="button"
                   class="input-settings-row input-device-trigger"
+                  :disabled="!canSelectInputDevice"
                   :aria-expanded="inputDeviceListOpen"
                   @click.stop="toggleInputDeviceList"
                 >
@@ -680,7 +654,7 @@ onBeforeUnmount(() => {
                     <span class="device-selection-indicator" :class="{ 'is-active': device.deviceId === selectedInputDeviceId }" />
                   </button>
                   <button type="button" class="device-selection-more" @click="refreshInputDevices">Show more...</button>
-                  <p v-if="inputDevicesError" class="output-settings-error">{{ inputDevicesError }}</p>
+                  <p v-if="inputDeviceError" class="output-settings-error">{{ inputDeviceError }}</p>
                 </section>
               </div>
 
@@ -698,7 +672,13 @@ onBeforeUnmount(() => {
                 <p>Input Volume</p>
                 <label class="input-volume-slider">
                   <span class="sr-only">Input volume</span>
-                  <input v-model.number="inputGain" type="range" min="0" max="100" />
+                  <input
+                    :value="inputVolume"
+                    type="range"
+                    min="0"
+                    max="200"
+                    @input="emit('updateInputVolume', Number(($event.target as HTMLInputElement).value))"
+                  />
                 </label>
               </div>
 

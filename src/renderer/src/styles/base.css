@@ -576,6 +576,10 @@ button {
   background: #262a35;
 }
 
+.voice-member-row.is-speaking {
+  background: rgb(86 217 126 / 14%);
+}
+
 .voice-member-avatar {
   width: 22px;
   height: 22px;
@@ -586,6 +590,13 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.voice-member-avatar.is-speaking {
+  box-shadow:
+    0 0 0 2px #4fd17f,
+    0 0 0 4px rgb(79 209 127 / 24%);
+  animation: voice-speaking-pulse 900ms ease-in-out infinite;
 }
 
 .voice-member-name {
@@ -882,6 +893,13 @@ button {
   position: relative;
 }
 
+.avatar-pill.is-speaking {
+  box-shadow:
+    0 0 0 2px #4fd17f,
+    0 0 0 5px rgb(79 209 127 / 22%);
+  animation: voice-speaking-pulse 900ms ease-in-out infinite;
+}
+
 .user-meta {
   display: grid;
   min-width: 0;
@@ -1008,6 +1026,16 @@ button {
 .voice-control-caret:hover .icon-tooltip,
 .voice-control-caret:focus-visible .icon-tooltip {
   opacity: 1;
+}
+
+@keyframes voice-speaking-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
 }
 
 .input-settings-menu {
