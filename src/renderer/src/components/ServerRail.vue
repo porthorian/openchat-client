@@ -30,7 +30,7 @@ const emit = defineEmits<{
         'is-active': server.serverId === activeServerId,
         'is-unverified': server.trustState === 'unverified'
       }"
-      @click="emit('selectServer', server.serverId)"
+      @click="server.serverId === activeServerId ? undefined : emit('selectServer', server.serverId)"
     >
       <span>{{ server.iconText }}</span>
       <span v-if="(unreadByServer[server.serverId] ?? 0) > 0" class="server-unread-badge">

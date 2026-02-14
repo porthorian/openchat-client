@@ -6,6 +6,8 @@ export type RTCSignalingTransport = "websocket";
 export type RTCTopology = "sfu" | "p2p";
 export type RTCIceCredentialType = "none" | "static" | "ephemeral";
 export type ProfileDataPolicy = "uid_only" | (string & {});
+export type ProfileScope = "global" | "server_scoped";
+export type MessageAuthorProfileMode = "live" | "snapshot";
 
 export type TransportCapabilitiesResponse = {
   websocket: boolean;
@@ -65,6 +67,30 @@ export type RTCCapabilitiesResponse = {
   connection_policy: RTCConnectionPolicyResponse;
 };
 
+export type ProfileDisplayNameRulesResponse = {
+  min_length: number;
+  max_length: number;
+  pattern?: string;
+};
+
+export type ProfileAvatarUploadRulesResponse = {
+  max_bytes: number;
+  mime_types: string[];
+  max_width: number;
+  max_height: number;
+};
+
+export type ProfileCapabilitiesResponse = {
+  enabled: boolean;
+  scope: ProfileScope;
+  fields: string[];
+  avatar_modes: Array<"generated" | "uploaded">;
+  display_name: ProfileDisplayNameRulesResponse;
+  avatar_upload?: ProfileAvatarUploadRulesResponse;
+  realtime_event: string;
+  message_author_profile_mode: MessageAuthorProfileMode;
+};
+
 export type ServerCapabilitiesResponse = {
   server_name: string;
   server_id: string;
@@ -77,6 +103,7 @@ export type ServerCapabilitiesResponse = {
   limits: CapabilityLimitsResponse;
   security: SecurityCapabilitiesResponse;
   rtc?: RTCCapabilitiesResponse;
+  profile?: ProfileCapabilitiesResponse;
 };
 
 export type TransportCapabilities = {
@@ -137,6 +164,30 @@ export type RTCCapabilities = {
   connectionPolicy: RTCConnectionPolicy;
 };
 
+export type ProfileDisplayNameRules = {
+  minLength: number;
+  maxLength: number;
+  pattern: string | null;
+};
+
+export type ProfileAvatarUploadRules = {
+  maxBytes: number;
+  mimeTypes: string[];
+  maxWidth: number;
+  maxHeight: number;
+};
+
+export type ProfileCapabilities = {
+  enabled: boolean;
+  scope: ProfileScope;
+  fields: string[];
+  avatarModes: Array<"generated" | "uploaded">;
+  displayName: ProfileDisplayNameRules;
+  avatarUpload: ProfileAvatarUploadRules | null;
+  realtimeEvent: string;
+  messageAuthorProfileMode: MessageAuthorProfileMode;
+};
+
 export type ServerCapabilities = {
   serverName: string;
   serverId: string;
@@ -149,6 +200,7 @@ export type ServerCapabilities = {
   limits: CapabilityLimits;
   security: SecurityCapabilities;
   rtc: RTCCapabilities | null;
+  profile: ProfileCapabilities | null;
 };
 
 export function normalizeServerCapabilities(source: ServerCapabilitiesResponse): ServerCapabilities {
@@ -177,6 +229,30 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
           iceRestartEnabled: source.rtc.connection_policy.ice_restart_enabled,
           reconnectBackoffMs: source.rtc.connection_policy.reconnect_backoff_ms
         }
+      }
+    : null;
+
+  const profile = source.profile
+    ? {
+        enabled: source.profile.enabled,
+        scope: source.profile.scope,
+        fields: source.profile.fields,
+        avatarModes: source.profile.avatar_modes,
+        displayName: {
+          minLength: source.profile.display_name.min_length,
+          maxLength: source.profile.display_name.max_length,
+          pattern: source.profile.display_name.pattern ?? null
+        },
+        avatarUpload: source.profile.avatar_upload
+          ? {
+              maxBytes: source.profile.avatar_upload.max_bytes,
+              mimeTypes: source.profile.avatar_upload.mime_types,
+              maxWidth: source.profile.avatar_upload.max_width,
+              maxHeight: source.profile.avatar_upload.max_height
+            }
+          : null,
+        realtimeEvent: source.profile.realtime_event,
+        messageAuthorProfileMode: source.profile.message_author_profile_mode
       }
     : null;
 
@@ -209,6 +285,7 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
       certificatePinning: source.security.certificate_pinning,
       tlsFingerprint: source.security.tls_fingerprint ?? null
     },
-    rtc
+    rtc,
+    profile
   };
 }

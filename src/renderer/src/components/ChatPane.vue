@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ChatMessage } from "@renderer/types/chat";
 import type { AvatarMode } from "@renderer/types/models";
+import type { SyncedUserProfile } from "@renderer/services/chatClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChatComposer from "./ChatComposer.vue";
@@ -27,6 +28,7 @@ const props = defineProps<{
   localProfileAvatarMode: AvatarMode;
   localProfileAvatarPresetId: string;
   localProfileAvatarImageDataUrl: string | null;
+  remoteProfilesByUID: Record<string, SyncedUserProfile>;
 }>();
 
 const emit = defineEmits<{
@@ -55,6 +57,10 @@ const timelineMessages = computed<TimelineMessage[]>(() => {
     const messageAt = new Date(message.createdAt).getTime();
     const previousAt = previous ? new Date(previous.createdAt).getTime() : 0;
     const isLocalAuthor = Boolean(localUserUID && message.authorUID === localUserUID);
+    const remoteProfile = isLocalAuthor ? null : props.remoteProfilesByUID[message.authorUID];
+    const remoteAvatarPreset = remoteProfile?.avatarPresetId ? avatarPresetById(remoteProfile.avatarPresetId) : null;
+    const remoteDisplayName = remoteProfile?.displayName?.trim() ?? "";
+    const authorName = isLocalAuthor ? localDisplayName : remoteDisplayName || message.authorUID;
     const isCompact = Boolean(
       previous &&
         previous.authorUID === message.authorUID &&
@@ -64,15 +70,26 @@ const timelineMessages = computed<TimelineMessage[]>(() => {
     return {
       message,
       isCompact,
-      authorName: isLocalAuthor ? localDisplayName : message.authorUID,
-      avatarText: isLocalAuthor ? localDisplayName.slice(0, 1).toUpperCase() : toAvatarText(message.authorUID),
+      authorName,
+      avatarText: authorName.slice(0, 1).toUpperCase() || toAvatarText(message.authorUID),
       avatarColor:
         isLocalAuthor && props.localProfileAvatarMode === "generated"
           ? localAvatarPreset.gradient
+          : remoteProfile?.avatarMode === "generated" && remoteAvatarPreset
+            ? remoteAvatarPreset.gradient
           : toAvatarColor(message.authorUID),
-      avatarTextColor: isLocalAuthor && props.localProfileAvatarMode === "generated" ? localAvatarPreset.accent : "#ffffff",
+      avatarTextColor:
+        isLocalAuthor && props.localProfileAvatarMode === "generated"
+          ? localAvatarPreset.accent
+          : remoteProfile?.avatarMode === "generated" && remoteAvatarPreset
+            ? remoteAvatarPreset.accent
+            : "#ffffff",
       avatarImageDataUrl:
-        isLocalAuthor && props.localProfileAvatarMode === "uploaded" ? props.localProfileAvatarImageDataUrl : null
+        isLocalAuthor && props.localProfileAvatarMode === "uploaded"
+          ? props.localProfileAvatarImageDataUrl
+          : remoteProfile?.avatarMode === "uploaded"
+            ? remoteProfile.avatarUrl
+            : null
     };
   });
 });

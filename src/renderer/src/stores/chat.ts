@@ -1,13 +1,20 @@
 import { defineStore } from "pinia";
 import {
   createMessage,
+  fetchMyProfile,
+  fetchProfilesBatch,
   fetchChannelGroups,
   fetchMembers,
   fetchMessages,
   getRealtimeURL,
+  ProfileRequestError,
   sendRealtime,
+  type SyncedUserProfile,
+  updateMyProfile,
+  uploadProfileAvatar,
   type RealtimeEnvelope
 } from "@renderer/services/chatClient";
+import type { AvatarMode } from "@renderer/types/models";
 import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, MemberItem } from "@renderer/types/chat";
 
 type ServerRealtimeState = {
@@ -16,6 +23,23 @@ type ServerRealtimeState = {
   reconnectAttempt: number;
   lastConnectedAt: string | null;
   errorMessage: string | null;
+};
+
+type ProfileSyncState = {
+  syncing: boolean;
+  lastSyncedAt: string | null;
+  errorMessage: string | null;
+};
+
+type LocalProfileSyncInput = {
+  serverId: string;
+  backendUrl: string;
+  userUID: string;
+  deviceID: string;
+  displayName: string;
+  avatarMode: AvatarMode;
+  avatarPresetId: string;
+  avatarImageDataUrl: string | null;
 };
 
 type ChatStoreState = {
@@ -31,6 +55,9 @@ type ChatStoreState = {
   subscribedChannelByServer: Record<string, string | null>;
   unreadByChannel: Record<string, number>;
   currentUserUIDByServer: Record<string, string>;
+  profilesByServer: Record<string, Record<string, SyncedUserProfile>>;
+  profileSyncStateByServer: Record<string, ProfileSyncState>;
+  profileSyncAvailableByServer: Record<string, boolean | null>;
 };
 
 const socketsByServer = new Map<string, WebSocket>();
@@ -40,6 +67,7 @@ const typingTimersByMember = new Map<string, ReturnType<typeof setTimeout>>();
 const realtimeConnectParamsByServer = new Map<string, { serverId: string; backendUrl: string; userUID: string; deviceID: string }>();
 const reconnectBackoffMS = [1000, 2000, 5000, 10000, 15000];
 const typingExpiryMS = 6000;
+const profileBatchLimit = 100;
 
 function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
   try {
@@ -78,6 +106,50 @@ function normalizePresenceMember(input: unknown): ChannelPresenceMember | null {
     userUID,
     deviceID: String(payload.device_id ?? "").trim()
   };
+}
+
+function normalizeRealtimeProfile(input: unknown): SyncedUserProfile | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const userUID = String(payload.user_uid ?? "").trim();
+  if (!userUID) return null;
+  return {
+    userUID,
+    displayName: String(payload.display_name ?? userUID),
+    avatarMode: payload.avatar_mode === "uploaded" ? "uploaded" : "generated",
+    avatarPresetId: payload.avatar_preset_id ? String(payload.avatar_preset_id) : null,
+    avatarAssetId: payload.avatar_asset_id ? String(payload.avatar_asset_id) : null,
+    avatarUrl: payload.avatar_url ? String(payload.avatar_url) : null,
+    profileVersion: Number(payload.profile_version ?? 0),
+    updatedAt: String(payload.updated_at ?? new Date().toISOString())
+  };
+}
+
+function chunkList<T>(items: T[], chunkSize: number): T[][] {
+  if (chunkSize <= 0 || items.length === 0) return [];
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function normalizeUserUIDList(input: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  input.forEach((value) => {
+    const userUID = value.trim();
+    if (!userUID) return;
+    if (seen.has(userUID)) return;
+    seen.add(userUID);
+    normalized.push(userUID);
+  });
+  return normalized;
+}
+
+function isProfileSyncUnsupportedError(error: unknown): boolean {
+  if (!(error instanceof ProfileRequestError)) return false;
+  return error.status === 404 || error.status === 405 || error.status === 501;
 }
 
 function presenceMemberKey(member: ChannelPresenceMember): string {
@@ -134,7 +206,10 @@ export const useChatStore = defineStore("chat", {
     realtimeByServer: {},
     subscribedChannelByServer: {},
     unreadByChannel: {},
-    currentUserUIDByServer: {}
+    currentUserUIDByServer: {},
+    profilesByServer: {},
+    profileSyncStateByServer: {},
+    profileSyncAvailableByServer: {}
   }),
   getters: {
     groupsFor:
@@ -146,6 +221,18 @@ export const useChatStore = defineStore("chat", {
       (state) =>
       (serverId: string): MemberItem[] => {
         return state.membersByServer[serverId] ?? [];
+      },
+    profilesForServer:
+      (state) =>
+      (serverId: string): Record<string, SyncedUserProfile> => {
+        return state.profilesByServer[serverId] ?? {};
+      },
+    profileForUser:
+      (state) =>
+      (serverId: string, userUID: string): SyncedUserProfile | null => {
+        const profiles = state.profilesByServer[serverId];
+        if (!profiles) return null;
+        return profiles[userUID] ?? null;
       },
     channelPresenceFor:
       (state) =>
@@ -238,17 +325,37 @@ export const useChatStore = defineStore("chat", {
           });
         });
         await this.connectRealtime(params);
+        void this.ensureProfilesForUIDs({
+          serverId: params.serverId,
+          backendUrl: params.backendUrl,
+          userUID: params.userUID,
+          deviceID: params.deviceID,
+          targetUserUIDs: [params.userUID]
+        });
         return firstTextChannel(groups)?.id ?? null;
       } finally {
         this.loadingByServer[params.serverId] = false;
       }
     },
-    async loadMessages(params: { backendUrl: string; channelId: string }): Promise<void> {
+    async loadMessages(params: {
+      serverId: string;
+      backendUrl: string;
+      channelId: string;
+      userUID: string;
+      deviceID: string;
+    }): Promise<void> {
       if (!params.channelId) return;
       this.loadingMessagesByChannel[params.channelId] = true;
       try {
         const messages = await fetchMessages(params.backendUrl, params.channelId, 150);
         this.messagesByChannel[params.channelId] = messages;
+        void this.ensureProfilesForUIDs({
+          serverId: params.serverId,
+          backendUrl: params.backendUrl,
+          userUID: params.userUID,
+          deviceID: params.deviceID,
+          targetUserUIDs: messages.map((message) => message.authorUID)
+        });
       } finally {
         this.loadingMessagesByChannel[params.channelId] = false;
       }
@@ -269,6 +376,161 @@ export const useChatStore = defineStore("chat", {
         }
       } finally {
         this.sendingByChannel[params.channelId] = false;
+      }
+    },
+    ensureProfileSyncState(serverId: string): void {
+      if (!this.profileSyncStateByServer[serverId]) {
+        this.profileSyncStateByServer[serverId] = {
+          syncing: false,
+          lastSyncedAt: null,
+          errorMessage: null
+        };
+      }
+    },
+    setProfileSyncAvailability(serverId: string, available: boolean): void {
+      this.profileSyncAvailableByServer[serverId] = available;
+    },
+    profileSyncDisabled(serverId: string): boolean {
+      return this.profileSyncAvailableByServer[serverId] === false;
+    },
+    upsertProfiles(serverId: string, profiles: SyncedUserProfile[]): void {
+      if (profiles.length === 0) return;
+      const existing = this.profilesByServer[serverId] ?? {};
+      const next: Record<string, SyncedUserProfile> = { ...existing };
+      profiles.forEach((profile) => {
+        const current = next[profile.userUID];
+        if (current && current.profileVersion > profile.profileVersion) return;
+        next[profile.userUID] = profile;
+      });
+      this.profilesByServer[serverId] = next;
+    },
+    async ensureProfilesForUIDs(params: {
+      serverId: string;
+      backendUrl: string;
+      userUID: string;
+      deviceID: string;
+      targetUserUIDs: string[];
+    }): Promise<void> {
+      if (this.profileSyncDisabled(params.serverId)) return;
+      const normalizedUIDs = normalizeUserUIDList(params.targetUserUIDs);
+      if (normalizedUIDs.length === 0) return;
+
+      const knownProfiles = this.profilesByServer[params.serverId] ?? {};
+      const missingUIDs = normalizedUIDs.filter((userUID) => !knownProfiles[userUID]);
+      if (missingUIDs.length === 0) return;
+
+      const chunks = chunkList(missingUIDs, profileBatchLimit);
+      for (const chunk of chunks) {
+        try {
+          const profiles = await fetchProfilesBatch({
+            backendUrl: params.backendUrl,
+            userUID: params.userUID,
+            deviceID: params.deviceID,
+            targetUserUIDs: chunk
+          });
+          this.upsertProfiles(params.serverId, profiles);
+          this.setProfileSyncAvailability(params.serverId, true);
+        } catch (error) {
+          if (isProfileSyncUnsupportedError(error)) {
+            this.setProfileSyncAvailability(params.serverId, false);
+          }
+          return;
+        }
+      }
+    },
+    async ensureProfilesFromRealtime(serverId: string, targetUserUIDs: string[]): Promise<void> {
+      const realtimeParams = realtimeConnectParamsByServer.get(serverId);
+      if (!realtimeParams) return;
+      await this.ensureProfilesForUIDs({
+        serverId,
+        backendUrl: realtimeParams.backendUrl,
+        userUID: realtimeParams.userUID,
+        deviceID: realtimeParams.deviceID,
+        targetUserUIDs
+      });
+    },
+    async syncLocalProfile(params: LocalProfileSyncInput): Promise<void> {
+      this.ensureProfileSyncState(params.serverId);
+      if (this.profileSyncDisabled(params.serverId)) return;
+
+      const syncState = this.profileSyncStateByServer[params.serverId];
+      if (syncState.syncing) return;
+      syncState.syncing = true;
+      syncState.errorMessage = null;
+      try {
+        const displayName = params.displayName.trim() || "Unknown User";
+        let currentProfile = this.profileForUser(params.serverId, params.userUID);
+        if (!currentProfile) {
+          currentProfile = await fetchMyProfile({
+            backendUrl: params.backendUrl,
+            userUID: params.userUID,
+            deviceID: params.deviceID
+          });
+          this.upsertProfiles(params.serverId, [currentProfile]);
+          this.setProfileSyncAvailability(params.serverId, true);
+        }
+
+        const desiredAvatarMode: AvatarMode =
+          params.avatarMode === "uploaded" && params.avatarImageDataUrl ? "uploaded" : "generated";
+        const desiredAvatarPresetId = params.avatarPresetId.trim() || "preset_01";
+        let desiredAvatarAssetId: string | null = null;
+        let shouldUpdate = false;
+
+        if (currentProfile.displayName !== displayName) {
+          shouldUpdate = true;
+        }
+
+        if (desiredAvatarMode === "generated") {
+          if (currentProfile.avatarMode !== "generated" || currentProfile.avatarPresetId !== desiredAvatarPresetId) {
+            shouldUpdate = true;
+          }
+        } else {
+          if (!params.avatarImageDataUrl) {
+            return;
+          }
+          if (currentProfile.avatarMode !== "uploaded" || !currentProfile.avatarAssetId) {
+            const uploadedAsset = await uploadProfileAvatar({
+              backendUrl: params.backendUrl,
+              userUID: params.userUID,
+              deviceID: params.deviceID,
+              avatarImageDataUrl: params.avatarImageDataUrl
+            });
+            desiredAvatarAssetId = uploadedAsset.avatarAssetId;
+            shouldUpdate = true;
+          } else {
+            desiredAvatarAssetId = currentProfile.avatarAssetId;
+          }
+        }
+
+        if (!shouldUpdate) {
+          syncState.lastSyncedAt = new Date().toISOString();
+          return;
+        }
+
+        const updated = await updateMyProfile({
+          backendUrl: params.backendUrl,
+          userUID: params.userUID,
+          deviceID: params.deviceID,
+          expectedVersion: currentProfile.profileVersion,
+          input: {
+            displayName,
+            avatarMode: desiredAvatarMode,
+            avatarPresetId: desiredAvatarMode === "generated" ? desiredAvatarPresetId : null,
+            avatarAssetId: desiredAvatarMode === "uploaded" ? desiredAvatarAssetId : null
+          }
+        });
+        this.upsertProfiles(params.serverId, [updated]);
+        this.setProfileSyncAvailability(params.serverId, true);
+        syncState.lastSyncedAt = new Date().toISOString();
+      } catch (error) {
+        if (isProfileSyncUnsupportedError(error)) {
+          this.setProfileSyncAvailability(params.serverId, false);
+          syncState.errorMessage = null;
+          return;
+        }
+        syncState.errorMessage = (error as Error).message;
+      } finally {
+        syncState.syncing = false;
       }
     },
     async connectRealtime(params: {
@@ -375,6 +637,13 @@ export const useChatStore = defineStore("chat", {
       });
     },
     handleRealtimeEnvelope(serverId: string, envelope: RealtimeEnvelope): void {
+      if (envelope.type === "profile_updated") {
+        const profile = normalizeRealtimeProfile(envelope.payload);
+        if (!profile) return;
+        this.upsertProfiles(serverId, [profile]);
+        this.setProfileSyncAvailability(serverId, true);
+        return;
+      }
       if (envelope.type === "chat.message.created") {
         const payload = (envelope.payload ?? {}) as Record<string, unknown>;
         const message = normalizeIncomingMessage(payload);
@@ -382,6 +651,7 @@ export const useChatStore = defineStore("chat", {
         const existing = this.messagesByChannel[message.channelId] ?? [];
         if (hasMessage(existing, message.id)) return;
         this.messagesByChannel[message.channelId] = [...existing, message];
+        void this.ensureProfilesFromRealtime(serverId, [message.authorUID]);
         const subscribedChannel = this.subscribedChannelByServer[serverId];
         const channelIsActive = subscribedChannel === message.channelId;
         const windowVisible = isDocumentVisible();
@@ -404,6 +674,10 @@ export const useChatStore = defineStore("chat", {
           : [];
         this.presenceByChannel[channelID] = members;
         this.syncTypingMembersWithPresence(channelID, members);
+        void this.ensureProfilesFromRealtime(
+          serverId,
+          members.map((member) => member.userUID)
+        );
         return;
       }
       if (envelope.type === "chat.presence.joined") {
@@ -415,6 +689,7 @@ export const useChatStore = defineStore("chat", {
         const key = presenceMemberKey(member);
         if (existing.some((item) => presenceMemberKey(item) === key)) return;
         this.presenceByChannel[channelID] = [...existing, member];
+        void this.ensureProfilesFromRealtime(serverId, [member.userUID]);
         return;
       }
       if (envelope.type === "chat.presence.left") {
@@ -436,6 +711,7 @@ export const useChatStore = defineStore("chat", {
         const isTyping = Boolean(payload.is_typing);
         const currentUID = this.currentUserUIDByServer[serverId] ?? "";
         if (currentUID && member.userUID === currentUID) return;
+        void this.ensureProfilesFromRealtime(serverId, [member.userUID]);
         if (isTyping) {
           this.upsertTypingMember(channelID, member);
           this.scheduleTypingExpiry(channelID, member);
@@ -567,7 +843,9 @@ export const useChatStore = defineStore("chat", {
       }
 
       const channelName = this.findChannelName(serverId, message.channelId);
-      const title = `${message.authorUID} in #${channelName}`;
+      const profile = this.profileForUser(serverId, message.authorUID);
+      const authorName = profile?.displayName ?? message.authorUID;
+      const title = `${authorName} in #${channelName}`;
       const body = message.body.length > 120 ? `${message.body.slice(0, 117)}...` : message.body;
       const notification = new Notification(title, {
         body,

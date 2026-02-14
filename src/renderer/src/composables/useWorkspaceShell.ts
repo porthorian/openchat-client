@@ -1,8 +1,9 @@
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { RuntimeInfo } from "@shared/ipc";
 import type { Channel, ChannelGroup } from "@renderer/types/chat";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
+import type { SyncedUserProfile } from "@renderer/services/chatClient";
 import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
@@ -97,6 +98,54 @@ export function useWorkspaceShell() {
     return `${uid.slice(0, 8)}…${uid.slice(-4)}`;
   }
 
+  function profileForUID(userUID: string): SyncedUserProfile | null {
+    if (!appUI.activeServerId) return null;
+    return chat.profileForUser(appUI.activeServerId, userUID);
+  }
+
+  function displayNameForUID(userUID: string): string {
+    const profile = profileForUID(userUID);
+    if (profile?.displayName.trim()) {
+      return profile.displayName.trim();
+    }
+    return toDisplayName(userUID);
+  }
+
+  function avatarForUID(userUID: string): {
+    avatarText: string;
+    avatarImageDataUrl: string | null;
+    avatarBackground: string;
+    avatarTextColor: string;
+  } {
+    const profile = profileForUID(userUID);
+    const displayName = displayNameForUID(userUID);
+    if (profile?.avatarMode === "uploaded" && profile.avatarUrl) {
+      return {
+        avatarText: displayName.slice(0, 1).toUpperCase(),
+        avatarImageDataUrl: profile.avatarUrl,
+        avatarBackground: toColorFromUID(userUID),
+        avatarTextColor: "#ffffff"
+      };
+    }
+
+    if (profile?.avatarMode === "generated" && profile.avatarPresetId) {
+      const preset = avatarPresetById(profile.avatarPresetId);
+      return {
+        avatarText: displayName.slice(0, 1).toUpperCase(),
+        avatarImageDataUrl: null,
+        avatarBackground: preset.gradient,
+        avatarTextColor: preset.accent
+      };
+    }
+
+    return {
+      avatarText: displayName.slice(0, 1).toUpperCase(),
+      avatarImageDataUrl: null,
+      avatarBackground: toColorFromUID(userUID),
+      avatarTextColor: "#ffffff"
+    };
+  }
+
   function findChannelByID(groups: ChannelGroup[], channelID: string): Channel | null {
     for (const group of groups) {
       const match = group.channels.find((channel) => channel.id === channelID);
@@ -158,6 +207,10 @@ export function useWorkspaceShell() {
     return chat.messagesFor(appUI.activeChannelId);
   });
 
+  const activeProfilesByUID = computed(() => {
+    return chat.profilesForServer(appUI.activeServerId);
+  });
+
   const activeTypingUsers = computed<string[]>(() => {
     if (!appUI.activeChannelId) return [];
     const currentUID = activeSession.value?.userUID ?? "";
@@ -169,7 +222,7 @@ export function useWorkspaceShell() {
       if (!userUID || userUID === currentUID) return;
       if (dedupedUIDs.has(userUID)) return;
       dedupedUIDs.add(userUID);
-      names.push(toDisplayName(userUID));
+      names.push(displayNameForUID(userUID));
     });
     return names;
   });
@@ -182,21 +235,26 @@ export function useWorkspaceShell() {
     const localAvatarPreset = avatarPresetById(identity.avatarPresetId);
     return members.map((member) => ({
       id: member.clientId || `${member.userUID}:${member.deviceID}`,
-      name: member.userUID === currentUID ? localDisplayName : toDisplayName(member.userUID),
+      name: member.userUID === currentUID ? localDisplayName : displayNameForUID(member.userUID),
       status: "online" as const,
       avatarText:
         member.userUID === currentUID
           ? localDisplayName.slice(0, 1).toUpperCase()
-          : toDisplayName(member.userUID).slice(0, 1).toUpperCase(),
-      avatarImageDataUrl: member.userUID === currentUID && identity.avatarMode === "uploaded" ? identity.avatarImageDataUrl : null,
+          : avatarForUID(member.userUID).avatarText,
+      avatarImageDataUrl:
+        member.userUID === currentUID
+          ? identity.avatarMode === "uploaded"
+            ? identity.avatarImageDataUrl
+            : null
+          : avatarForUID(member.userUID).avatarImageDataUrl,
       avatarBackground:
         member.userUID === currentUID && identity.avatarMode === "generated"
           ? localAvatarPreset.gradient
-          : toColorFromUID(member.userUID),
+          : avatarForUID(member.userUID).avatarBackground,
       avatarTextColor:
         member.userUID === currentUID && identity.avatarMode === "generated"
           ? localAvatarPreset.accent
-          : "#ffffff"
+          : avatarForUID(member.userUID).avatarTextColor
     }));
   });
 
@@ -225,11 +283,16 @@ export function useWorkspaceShell() {
     const currentParticipants = call.participantsFor(appUI.activeServerId, activeVoiceChannelId.value);
     if (currentParticipants.length === 0) return byChannel;
     const localDisplayName = identity.profileDisplayName.trim() || "You";
+    const localAvatarPreset = avatarPresetById(identity.avatarPresetId);
     byChannel[activeVoiceChannelId.value] = currentParticipants.map((participant) => ({
       id: participant.participantId,
-      name: participant.isLocal ? localDisplayName : toDisplayName(participant.userUID),
-      avatarText: participant.isLocal ? localDisplayName.slice(0, 1).toUpperCase() : participant.userUID.slice(0, 1).toUpperCase(),
-      avatarColor: toColorFromUID(participant.userUID),
+      name: participant.isLocal ? localDisplayName : displayNameForUID(participant.userUID),
+      avatarText:
+        participant.isLocal ? localDisplayName.slice(0, 1).toUpperCase() : avatarForUID(participant.userUID).avatarText,
+      avatarColor:
+        participant.isLocal && identity.avatarMode === "generated"
+          ? localAvatarPreset.gradient
+          : avatarForUID(participant.userUID).avatarBackground,
       mood: toMoodFromUID(participant.userUID),
       badgeEmoji: participant.isLocal ? "🛰️" : "🎧"
     }));
@@ -324,6 +387,20 @@ export function useWorkspaceShell() {
 
     isHydrating.value = true;
     try {
+      if (server.capabilities?.profile && !server.capabilities.profile.enabled) {
+        chat.setProfileSyncAvailability(serverId, false);
+      }
+      await chat.syncLocalProfile({
+        serverId,
+        backendUrl: server.backendUrl,
+        userUID: activeUser,
+        deviceID: localDeviceID.value,
+        displayName: identity.profileDisplayName,
+        avatarMode: identity.avatarMode,
+        avatarPresetId: identity.avatarPresetId,
+        avatarImageDataUrl: identity.avatarImageDataUrl
+      });
+
       const firstChannelID = await chat.loadServerData({
         serverId,
         backendUrl: server.backendUrl,
@@ -342,8 +419,11 @@ export function useWorkspaceShell() {
 
       if (targetChannelID) {
         await chat.loadMessages({
+          serverId,
           backendUrl: server.backendUrl,
-          channelId: targetChannelID
+          channelId: targetChannelID,
+          userUID: activeUser,
+          deviceID: localDeviceID.value
         });
         chat.subscribeToChannel(serverId, targetChannelID);
         chat.markChannelRead(targetChannelID);
@@ -391,7 +471,33 @@ export function useWorkspaceShell() {
     chat.disconnectAllRealtime();
   });
 
+  watch(
+    () => ({
+      serverId: appUI.activeServerId,
+      backendUrl: activeServer.value?.backendUrl ?? "",
+      userUID: activeSession.value?.userUID ?? "",
+      deviceID: localDeviceID.value,
+      participantUIDs: (activeCallSession.value?.participants ?? []).map((participant) => participant.userUID).join("|")
+    }),
+    (value) => {
+      if (!value.serverId || !value.backendUrl || !value.userUID) return;
+      const participantUIDs = (activeCallSession.value?.participants ?? []).map((participant) => participant.userUID);
+      if (participantUIDs.length === 0) return;
+      void chat.ensureProfilesForUIDs({
+        serverId: value.serverId,
+        backendUrl: value.backendUrl,
+        userUID: value.userUID,
+        deviceID: value.deviceID,
+        targetUserUIDs: participantUIDs
+      });
+    },
+    { immediate: true }
+  );
+
   async function selectServer(serverId: string): Promise<void> {
+    if (serverId === appUI.activeServerId) {
+      return;
+    }
     const currentActiveVoice = activeVoiceChannelId.value;
     if (currentActiveVoice) {
       call.leaveChannel(appUI.activeServerId, currentActiveVoice);
@@ -407,14 +513,19 @@ export function useWorkspaceShell() {
 
   async function selectChannel(channelId: string): Promise<void> {
     const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
     if (!server) return;
+    if (!currentUID) return;
     if (appUI.activeChannelId && appUI.activeChannelId !== channelId) {
       chat.unsubscribeFromChannel(appUI.activeServerId, appUI.activeChannelId);
     }
     appUI.setActiveChannel(channelId);
     await chat.loadMessages({
+      serverId: appUI.activeServerId,
       backendUrl: server.backendUrl,
-      channelId
+      channelId,
+      userUID: currentUID,
+      deviceID: localDeviceID.value
     });
     chat.subscribeToChannel(appUI.activeServerId, channelId);
     chat.markChannelRead(channelId);
@@ -860,7 +971,8 @@ export function useWorkspaceShell() {
     localProfileDisplayName: identity.profileDisplayName,
     localProfileAvatarMode: identity.avatarMode,
     localProfileAvatarPresetId: identity.avatarPresetId,
-    localProfileAvatarImageDataUrl: identity.avatarImageDataUrl
+    localProfileAvatarImageDataUrl: identity.avatarImageDataUrl,
+    remoteProfilesByUID: activeProfilesByUID.value
   }));
 
   const membersPaneProps = computed(() => ({
