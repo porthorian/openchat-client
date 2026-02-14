@@ -95,6 +95,8 @@ export type ServerCapabilitiesResponse = {
   server_name: string;
   server_id: string;
   api_version: string;
+  build_version?: string;
+  build_commit?: string;
   identity_handshake_modes: IdentityHandshakeMode[];
   user_uid_policy: UserUIDPolicy;
   profile_data_policy: ProfileDataPolicy;
@@ -192,6 +194,8 @@ export type ServerCapabilities = {
   serverName: string;
   serverId: string;
   apiVersion: string;
+  buildVersion: string | null;
+  buildCommit: string | null;
   identityHandshakeModes: IdentityHandshakeMode[];
   userUidPolicy: UserUIDPolicy;
   profileDataPolicy: ProfileDataPolicy;
@@ -260,6 +264,8 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
     serverName: source.server_name,
     serverId: source.server_id,
     apiVersion: source.api_version,
+    buildVersion: source.build_version ?? null,
+    buildCommit: source.build_commit ?? null,
     identityHandshakeModes: source.identity_handshake_modes,
     userUidPolicy: source.user_uid_policy,
     profileDataPolicy: source.profile_data_policy,

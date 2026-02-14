@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
+  mdiAccountMultiplePlus,
   mdiChevronDown,
   mdiChevronRight,
   mdiCogOutline,
@@ -9,7 +10,6 @@ import {
   mdiMessage,
   mdiMicrophone,
   mdiMicrophoneOff,
-  mdiPlus,
   mdiPound,
   mdiVolumeHigh
 } from "@mdi/js";
@@ -55,6 +55,8 @@ type PresenceStatus = "online" | "idle" | "busy" | "invisible";
 
 const props = defineProps<{
   serverName: string;
+  serverBuildVersion: string | null;
+  serverBuildCommit: string | null;
   groups: ChannelGroup[];
   activeChannelId: string;
   activeVoiceChannelId: string | null;
@@ -84,8 +86,6 @@ const props = defineProps<{
   profileAvatarImageDataUrl: string | null;
   uidMode: UIDMode;
   disclosureMessage: string;
-  appVersion: string;
-  runtimeLabel: string;
   startupError?: string | null;
 }>();
 
@@ -172,6 +172,12 @@ const selectedInputDeviceLabel = computed(() => {
 });
 const canSelectInputDevice = computed(() => props.inputDevices.length > 1);
 const canSelectOutputDevice = computed(() => props.outputSelectionSupported && props.outputDevices.length > 1);
+const serverBuildLabel = computed(() => {
+  const buildVersion = props.serverBuildVersion?.trim() || "unknown";
+  const commit = props.serverBuildCommit?.trim() || "unknown";
+  const commitLabel = commit.length > 12 ? commit.slice(0, 12) : commit;
+  return `build ${buildVersion} · ${commitLabel}`;
+});
 
 function isGroupCollapsed(groupId: string): boolean {
   return collapsedGroupIds.value.has(groupId);
@@ -470,9 +476,12 @@ onBeforeUnmount(() => {
 <template>
   <aside ref="channelPaneRef" class="channel-pane">
     <header class="guild-header">
-      <h2>{{ serverName }}</h2>
-      <button type="button" class="guild-header-action">
-        <AppIcon :path="mdiPlus" :size="14" />
+      <div class="guild-header-copy">
+        <h2>{{ serverName }}</h2>
+        <small class="guild-header-build">{{ serverBuildLabel }}</small>
+      </div>
+      <button type="button" class="guild-header-action" aria-label="Invite people">
+        <AppIcon :path="mdiAccountMultiplePlus" :size="36" />
       </button>
     </header>
 
@@ -826,8 +835,6 @@ onBeforeUnmount(() => {
         :profile-avatar-image-data-url="profileAvatarImageDataUrl"
         :uid-mode="uidMode"
         :disclosure-message="disclosureMessage"
-        :app-version="appVersion"
-        :runtime-label="runtimeLabel"
         :startup-error="startupError"
         :presence-status="presenceStatus"
         @update:presence-status="setPresenceStatus"

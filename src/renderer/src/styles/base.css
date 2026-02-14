@@ -182,11 +182,30 @@ button {
   cursor: default;
 }
 
+.taskbar-center-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
 .taskbar-center strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.05;
+}
+
+.taskbar-build {
+  color: #8890a4;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.05;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .taskbar-guild-pill {
@@ -317,7 +336,7 @@ button {
 }
 
 .guild-header {
-  height: 50px;
+  min-height: 50px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -326,17 +345,52 @@ button {
   box-shadow: 0 1px 0 #14151b;
 }
 
+.guild-header-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
 .guild-header h2 {
   font-size: 1.07rem;
   font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guild-header-build {
+  max-width: 100%;
+  color: #8b92a6;
+  font-size: 0.65rem;
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .guild-header-action {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #272a34;
-  color: var(--text-soft);
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  flex-shrink: 0;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.guild-header-action:hover {
+  background: #343844;
+  color: var(--text-main);
 }
 
 .guild-filter {
@@ -2683,6 +2737,10 @@ button {
 @media (max-width: 900px) {
   .taskbar-center strong {
     font-size: 0.93rem;
+  }
+
+  .taskbar-build {
+    display: none;
   }
 
   .layout {

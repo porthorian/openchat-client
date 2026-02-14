@@ -5,6 +5,8 @@ import AppIcon from "./AppIcon.vue";
 defineProps<{
   serverIconText: string;
   serverName: string;
+  clientBuildVersion: string;
+  clientRuntimeLabel: string;
 }>();
 </script>
 
@@ -21,7 +23,10 @@ defineProps<{
 
     <div class="taskbar-center">
       <span class="taskbar-guild-pill">{{ serverIconText }}</span>
-      <strong>{{ serverName }}</strong>
+      <div class="taskbar-center-copy">
+        <strong>{{ serverName }}</strong>
+        <small class="taskbar-build">build {{ clientBuildVersion }} · {{ clientRuntimeLabel }}</small>
+      </div>
     </div>
 
     <div class="taskbar-right">

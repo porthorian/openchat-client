@@ -66,7 +66,7 @@ corepack yarn dist   # platform installer artifacts in release/
 ```
 
 Release pipeline:
-- Tag format: `client-vX.X.X`
+- Tag format: `vX.X.X`
 - Workflow: `.github/workflows/release-desktop.yml`
 - Targets: macOS, Windows, Linux installers + release asset publish
 

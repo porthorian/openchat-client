@@ -387,6 +387,12 @@ export function useWorkspaceShell() {
 
     isHydrating.value = true;
     try {
+      try {
+        const capabilities = await fetchServerCapabilities(server.backendUrl);
+        registry.setCapabilities(server.serverId, capabilities);
+      } catch (_error) {
+        // Keep previously-cached capabilities when probe fails.
+      }
       if (server.capabilities?.profile && !server.capabilities.profile.enabled) {
         chat.setProfileSyncAvailability(serverId, false);
       }
@@ -907,7 +913,9 @@ export function useWorkspaceShell() {
 
   const taskbarProps = computed(() => ({
     serverIconText: activeServer.value?.iconText ?? "OC",
-    serverName: activeServer.value?.displayName ?? "OpenChat Client"
+    serverName: activeServer.value?.displayName ?? "OpenChat Client",
+    clientBuildVersion: appVersion.value,
+    clientRuntimeLabel: runtimeLabel.value
   }));
 
   const serverRailProps = computed(() => ({
@@ -918,6 +926,8 @@ export function useWorkspaceShell() {
 
   const channelPaneProps = computed(() => ({
     serverName: activeServer.value?.displayName ?? "Unknown Server",
+    serverBuildVersion: activeServer.value?.capabilities?.buildVersion ?? null,
+    serverBuildCommit: activeServer.value?.capabilities?.buildCommit ?? null,
     groups: filteredChannelGroups.value,
     activeChannelId: appUI.activeChannelId,
     activeVoiceChannelId: activeVoiceChannelId.value,
@@ -947,8 +957,6 @@ export function useWorkspaceShell() {
     profileAvatarImageDataUrl: identity.avatarImageDataUrl,
     disclosureMessage: identity.disclosureMessage,
     uidMode: identity.uidMode,
-    appVersion: appVersion.value,
-    runtimeLabel: runtimeLabel.value,
     startupError: startupError.value
   }));
 

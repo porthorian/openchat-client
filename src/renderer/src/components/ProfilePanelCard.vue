@@ -22,8 +22,6 @@ const props = defineProps<{
   profileAvatarImageDataUrl: string | null;
   uidMode: UIDMode;
   disclosureMessage: string;
-  appVersion: string;
-  runtimeLabel: string;
   startupError?: string | null;
   presenceStatus: PresenceStatus;
 }>();
@@ -253,7 +251,6 @@ onBeforeUnmount(() => {
           current UID:
           <code>{{ currentUid }}</code>
         </p>
-        <p class="profile-disclosure-meta">build {{ appVersion }} · {{ runtimeLabel }}</p>
         <button type="button" class="profile-disclosure-btn" @click="emit('toggleUidMode')">
           Switch UID mode ({{ uidMode }})
         </button>
