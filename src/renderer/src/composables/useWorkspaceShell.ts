@@ -5,6 +5,7 @@ import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
+import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { useAppUIStore, useCallStore, useChatStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
 
 type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
@@ -176,10 +177,26 @@ export function useWorkspaceShell() {
   const connectedMembers = computed(() => {
     if (!appUI.activeChannelId) return [];
     const members = chat.channelPresenceFor(appUI.activeChannelId);
+    const currentUID = activeSession.value?.userUID.trim() ?? "";
+    const localDisplayName = identity.profileDisplayName.trim() || "You";
+    const localAvatarPreset = avatarPresetById(identity.avatarPresetId);
     return members.map((member) => ({
       id: member.clientId || `${member.userUID}:${member.deviceID}`,
-      name: toDisplayName(member.userUID),
-      status: "online" as const
+      name: member.userUID === currentUID ? localDisplayName : toDisplayName(member.userUID),
+      status: "online" as const,
+      avatarText:
+        member.userUID === currentUID
+          ? localDisplayName.slice(0, 1).toUpperCase()
+          : toDisplayName(member.userUID).slice(0, 1).toUpperCase(),
+      avatarImageDataUrl: member.userUID === currentUID && identity.avatarMode === "uploaded" ? identity.avatarImageDataUrl : null,
+      avatarBackground:
+        member.userUID === currentUID && identity.avatarMode === "generated"
+          ? localAvatarPreset.gradient
+          : toColorFromUID(member.userUID),
+      avatarTextColor:
+        member.userUID === currentUID && identity.avatarMode === "generated"
+          ? localAvatarPreset.accent
+          : "#ffffff"
     }));
   });
 
@@ -207,10 +224,11 @@ export function useWorkspaceShell() {
     if (!activeVoiceChannelId.value) return byChannel;
     const currentParticipants = call.participantsFor(appUI.activeServerId, activeVoiceChannelId.value);
     if (currentParticipants.length === 0) return byChannel;
+    const localDisplayName = identity.profileDisplayName.trim() || "You";
     byChannel[activeVoiceChannelId.value] = currentParticipants.map((participant) => ({
       id: participant.participantId,
-      name: toDisplayName(participant.userUID),
-      avatarText: participant.userUID.slice(0, 1).toUpperCase(),
+      name: participant.isLocal ? localDisplayName : toDisplayName(participant.userUID),
+      avatarText: participant.isLocal ? localDisplayName.slice(0, 1).toUpperCase() : participant.userUID.slice(0, 1).toUpperCase(),
       avatarColor: toColorFromUID(participant.userUID),
       mood: toMoodFromUID(participant.userUID),
       badgeEmoji: participant.isLocal ? "🛰️" : "🎧"
@@ -837,7 +855,12 @@ export function useWorkspaceShell() {
     messages: activeMessages.value,
     isLoadingMessages: isLoadingMessages.value,
     isSendingMessage: isSendingMessage.value,
-    typingUsers: activeTypingUsers.value
+    typingUsers: activeTypingUsers.value,
+    currentUserUID: activeSession.value?.userUID ?? "",
+    localProfileDisplayName: identity.profileDisplayName,
+    localProfileAvatarMode: identity.avatarMode,
+    localProfileAvatarPresetId: identity.avatarPresetId,
+    localProfileAvatarImageDataUrl: identity.avatarImageDataUrl
   }));
 
   const membersPaneProps = computed(() => ({

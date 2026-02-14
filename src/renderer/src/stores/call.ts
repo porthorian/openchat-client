@@ -54,6 +54,7 @@ const socketsByKey = new Map<string, WebSocket>();
 const intentionallyClosed = new Set<string>();
 const nextPlaybackTimeByStream = new Map<string, number>();
 const micUplinksByKey = new Map<string, MicUplink>();
+const localJoinIdentityByKey = new Map<string, { userUID: string; deviceID: string }>();
 const speakingTimersByParticipant = new Map<string, ReturnType<typeof setTimeout>>();
 let playbackAudioContext: AudioContext | null = null;
 let playbackGainNode: GainNode | null = null;
@@ -373,6 +374,16 @@ function toParticipant(payload: Record<string, unknown>, isLocal: boolean): Call
     joinedAt: String(payload.joined_at ?? new Date().toISOString()),
     isLocal
   };
+}
+
+function isPlaceholderUserUID(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return !normalized || normalized === "uid_local" || normalized === "uid_unknown" || normalized === "uid_pending";
+}
+
+function isPlaceholderDeviceID(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return !normalized || normalized === "device_local" || normalized === "device_unknown";
 }
 
 export const useCallStore = defineStore("call", {
@@ -729,6 +740,10 @@ export const useCallStore = defineStore("call", {
       this.clearSpeakingForSession(params.serverId, params.channelId);
       session.joinedAt = null;
       session.lastEventAt = new Date().toISOString();
+      localJoinIdentityByKey.set(key, {
+        userUID: params.userUID,
+        deviceID: params.deviceID
+      });
 
       try {
         const capabilities = await fetchServerCapabilities(params.backendUrl);
@@ -774,6 +789,7 @@ export const useCallStore = defineStore("call", {
         socket.addEventListener("close", () => {
           this.stopMicUplink(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
+          localJoinIdentityByKey.delete(key);
           if (!localSession) return;
           localSession.lastEventAt = new Date().toISOString();
           if (intentionallyClosed.has(key)) {
@@ -796,6 +812,7 @@ export const useCallStore = defineStore("call", {
         socket.addEventListener("error", () => {
           this.stopMicUplink(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
+          localJoinIdentityByKey.delete(key);
           if (!localSession) return;
           localSession.state = "error";
           localSession.errorMessage = "Call signaling transport failed.";
@@ -806,6 +823,7 @@ export const useCallStore = defineStore("call", {
         session.state = "error";
         session.errorMessage = (error as Error).message;
         this.activeVoiceChannelByServer[params.serverId] = null;
+        localJoinIdentityByKey.delete(key);
       }
     },
     handleSignalEnvelope(params: { serverId: string; channelId: string; envelope: SignalEnvelope }): void {
@@ -816,6 +834,7 @@ export const useCallStore = defineStore("call", {
 
       switch (params.envelope.type) {
         case "rtc.joined": {
+          const localIdentity = localJoinIdentityByKey.get(key);
           const participants = Array.isArray(payload.participants)
             ? payload.participants
                 .filter((item) => typeof item === "object" && item !== null)
@@ -824,14 +843,27 @@ export const useCallStore = defineStore("call", {
                 )
             : [];
           const localParticipantID = String(payload.participant_id ?? "");
-          if (!participants.some((item) => item.participantId === localParticipantID) && localParticipantID) {
+          const localParticipantIndex = participants.findIndex((item) => item.participantId === localParticipantID);
+          if (localParticipantIndex >= 0) {
+            const localParticipant = participants[localParticipantIndex];
+            participants[localParticipantIndex] = {
+              ...localParticipant,
+              userUID:
+                localIdentity && isPlaceholderUserUID(localParticipant.userUID) ? localIdentity.userUID : localParticipant.userUID,
+              deviceID:
+                localIdentity && isPlaceholderDeviceID(localParticipant.deviceID)
+                  ? localIdentity.deviceID
+                  : localParticipant.deviceID,
+              isLocal: true
+            };
+          } else if (localParticipantID) {
             participants.unshift(
               toParticipant(
                 {
                   participant_id: localParticipantID,
                   channel_id: params.channelId,
-                  user_uid: "uid_local",
-                  device_id: "device_local",
+                  user_uid: localIdentity?.userUID ?? "uid_unknown",
+                  device_id: localIdentity?.deviceID ?? "device_unknown",
                   joined_at: new Date().toISOString()
                 },
                 true
@@ -951,6 +983,7 @@ export const useCallStore = defineStore("call", {
     leaveChannel(serverId: string, channelId: string, options?: { reason?: string }): void {
       const key = sessionKey(serverId, channelId);
       this.stopMicUplink(serverId, channelId);
+      localJoinIdentityByKey.delete(key);
       this.clearSpeakingForSession(serverId, channelId);
       const socket = socketsByKey.get(key);
       if (socket) {

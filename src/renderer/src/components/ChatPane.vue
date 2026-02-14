@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { ChatMessage } from "@renderer/types/chat";
+import type { AvatarMode } from "@renderer/types/models";
+import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChatComposer from "./ChatComposer.vue";
 import ChatMessageRow from "./ChatMessageRow.vue";
@@ -7,8 +9,11 @@ import ChatMessageRow from "./ChatMessageRow.vue";
 type TimelineMessage = {
   message: ChatMessage;
   isCompact: boolean;
+  authorName: string;
   avatarText: string;
   avatarColor: string;
+  avatarTextColor: string;
+  avatarImageDataUrl: string | null;
 };
 
 const props = defineProps<{
@@ -17,6 +22,11 @@ const props = defineProps<{
   isLoadingMessages: boolean;
   isSendingMessage: boolean;
   typingUsers: string[];
+  currentUserUID: string;
+  localProfileDisplayName: string;
+  localProfileAvatarMode: AvatarMode;
+  localProfileAvatarPresetId: string;
+  localProfileAvatarImageDataUrl: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -37,10 +47,14 @@ const sortedMessages = computed(() => {
 });
 
 const timelineMessages = computed<TimelineMessage[]>(() => {
+  const localUserUID = props.currentUserUID.trim();
+  const localDisplayName = props.localProfileDisplayName.trim() || "You";
+  const localAvatarPreset = avatarPresetById(props.localProfileAvatarPresetId);
   return sortedMessages.value.map((message, index, allMessages) => {
     const previous = allMessages[index - 1];
     const messageAt = new Date(message.createdAt).getTime();
     const previousAt = previous ? new Date(previous.createdAt).getTime() : 0;
+    const isLocalAuthor = Boolean(localUserUID && message.authorUID === localUserUID);
     const isCompact = Boolean(
       previous &&
         previous.authorUID === message.authorUID &&
@@ -50,8 +64,15 @@ const timelineMessages = computed<TimelineMessage[]>(() => {
     return {
       message,
       isCompact,
-      avatarText: toAvatarText(message.authorUID),
-      avatarColor: toAvatarColor(message.authorUID)
+      authorName: isLocalAuthor ? localDisplayName : message.authorUID,
+      avatarText: isLocalAuthor ? localDisplayName.slice(0, 1).toUpperCase() : toAvatarText(message.authorUID),
+      avatarColor:
+        isLocalAuthor && props.localProfileAvatarMode === "generated"
+          ? localAvatarPreset.gradient
+          : toAvatarColor(message.authorUID),
+      avatarTextColor: isLocalAuthor && props.localProfileAvatarMode === "generated" ? localAvatarPreset.accent : "#ffffff",
+      avatarImageDataUrl:
+        isLocalAuthor && props.localProfileAvatarMode === "uploaded" ? props.localProfileAvatarImageDataUrl : null
     };
   });
 });
@@ -169,8 +190,11 @@ watch(
         :key="entry.message.id"
         :message="entry.message"
         :is-compact="entry.isCompact"
+        :author-name="entry.authorName"
         :avatar-text="entry.avatarText"
         :avatar-color="entry.avatarColor"
+        :avatar-text-color="entry.avatarTextColor"
+        :avatar-image-data-url="entry.avatarImageDataUrl"
       />
     </section>
 

@@ -4,8 +4,11 @@ import type { ChatMessage } from "@renderer/types/chat";
 const props = defineProps<{
   message: ChatMessage;
   isCompact: boolean;
+  authorName: string;
   avatarText: string;
   avatarColor: string;
+  avatarTextColor: string;
+  avatarImageDataUrl: string | null;
 }>();
 
 function formatHeaderTimestamp(isoTimestamp: string): string {
@@ -35,13 +38,19 @@ function formatFallbackTime(isoTimestamp: string): string {
 
 <template>
   <article class="message-row" :class="{ 'is-compact': isCompact }">
-    <div v-if="!isCompact" class="message-avatar" :style="{ '--avatar-bg': avatarColor }" aria-hidden="true">
-      {{ avatarText }}
+    <div
+      v-if="!isCompact"
+      class="message-avatar"
+      :style="{ '--avatar-bg': avatarColor, color: avatarTextColor }"
+      aria-hidden="true"
+    >
+      <img v-if="avatarImageDataUrl" class="message-avatar-image" :src="avatarImageDataUrl" alt="" />
+      <template v-else>{{ avatarText }}</template>
     </div>
     <div v-else class="message-avatar-spacer" aria-hidden="true" />
     <div class="message-content">
       <header v-if="!isCompact" class="message-meta">
-        <strong class="message-author">{{ props.message.authorUID }}</strong>
+        <strong class="message-author">{{ authorName }}</strong>
         <time class="message-time">{{ formatHeaderTimestamp(props.message.createdAt) }}</time>
       </header>
       <p class="message-text">
