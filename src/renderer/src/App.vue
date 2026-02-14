@@ -1,28 +1,37 @@
 <script setup lang="ts">
-import AddServerDialog from "./components/AddServerDialog.vue";
-import AppTaskbar from "./components/AppTaskbar.vue";
-import ChannelPane from "./components/ChannelPane.vue";
-import ChatPane from "./components/ChatPane.vue";
-import MembersPane from "./components/MembersPane.vue";
-import ServerRail from "./components/ServerRail.vue";
-import WorkspaceToolbar from "./components/WorkspaceToolbar.vue";
-import { useWorkspaceShell } from "./composables/useWorkspaceShell";
+import OnboardingProfileSetup from "./components/OnboardingProfileSetup.vue";
+import OnboardingServerSetup from "./components/OnboardingServerSetup.vue";
+import WorkspaceHome from "./components/WorkspaceHome.vue";
+import { useAppUIStore, useIdentityStore, useServerRegistryStore } from "@renderer/stores";
+import type { ServerCapabilities } from "@renderer/types/capabilities";
+import type { OnboardingSetupInput } from "@renderer/types/models";
+import type { ServerProfile } from "@renderer/types/models";
 
-const shell = useWorkspaceShell();
+const identity = useIdentityStore();
+const registry = useServerRegistryStore();
+const appUI = useAppUIStore();
+
+identity.initializeIdentity();
+registry.hydrateFromStorage();
+
+function completeOnboarding(payload: OnboardingSetupInput): void {
+  identity.completeSetup(payload);
+}
+
+function completeServerSetup(payload: { profile: ServerProfile; capabilities: ServerCapabilities | null }): void {
+  const added = registry.addServer(payload.profile);
+  if (payload.capabilities) {
+    registry.setCapabilities(payload.profile.serverId, payload.capabilities);
+  }
+  if (!added && !registry.byId(payload.profile.serverId)) {
+    return;
+  }
+  appUI.setActiveServer(payload.profile.serverId);
+}
 </script>
 
 <template>
-  <div class="app-shell" :class="shell.appShellClasses.value">
-    <AppTaskbar v-bind="shell.taskbarProps.value" />
-
-    <section class="layout" :class="shell.layoutClasses.value">
-      <ServerRail v-bind="shell.serverRailProps.value" v-on="shell.serverRailListeners" />
-      <ChannelPane v-bind="shell.channelPaneProps.value" v-on="shell.channelPaneListeners" />
-      <WorkspaceToolbar v-bind="shell.workspaceToolbarProps.value" v-on="shell.workspaceToolbarListeners" />
-      <ChatPane class="chat-pane-slot" v-bind="shell.chatPaneProps.value" v-on="shell.chatPaneListeners" />
-      <MembersPane class="members-pane-slot" v-bind="shell.membersPaneProps.value" v-on="shell.membersPaneListeners" />
-    </section>
-
-    <AddServerDialog v-bind="shell.addServerDialogProps.value" v-on="shell.addServerDialogListeners" />
-  </div>
+  <OnboardingProfileSetup v-if="!identity.hasCompletedSetup" @complete="completeOnboarding" />
+  <OnboardingServerSetup v-else-if="registry.servers.length === 0" @complete="completeServerSetup" />
+  <WorkspaceHome v-else />
 </template>

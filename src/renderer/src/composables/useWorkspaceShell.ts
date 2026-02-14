@@ -337,6 +337,7 @@ export function useWorkspaceShell() {
 
   onMounted(async () => {
     identity.initializeIdentity();
+    registry.hydrateFromStorage();
     void call.refreshInputDevices();
     void call.refreshOutputDevices();
     try {
@@ -347,7 +348,9 @@ export function useWorkspaceShell() {
     }
 
     try {
-      await registry.hydrateFromBackend();
+      if (registry.servers.length === 0) {
+        await registry.hydrateFromBackend();
+      }
       if (registry.servers.length === 0) {
         startupError.value = "No servers available from backend.";
         return;
@@ -809,6 +812,10 @@ export function useWorkspaceShell() {
     localVoiceTransmitting: localVoiceTransmitting.value,
     filterValue: appUI.channelFilter,
     currentUid: activeSession.value?.userUID ?? "uid_unbound",
+    profileDisplayName: identity.profileDisplayName,
+    profileAvatarMode: identity.avatarMode,
+    profileAvatarPresetId: identity.avatarPresetId,
+    profileAvatarImageDataUrl: identity.avatarImageDataUrl,
     disclosureMessage: identity.disclosureMessage,
     uidMode: identity.uidMode,
     appVersion: appVersion.value,

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { mdiChevronRight, mdiPencilOutline, mdiPlusCircleOutline } from "@mdi/js";
-import type { UIDMode } from "@renderer/types/models";
+import type { AvatarMode, UIDMode } from "@renderer/types/models";
+import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import AppIcon from "./AppIcon.vue";
 
 type PresenceStatus = "online" | "idle" | "busy" | "invisible";
@@ -15,6 +16,10 @@ type PresenceOption = {
 const props = defineProps<{
   serverName: string;
   currentUid: string;
+  profileDisplayName: string;
+  profileAvatarMode: AvatarMode;
+  profileAvatarPresetId: string;
+  profileAvatarImageDataUrl: string | null;
   uidMode: UIDMode;
   disclosureMessage: string;
   appVersion: string;
@@ -57,12 +62,22 @@ let statusMenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
 
 const presenceLabel = computed(() => presenceLabels[props.presenceStatus]);
 const profileDisplayName = computed(() => {
-  const uid = props.currentUid.trim();
-  if (!uid) return "Unknown User";
-  if (uid.length <= 16) return uid;
-  return `${uid.slice(0, 12)}…${uid.slice(-4)}`;
+  const username = props.profileDisplayName.trim();
+  if (!username) return "Unknown User";
+  return username;
 });
 const profileAvatarText = computed(() => profileDisplayName.value.slice(0, 1).toUpperCase());
+const profileAvatarPreset = computed(() => avatarPresetById(props.profileAvatarPresetId));
+const hasUploadedProfileAvatar = computed(() => {
+  return props.profileAvatarMode === "uploaded" && Boolean(props.profileAvatarImageDataUrl);
+});
+const profileAvatarStyle = computed(() => {
+  if (hasUploadedProfileAvatar.value) return {};
+  return {
+    background: profileAvatarPreset.value.gradient,
+    color: profileAvatarPreset.value.accent
+  };
+});
 const profileHandle = computed(() => `@${props.currentUid.trim() || "uid_unbound"}`);
 const profileNote = computed(() => {
   return props.uidMode === "server_scoped" ? "Server-scoped identity active" : "Global identity active";
@@ -158,8 +173,9 @@ onBeforeUnmount(() => {
 <template>
   <section class="profile-card" role="dialog" aria-label="User profile and status">
     <div class="profile-card-header">
-      <div class="profile-avatar">
-        {{ profileAvatarText }}
+      <div class="profile-avatar" :style="profileAvatarStyle">
+        <img v-if="hasUploadedProfileAvatar" class="profile-avatar-image" :src="profileAvatarImageDataUrl ?? ''" alt="" />
+        <template v-else>{{ profileAvatarText }}</template>
         <span class="presence-dot is-large" :class="`is-${presenceStatus}`" />
       </div>
       <div class="profile-note-pill">

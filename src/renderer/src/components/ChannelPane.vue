@@ -13,7 +13,8 @@ import {
   mdiPound,
   mdiVolumeHigh
 } from "@mdi/js";
-import type { UIDMode } from "@renderer/types/models";
+import type { AvatarMode, UIDMode } from "@renderer/types/models";
+import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import AppIcon from "./AppIcon.vue";
 import ChannelCategoryMenu from "./ChannelCategoryMenu.vue";
 import ChannelVoiceConnectedCard from "./ChannelVoiceConnectedCard.vue";
@@ -77,6 +78,10 @@ const props = defineProps<{
   localVoiceTransmitting: boolean;
   filterValue: string;
   currentUid: string;
+  profileDisplayName: string;
+  profileAvatarMode: AvatarMode;
+  profileAvatarPresetId: string;
+  profileAvatarImageDataUrl: string | null;
   uidMode: UIDMode;
   disclosureMessage: string;
   appVersion: string;
@@ -138,13 +143,23 @@ const inputDeviceListOpen = ref(false);
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const profileDisplayName = computed(() => {
-  const uid = props.currentUid.trim();
-  if (!uid) return "Unknown User";
-  if (uid.length <= 16) return uid;
-  return `${uid.slice(0, 12)}…${uid.slice(-4)}`;
+  const username = props.profileDisplayName.trim();
+  if (!username) return "Unknown User";
+  return username;
 });
 const profileAvatarText = computed(() => profileDisplayName.value.slice(0, 1).toUpperCase());
 const profileHandle = computed(() => `@${props.currentUid.trim() || "uid_unbound"}`);
+const profileAvatarPreset = computed(() => avatarPresetById(props.profileAvatarPresetId));
+const hasUploadedProfileAvatar = computed(() => {
+  return props.profileAvatarMode === "uploaded" && Boolean(props.profileAvatarImageDataUrl);
+});
+const profileAvatarStyle = computed(() => {
+  if (hasUploadedProfileAvatar.value) return {};
+  return {
+    background: profileAvatarPreset.value.gradient,
+    color: profileAvatarPreset.value.accent
+  };
+});
 const selectedOutputDeviceLabel = computed(() => {
   const selected = props.outputDevices.find((device) => device.deviceId === props.selectedOutputDeviceId);
   if (selected) return selected.label;
@@ -581,8 +596,9 @@ onBeforeUnmount(() => {
 
       <div class="user-dock-main">
         <button type="button" class="user-identity-btn" @click="toggleProfileCard">
-          <div class="avatar-pill" :class="{ 'is-speaking': localVoiceTransmitting }">
-            {{ profileAvatarText }}
+          <div class="avatar-pill" :class="{ 'is-speaking': localVoiceTransmitting }" :style="profileAvatarStyle">
+            <img v-if="hasUploadedProfileAvatar" class="avatar-pill-image" :src="profileAvatarImageDataUrl ?? ''" alt="" />
+            <template v-else>{{ profileAvatarText }}</template>
             <span class="presence-dot" :class="`is-${presenceStatus}`" />
           </div>
           <div class="user-meta">
@@ -804,6 +820,10 @@ onBeforeUnmount(() => {
         v-if="profileCardOpen"
         :server-name="serverName"
         :current-uid="currentUid"
+        :profile-display-name="profileDisplayName"
+        :profile-avatar-mode="profileAvatarMode"
+        :profile-avatar-preset-id="profileAvatarPresetId"
+        :profile-avatar-image-data-url="profileAvatarImageDataUrl"
         :uid-mode="uidMode"
         :disclosure-message="disclosureMessage"
         :app-version="appVersion"
