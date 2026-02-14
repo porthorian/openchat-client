@@ -8,7 +8,7 @@ This document defines backend assumptions required by the OpenChat client. It is
 - The client must degrade gracefully when optional capabilities are unavailable.
 - Per-server contract differences are supported through capability flags.
 - User profile and personal identity metadata are user-owned and local-only by default.
-- Server-side identity knowledge is limited to an opaque unique user identifier (`user_uid`) plus protocol-required proofs.
+- Baseline server-side identity knowledge is limited to an opaque unique user identifier (`user_uid`) plus protocol-required proofs, unless optional profile sync is explicitly enabled.
 
 ## 2) Server Identity and Capability Discovery
 
@@ -21,7 +21,7 @@ This document defines backend assumptions required by the OpenChat client. It is
 - `api_version`
 - `identity_handshake_modes` (list)
 - `user_uid_policy` (global UID accepted, server-scoped UID required, or both)
-- `profile_data_policy` (must declare `uid_only` compatibility for this client)
+- `profile_data_policy` (must declare `uid_only` compatibility; may additionally advertise profile-sync capability)
 - `transport` (WebSocket/SSE/polling support)
 - `features` (feature flags and limits)
 - `limits` (message size, upload size, rate limits)
@@ -31,16 +31,17 @@ This document defines backend assumptions required by the OpenChat client. It is
 - Probe capabilities before finalizing server join.
 - Store capability snapshot in server profile.
 - Re-probe on reconnect when server version changes.
-- Block or warn on servers that do not support `uid_only` profile policy.
+- Block or warn on servers that do not support required profile policy (`uid_only` baseline; profile sync when explicitly enabled by client feature flags).
 
 ## 3) Identity Binding Contract (UID-Only)
 
 ### Identity model
 - User identity root is generated/imported and stored locally by the client.
-- Backend receives only:
+- Baseline backend receives only:
   - `user_uid` (opaque unique identifier)
   - required proof material for handshake/session continuity
-- Backend must not require user profile fields such as name, email, avatar, or phone.
+- Backend must not require user profile fields such as name, email, avatar, or phone for baseline compatibility.
+- Optional profile sync extension is defined in `docs/architecture/profile-sync-contract.md`.
 
 ### Handshake expectations
 - Server advertises supported handshake mode(s).
@@ -55,7 +56,7 @@ This document defines backend assumptions required by the OpenChat client. It is
 ### Client constraints
 - Sensitive material never persisted in plain local storage.
 - Identity/session state is tied to `server_id`.
-- UI must clearly disclose that only UID/proof data is shared with server.
+- UI must clearly disclose whether shared data is `uid_only` or expanded profile fields.
 
 ## 4) Session Tokens (Optional)
 - Servers may issue session tokens after identity binding.
@@ -85,7 +86,8 @@ All realtime events should include:
 
 ### Author identity in events/messages
 - Message and presence events should use `author_uid` / `user_uid`.
-- No server-required personal profile payloads are assumed by this client.
+- No personal profile payloads are required for baseline compatibility.
+- Profile-bearing payload behavior is defined in `docs/architecture/profile-sync-contract.md` when that capability is enabled.
 
 ### Delivery and ordering assumptions
 - Server should provide monotonic event identifiers per stream.
@@ -178,7 +180,7 @@ Backends should emit explicit events for:
 - HTTPS required in production use.
 - Certificate mismatch or insecure transport should trigger explicit client warnings.
 - Servers must not require privileged renderer execution patterns.
-- Servers compatible with this client must support a UID-only identity boundary.
+- Servers compatible with this client must support a UID-only identity boundary, with profile sync only as an explicit opt-in extension.
 
 ## 14) Contract Testing Strategy
 - Client integration tests use contract fixtures for capabilities and error shapes.
@@ -207,7 +209,11 @@ Moderation-capable backends should expose moderation policy in discovery payload
 - Enforcement endpoints for immediate safety actions and finalized vote actions.
 - Audit/event feed exposing moderation case and action lifecycle metadata.
 
-## 16) Open Questions
+## 16) Optional Profile Sync Extension
+- For consistent cross-client display name/avatar rendering, use `docs/architecture/profile-sync-contract.md`.
+- This extension must remain capability-gated and user-disclosed.
+
+## 17) Open Questions
 - Should default `user_uid` mode be global or server-scoped pseudonymous projection?
 - Standard schema package location for shared contracts across repositories.
 - Minimum supported API version policy for the first stable release.

@@ -6,6 +6,7 @@ This section defines the client architecture, major constraints, and accepted te
 - ADR index: `docs/architecture/adrs/README.md`
 - ADR template: `docs/architecture/adrs/ADR_TEMPLATE.md`
 - Backend contract: `docs/architecture/backend-contract.md`
+- Profile sync contract (draft): `docs/architecture/profile-sync-contract.md`
 - Design system architecture: `docs/architecture/design-system.md`
 - WebRTC test strategy: `docs/architecture/webrtc-test-strategy.md`
 - Implementation open questions: `docs/architecture/implementation-open-questions.md`
