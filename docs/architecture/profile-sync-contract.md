@@ -21,16 +21,38 @@ Backends that support profile sync should expose a `profile` capability object i
 - `scope` (`global` or `server_scoped`)
 - `fields` (must include `display_name`; avatar optional)
 - `avatar_modes` (subset of `generated`, `uploaded`)
-- `display_name` rules:
-- `min_length`
-- `max_length`
-- `pattern` (optional validation regex identifier)
-- `avatar_upload` rules (required when `uploaded` is supported):
-- `max_bytes`
-- `mime_types` (e.g. `image/png`, `image/jpeg`, `image/webp`)
-- `max_width`
-- `max_height`
+- `display_name.min_length`
+- `display_name.max_length`
+- `display_name.pattern` (optional validation regex identifier)
+- `avatar_upload.max_bytes` (required when `uploaded` is supported)
+- `avatar_upload.mime_types` (e.g. `image/png`, `image/jpeg`, `image/webp`)
+- `avatar_upload.max_width`
+- `avatar_upload.max_height`
 - `realtime_event` (expected value: `profile_updated`)
+
+### Example capability snippet
+```json
+{
+  "profile": {
+    "enabled": true,
+    "scope": "global",
+    "fields": ["display_name", "avatar"],
+    "avatar_modes": ["generated", "uploaded"],
+    "display_name": {
+      "min_length": 2,
+      "max_length": 32
+    },
+    "avatar_upload": {
+      "max_bytes": 2097152,
+      "mime_types": ["image/png", "image/jpeg", "image/webp"],
+      "max_width": 1024,
+      "max_height": 1024
+    },
+    "realtime_event": "profile_updated",
+    "message_author_profile_mode": "snapshot"
+  }
+}
+```
 
 ## 4) Profile Data Model
 
@@ -57,7 +79,7 @@ Backends that support profile sync should expose a `profile` capability object i
 
 ### `PUT /v1/profile/me`
 - Purpose: update caller profile metadata.
-- Request body:
+- Request body fields:
 - `display_name`
 - `avatar_mode`
 - `avatar_preset_id` (when generated)
@@ -71,7 +93,7 @@ Backends that support profile sync should expose a `profile` capability object i
 - Purpose: upload avatar image when `uploaded` mode is supported.
 - Request: `multipart/form-data` with `file`.
 - Validation: enforce `avatar_upload` capability constraints.
-- Response:
+- Response fields:
 - `avatar_asset_id`
 - `avatar_url` (optional)
 - `width`
@@ -83,6 +105,35 @@ Backends that support profile sync should expose a `profile` capability object i
 - Purpose: resolve profile data for multiple users in one request.
 - Response: list of canonical profile objects.
 - Requirement: support at least 100 UIDs per request (or advertise lower limit).
+
+### Example update request
+```http
+PUT /v1/profile/me
+If-Match: 12
+Content-Type: application/json
+```
+
+```json
+{
+  "display_name": "Vinnie",
+  "avatar_mode": "generated",
+  "avatar_preset_id": "preset_04"
+}
+```
+
+### Example update response
+```json
+{
+  "user_uid": "uid_30ff8d49",
+  "display_name": "Vinnie",
+  "avatar_mode": "generated",
+  "avatar_preset_id": "preset_04",
+  "avatar_asset_id": null,
+  "avatar_url": null,
+  "profile_version": 13,
+  "updated_at": "2026-02-14T18:44:11Z"
+}
+```
 
 ## 6) Realtime Contract
 
@@ -98,6 +149,26 @@ Backends that support profile sync should expose a `profile` capability object i
 - `avatar_asset_id` (if uploaded)
 - `avatar_url` (optional)
 - `updated_at`
+
+### Example event
+```json
+{
+  "event_type": "profile_updated",
+  "server_id": "srv_harbor",
+  "event_id": "evt_10922",
+  "timestamp": "2026-02-14T18:44:12Z",
+  "payload": {
+    "user_uid": "uid_30ff8d49",
+    "profile_version": 13,
+    "display_name": "Vinnie",
+    "avatar_mode": "generated",
+    "avatar_preset_id": "preset_04",
+    "avatar_asset_id": null,
+    "avatar_url": null,
+    "updated_at": "2026-02-14T18:44:11Z"
+  }
+}
+```
 
 ### Delivery expectations
 - Emit to all connected clients in affected scope (`global` or server-scoped membership).
