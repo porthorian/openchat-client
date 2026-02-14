@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",
-    "pinia": "^2.1.7",
+    "pinia": "^3.0.4",
     "primevue": "^4.0.0",
     "vue": "^3.4.0"
   },
