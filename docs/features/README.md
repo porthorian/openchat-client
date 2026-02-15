@@ -21,5 +21,6 @@ All user-facing features must have a feature spec before implementation.
 - `0006-settings-accessibility.md` (Draft)
 - `0007-voice-video-webrtc.md` (Draft)
 - `0008-moderation-and-governance.md` (Draft)
+- `0009-server-context-menu-todo.md` (Draft TODO)
 
 Identity baseline for all MVP specs: servers should only receive `user_uid` and required protocol proofs unless explicitly approved by ADR.

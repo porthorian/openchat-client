@@ -443,6 +443,7 @@ export function useWorkspaceShell() {
 
   onMounted(async () => {
     identity.initializeIdentity();
+    chat.hydrateNotificationPreferences();
     registry.hydrateFromStorage();
     void call.refreshInputDevices();
     void call.refreshOutputDevices();
@@ -938,7 +939,11 @@ export function useWorkspaceShell() {
   const serverRailProps = computed(() => ({
     servers: registry.servers,
     activeServerId: appUI.activeServerId,
-    unreadByServer: unreadByServer.value
+    unreadByServer: unreadByServer.value,
+    mutedByServer: registry.servers.reduce<Record<string, boolean>>((summary, server) => {
+      summary[server.serverId] = chat.serverMutedFor(server.serverId);
+      return summary;
+    }, {})
   }));
 
   const channelPaneProps = computed(() => ({
@@ -1028,7 +1033,10 @@ export function useWorkspaceShell() {
 
   const serverRailListeners = {
     selectServer,
-    addServer: openAddServerDialog
+    addServer: openAddServerDialog,
+    toggleServerMuted: (serverId: string) => {
+      chat.toggleServerMuted(serverId);
+    }
   };
 
   const channelPaneListeners = {

@@ -10,13 +10,13 @@ import {
   mdiMessage,
   mdiMicrophone,
   mdiMicrophoneOff,
+  mdiPlus,
   mdiPound,
   mdiVolumeHigh
 } from "@mdi/js";
 import type { AvatarMode, UIDMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import AppIcon from "./AppIcon.vue";
-import ChannelCategoryMenu from "./ChannelCategoryMenu.vue";
 import ChannelVoiceConnectedCard from "./ChannelVoiceConnectedCard.vue";
 import ProfilePanelCard from "./ProfilePanelCard.vue";
 import VoicePresencePopover from "./VoicePresencePopover.vue";
@@ -106,11 +106,17 @@ const emit = defineEmits<{
   updateOutputVolume: [value: number];
 }>();
 
-type CategoryMenuState = {
+type ChannelPaneMenuState = {
   open: boolean;
   x: number;
   y: number;
-  groupId: string | null;
+  categoryId: string | null;
+};
+
+type GuildHeaderMenuState = {
+  open: boolean;
+  x: number;
+  y: number;
 };
 
 type VoicePresencePopoverState = {
@@ -121,12 +127,18 @@ type VoicePresencePopoverState = {
 };
 
 const collapsedGroupIds = ref<Set<string>>(new Set());
-const categoryMenu = ref<CategoryMenuState>({
+const channelPaneMenu = ref<ChannelPaneMenuState>({
   open: false,
   x: 0,
   y: 0,
-  groupId: null
+  categoryId: null
 });
+const guildHeaderMenu = ref<GuildHeaderMenuState>({
+  open: false,
+  x: 0,
+  y: 0
+});
+const hideMutedChannels = ref(false);
 const voicePresencePopover = ref<VoicePresencePopoverState>({
   open: false,
   x: 0,
@@ -193,56 +205,76 @@ function toggleGroupCollapse(groupId: string): void {
   collapsedGroupIds.value = next;
 }
 
-function collapseAllGroups(): void {
-  collapsedGroupIds.value = new Set(props.groups.map((group) => group.id));
-  closeCategoryMenu();
+function closeChannelPaneMenu(): void {
+  channelPaneMenu.value.open = false;
+  channelPaneMenu.value.categoryId = null;
 }
 
-function markGroupAsRead(groupId: string): void {
-  const targetGroup = props.groups.find((group) => group.id === groupId);
-  if (targetGroup) {
-    const textChannelIDs = targetGroup.channels.filter((channel) => channel.type === "text").map((channel) => channel.id);
-    emit("markChannelsRead", textChannelIDs);
-  }
-  closeCategoryMenu();
-}
-
-function openCategoryMenu(groupId: string, event: MouseEvent): void {
+function openChannelPaneMenu(event: MouseEvent, categoryId: string | null = null): void {
+  closeGuildHeaderMenu();
   closeVoicePresencePopover();
   closeProfileCard();
   closeInputSettingsMenu();
   closeOutputSettingsMenu();
-  const menuWidth = 240;
-  const menuHeight = 246;
+  const menuWidth = 236;
+  const menuHeight = 208;
   const boundedX = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
   const boundedY = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
-  categoryMenu.value = {
+  channelPaneMenu.value = {
     open: true,
     x: boundedX,
     y: boundedY,
-    groupId
+    categoryId
   };
 }
 
-function closeCategoryMenu(): void {
-  categoryMenu.value.open = false;
-  categoryMenu.value.groupId = null;
+function openChannelPaneMenuFromList(event: MouseEvent): void {
+  const target = event.target as HTMLElement | null;
+  if (target?.closest(".category-header-row")) return;
+  if (target?.closest(".channel-row")) return;
+  if (target?.closest(".voice-member-row")) return;
+  if (target?.closest(".channel-pane-menu")) return;
+  openChannelPaneMenu(event, null);
 }
 
-function runMarkAsRead(): void {
-  if (!categoryMenu.value.groupId) return;
-  markGroupAsRead(categoryMenu.value.groupId);
+function closeGuildHeaderMenu(): void {
+  guildHeaderMenu.value.open = false;
 }
 
-function runCollapseCategory(): void {
-  if (!categoryMenu.value.groupId) return;
-  toggleGroupCollapse(categoryMenu.value.groupId);
-  closeCategoryMenu();
+function toggleGuildHeaderMenu(event: MouseEvent): void {
+  const trigger = event.currentTarget as HTMLElement | null;
+  if (!trigger) return;
+  if (guildHeaderMenu.value.open) {
+    closeGuildHeaderMenu();
+    return;
+  }
+  closeChannelPaneMenu();
+  closeVoicePresencePopover();
+  closeProfileCard();
+  closeInputSettingsMenu();
+  closeOutputSettingsMenu();
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuWidth = 248;
+  const menuHeight = 398;
+  const boundedX = Math.max(8, Math.min(triggerRect.left, window.innerWidth - menuWidth - 8));
+  const boundedY = Math.max(8, Math.min(triggerRect.bottom + 6, window.innerHeight - menuHeight - 8));
+  guildHeaderMenu.value = {
+    open: true,
+    x: boundedX,
+    y: boundedY
+  };
 }
 
-function isMenuGroupCollapsed(): boolean {
-  if (!categoryMenu.value.groupId) return false;
-  return isGroupCollapsed(categoryMenu.value.groupId);
+function runGuildHeaderAction(): void {
+  closeGuildHeaderMenu();
+}
+
+function runChannelPaneAction(): void {
+  closeChannelPaneMenu();
+}
+
+function toggleHideMutedChannels(): void {
+  hideMutedChannels.value = !hideMutedChannels.value;
 }
 
 function participantsForVoiceChannel(channelId: string): VoiceParticipant[] {
@@ -280,7 +312,8 @@ function scheduleVoicePresencePopoverClose(): void {
 }
 
 function openVoicePresencePopover(participant: VoiceParticipant, event: MouseEvent): void {
-  closeCategoryMenu();
+  closeGuildHeaderMenu();
+  closeChannelPaneMenu();
   closeProfileCard();
   closeInputSettingsMenu();
   closeOutputSettingsMenu();
@@ -304,8 +337,16 @@ function openVoicePresencePopover(participant: VoiceParticipant, event: MouseEve
 
 function onWindowPointerDown(event: PointerEvent): void {
   const target = event.target as HTMLElement | null;
-  if (!target?.closest(".category-menu") && !target?.closest(".category-header")) {
-    closeCategoryMenu();
+  if (!target?.closest(".guild-menu") && !target?.closest(".guild-header-name-btn")) {
+    closeGuildHeaderMenu();
+  }
+
+  if (
+    !target?.closest(".channel-pane-menu") &&
+    !target?.closest(".category-header-row") &&
+    !target?.closest(".category-plus-btn")
+  ) {
+    closeChannelPaneMenu();
   }
 
   if (!target?.closest(".voice-presence-popover") && !target?.closest(".voice-member-row")) {
@@ -335,7 +376,8 @@ function onWindowPointerDown(event: PointerEvent): void {
 
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
-    closeCategoryMenu();
+    closeGuildHeaderMenu();
+    closeChannelPaneMenu();
     closeVoicePresencePopover();
     closeProfileCard();
     closeInputSettingsMenu();
@@ -345,7 +387,8 @@ function onWindowKeydown(event: KeyboardEvent): void {
 
 function toggleProfileCard(): void {
   profileCardOpen.value = !profileCardOpen.value;
-  closeCategoryMenu();
+  closeGuildHeaderMenu();
+  closeChannelPaneMenu();
   closeVoicePresencePopover();
   closeInputSettingsMenu();
   closeOutputSettingsMenu();
@@ -362,7 +405,8 @@ function setPresenceStatus(status: PresenceStatus): void {
 function toggleInputSettingsMenu(): void {
   inputSettingsMenuOpen.value = !inputSettingsMenuOpen.value;
   if (inputSettingsMenuOpen.value) {
-    closeCategoryMenu();
+    closeGuildHeaderMenu();
+    closeChannelPaneMenu();
     closeVoicePresencePopover();
     profileCardOpen.value = false;
     closeOutputSettingsMenu();
@@ -381,7 +425,8 @@ function toggleOutputSettingsMenu(): void {
   outputSettingsMenuOpen.value = !outputSettingsMenuOpen.value;
   if (outputSettingsMenuOpen.value) {
     outputDeviceListOpen.value = false;
-    closeCategoryMenu();
+    closeGuildHeaderMenu();
+    closeChannelPaneMenu();
     closeVoicePresencePopover();
     profileCardOpen.value = false;
     closeInputSettingsMenu();
@@ -477,13 +522,95 @@ onBeforeUnmount(() => {
   <aside ref="channelPaneRef" class="channel-pane">
     <header class="guild-header">
       <div class="guild-header-copy">
-        <h2>{{ serverName }}</h2>
+        <button
+          type="button"
+          class="guild-header-name-btn"
+          aria-label="Open server actions"
+          :aria-expanded="guildHeaderMenu.open"
+          aria-haspopup="menu"
+          @click="toggleGuildHeaderMenu"
+        >
+          <span class="guild-header-name">{{ serverName }}</span>
+          <AppIcon :path="mdiChevronDown" :size="16" class="guild-header-name-chevron" :class="{ 'is-open': guildHeaderMenu.open }" />
+        </button>
         <small class="guild-header-build">{{ serverBuildLabel }}</small>
       </div>
       <button type="button" class="guild-header-action" aria-label="Invite people">
         <AppIcon :path="mdiAccountMultiplePlus" :size="36" />
       </button>
     </header>
+    <section
+      v-if="guildHeaderMenu.open"
+      class="guild-menu"
+      role="menu"
+      aria-label="Server quick actions"
+      :style="{ left: `${guildHeaderMenu.x}px`, top: `${guildHeaderMenu.y}px` }"
+    >
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Invite to Server
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiAccountMultiplePlus" :size="17" />
+        </span>
+      </button>
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Server Settings
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiCogOutline" :size="17" />
+        </span>
+      </button>
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Create Channel
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiPlus" :size="17" />
+        </span>
+      </button>
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Create Category
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiPlus" :size="17" />
+        </span>
+      </button>
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Create Event
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiPlus" :size="17" />
+        </span>
+      </button>
+
+      <div class="guild-menu-divider" />
+
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Notification Settings
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiCogOutline" :size="17" />
+        </span>
+      </button>
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Privacy Settings
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiCogOutline" :size="17" />
+        </span>
+      </button>
+
+      <div class="guild-menu-divider" />
+
+      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+        Edit Per-server Profile
+        <span class="guild-menu-icon">
+          <AppIcon :path="mdiCogOutline" :size="17" />
+        </span>
+      </button>
+      <button
+        type="button"
+        class="guild-menu-item"
+        role="menuitemcheckbox"
+        :aria-checked="hideMutedChannels"
+        @click="toggleHideMutedChannels"
+      >
+        Hide Muted Channels
+        <span class="guild-menu-checkbox" :class="{ 'is-checked': hideMutedChannels }" />
+      </button>
+    </section>
 
     <label class="filter-row guild-filter">
       <span class="sr-only">Filter channels</span>
@@ -495,27 +622,37 @@ onBeforeUnmount(() => {
       />
     </label>
 
-    <div class="channel-list">
+    <div class="channel-list" @contextmenu.prevent="openChannelPaneMenuFromList($event)">
       <section
         v-for="group in groups"
         :key="group.id"
         class="channel-group"
         :class="{ 'is-collapsed': isGroupCollapsed(group.id) }"
       >
-        <button
-          type="button"
-          class="category-header"
-          :class="{
-            'is-voice-label': group.kind === 'voice'
-          }"
-          @click="toggleGroupCollapse(group.id)"
-          @contextmenu.prevent="openCategoryMenu(group.id, $event)"
+        <div
+          class="category-header-row"
+          :class="{ 'is-voice-label': group.kind === 'voice' }"
+          @contextmenu.prevent.stop="openChannelPaneMenu($event, group.id)"
         >
-          <span class="category-chevron" :class="{ 'is-collapsed': isGroupCollapsed(group.id) }">
-            <AppIcon :path="mdiChevronDown" :size="12" />
-          </span>
-          <span class="category-label">{{ group.label }}</span>
-        </button>
+          <button
+            type="button"
+            class="category-header"
+            @click="toggleGroupCollapse(group.id)"
+          >
+            <span class="category-chevron" :class="{ 'is-collapsed': isGroupCollapsed(group.id) }">
+              <AppIcon :path="mdiChevronDown" :size="12" />
+            </span>
+            <span class="category-label">{{ group.label }}</span>
+          </button>
+          <button
+            type="button"
+            class="category-plus-btn"
+            aria-label="Category actions"
+            @click.stop="openChannelPaneMenu($event, group.id)"
+          >
+            <AppIcon :path="mdiPlus" :size="26" />
+          </button>
+        </div>
 
         <div v-show="!isGroupCollapsed(group.id)" class="channel-group-body">
           <div v-for="channel in group.channels" :key="channel.id" class="channel-entry">
@@ -572,16 +709,36 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <ChannelCategoryMenu
-        :open="categoryMenu.open"
-        :x="categoryMenu.x"
-        :y="categoryMenu.y"
-        :is-collapsed="isMenuGroupCollapsed()"
-        @mark-as-read="runMarkAsRead"
-        @collapse-category="runCollapseCategory"
-        @collapse-all="collapseAllGroups"
-        @close="closeCategoryMenu"
-      />
+      <section
+        v-if="channelPaneMenu.open"
+        class="channel-pane-menu"
+        role="menu"
+        aria-label="Channel pane actions"
+        :style="{ left: `${channelPaneMenu.x}px`, top: `${channelPaneMenu.y}px` }"
+      >
+        <button
+          type="button"
+          class="channel-pane-menu-item"
+          role="menuitemcheckbox"
+          :aria-checked="hideMutedChannels"
+          @click="toggleHideMutedChannels"
+        >
+          Hide Muted Channels
+          <span class="channel-pane-menu-checkbox" :class="{ 'is-checked': hideMutedChannels }" />
+        </button>
+
+        <div class="channel-pane-menu-divider" />
+
+        <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
+          Create Channel
+        </button>
+        <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
+          Create Category
+        </button>
+        <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
+          Invite to Server
+        </button>
+      </section>
 
       <VoicePresencePopover
         :open="voicePresencePopover.open"
