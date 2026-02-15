@@ -11,6 +11,8 @@
   --ui-scrollbar-track: transparent;
   --ui-scrollbar-thumb-border: 3px solid transparent;
   --ui-scrollbar-thumb-min: 42px;
+  --composer-row-height: 68px;
+  --user-dock-rail-overlap: 36px;
 }
 
 html,
@@ -108,14 +110,35 @@ button {
   grid-template-columns: 72px 305px minmax(0, 1fr) 0;
 }
 
-.layout > .server-rail {
-  grid-column: 1;
+.layout > .sidebar-stack {
+  grid-column: 1 / 3;
   grid-row: 1 / 4;
+  min-width: 0;
+  min-height: 0;
+  overflow: visible;
+  display: grid;
+  grid-template-columns: 72px 305px;
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
-.layout > .channel-pane {
+.sidebar-stack > .server-rail {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  min-height: 0;
+}
+
+.sidebar-stack > .channel-pane {
   grid-column: 2;
-  grid-row: 1 / 4;
+  grid-row: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-stack > .user-dock {
+  grid-column: 2;
+  grid-row: 2;
+  position: relative;
+  z-index: 3;
 }
 
 .workspace-toolbar {
@@ -459,7 +482,7 @@ button {
   background: linear-gradient(180deg, #1b1d25, #171821 62%);
   border-right: 1px solid #111216;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto 1fr;
 }
 
 .guild-header {
@@ -517,15 +540,6 @@ button {
 
 .guild-header-name-chevron.is-open {
   transform: rotate(180deg);
-}
-
-.guild-header h2 {
-  font-size: 1.07rem;
-  font-weight: 700;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .guild-header-build {
@@ -1034,8 +1048,8 @@ button {
 }
 
 .user-dock {
-  min-height: 58px;
-  padding: 8px;
+  min-height: 0;
+  padding: 0 8px 12px;
   display: grid;
   gap: 8px;
   position: relative;
@@ -1192,18 +1206,27 @@ button {
 }
 
 .user-dock-main {
-  min-height: 42px;
+  min-height: var(--composer-row-height);
+  height: var(--composer-row-height);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  border: 1px solid #2f323d;
+  border-radius: var(--radius-md);
+  background: #23252d;
+  padding: 0 10px;
+  width: calc(100% + var(--user-dock-rail-overlap));
+  margin-left: calc(-1 * var(--user-dock-rail-overlap));
+  position: relative;
+  z-index: 2;
 }
 
 .user-identity-btn {
   min-width: 0;
   max-width: 190px;
   flex: 1;
-  height: 42px;
+  height: 48px;
   border-radius: 8px;
   background: transparent;
   display: flex;
@@ -1469,6 +1492,12 @@ button {
   z-index: 74;
 }
 
+.input-settings-menu,
+.output-settings-menu,
+.device-selection-popout {
+  z-index: 95;
+}
+
 .output-settings-row {
   width: 100%;
   min-height: 42px;
@@ -1545,6 +1574,26 @@ button {
   box-shadow: 0 16px 28px rgb(0 0 0 / 42%);
   max-height: 192px;
   overflow-y: auto;
+}
+
+.input-device-popout {
+  left: calc(100% + 8px);
+  right: auto;
+}
+
+.output-device-popout {
+  left: auto;
+  right: calc(100% + 8px);
+}
+
+.output-device-popout.is-side-right {
+  left: calc(100% + 8px);
+  right: auto;
+}
+
+.output-device-popout.is-side-left {
+  left: auto;
+  right: calc(100% + 8px);
 }
 
 .device-selection-option {
@@ -2527,7 +2576,7 @@ button {
 }
 
 .composer {
-  height: 74px;
+  height: var(--composer-row-height);
   margin: 0 16px 12px;
   border: 1px solid #2f323d;
   border-radius: var(--radius-md);
@@ -3017,6 +3066,10 @@ button {
     grid-template-columns: 72px 280px minmax(0, 1fr);
   }
 
+  .layout > .sidebar-stack {
+    grid-template-columns: 72px 280px;
+  }
+
   .workspace-toolbar,
   .call-bar-slot {
     grid-column: 3 / 4;
@@ -3040,8 +3093,13 @@ button {
     grid-template-columns: 72px 1fr;
   }
 
-  .channel-pane {
+  .sidebar-stack > .channel-pane,
+  .sidebar-stack > .user-dock {
     display: none;
+  }
+
+  .layout > .sidebar-stack {
+    grid-template-columns: 72px 0;
   }
 
   .workspace-toolbar,

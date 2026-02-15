@@ -178,6 +178,7 @@ export function useWorkspaceShell() {
   const activeServer = computed(() => registry.byId(appUI.activeServerId));
   const activeSession = computed(() => session.sessionsByServer[appUI.activeServerId]);
   const activeRealtimeState = computed(() => chat.realtimeStateFor(appUI.activeServerId));
+  const activeServerAudioPrefs = computed(() => call.audioPrefsByServer[appUI.activeServerId] ?? null);
 
   function orderChannelGroups(groups: ChannelGroup[]): ChannelGroup[] {
     const voiceGroups = groups.filter((group) => group.kind === "voice");
@@ -953,11 +954,20 @@ export function useWorkspaceShell() {
     groups: filteredChannelGroups.value,
     activeChannelId: appUI.activeChannelId,
     activeVoiceChannelId: activeVoiceChannelId.value,
+    voiceParticipantsByChannel: activeVoiceParticipants.value,
+    voiceSpeakingParticipantIdsByChannel: activeVoiceSpeakingParticipants.value,
+    filterValue: appUI.channelFilter
+  }));
+
+  const userDockProps = computed(() => ({
+    serverName: activeServer.value?.displayName ?? "Unknown Server",
     activeVoiceChannelName: activeVoiceChannelName.value,
     callState: activeCallSession.value?.state ?? "idle",
     callParticipantCount: activeCallSession.value?.participants.length ?? 0,
-    micMuted: activeCallSession.value?.micMuted ?? false,
-    deafened: activeCallSession.value?.deafened ?? false,
+    callErrorMessage: activeCallSession.value?.errorMessage ?? null,
+    localVoiceTransmitting: localVoiceTransmitting.value,
+    micMuted: activeCallSession.value?.micMuted ?? activeServerAudioPrefs.value?.micMuted ?? false,
+    deafened: activeCallSession.value?.deafened ?? activeServerAudioPrefs.value?.deafened ?? false,
     inputDevices: call.inputDevices,
     selectedInputDeviceId: call.selectedInputDeviceId,
     inputVolume: call.inputVolume,
@@ -967,18 +977,13 @@ export function useWorkspaceShell() {
     outputSelectionSupported: call.outputSelectionSupported,
     outputVolume: call.outputVolume,
     outputDeviceError: call.outputDeviceError,
-    callErrorMessage: activeCallSession.value?.errorMessage ?? null,
-    voiceParticipantsByChannel: activeVoiceParticipants.value,
-    voiceSpeakingParticipantIdsByChannel: activeVoiceSpeakingParticipants.value,
-    localVoiceTransmitting: localVoiceTransmitting.value,
-    filterValue: appUI.channelFilter,
     currentUid: activeSession.value?.userUID ?? "uid_unbound",
     profileDisplayName: identity.profileDisplayName,
     profileAvatarMode: identity.avatarMode,
     profileAvatarPresetId: identity.avatarPresetId,
     profileAvatarImageDataUrl: identity.avatarImageDataUrl,
-    disclosureMessage: identity.disclosureMessage,
     uidMode: identity.uidMode,
+    disclosureMessage: identity.disclosureMessage,
     startupError: startupError.value
   }));
 
@@ -1043,7 +1048,10 @@ export function useWorkspaceShell() {
     selectChannel,
     selectVoiceChannel,
     updateFilter: setChannelFilter,
-    markChannelsRead,
+    markChannelsRead
+  };
+
+  const userDockListeners = {
     toggleUidMode: cycleUIDMode,
     toggleMic,
     toggleDeafen,
@@ -1088,10 +1096,12 @@ export function useWorkspaceShell() {
     channelPaneProps,
     workspaceToolbarProps,
     chatPaneProps,
+    userDockProps,
     membersPaneProps,
     addServerDialogProps,
     serverRailListeners,
     channelPaneListeners,
+    userDockListeners,
     workspaceToolbarListeners,
     chatPaneListeners,
     membersPaneListeners,

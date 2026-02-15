@@ -37,6 +37,13 @@ export type AudioInputDevice = {
 type CallState = {
   activeVoiceChannelByServer: Record<string, string | null>;
   sessionsByKey: Record<string, ChannelCallSession>;
+  audioPrefsByServer: Record<
+    string,
+    {
+      micMuted: boolean;
+      deafened: boolean;
+    }
+  >;
   inputDevices: AudioInputDevice[];
   selectedInputDeviceId: string;
   inputVolume: number;
@@ -390,6 +397,7 @@ export const useCallStore = defineStore("call", {
   state: (): CallState => ({
     activeVoiceChannelByServer: {},
     sessionsByKey: {},
+    audioPrefsByServer: {},
     inputDevices: [
       {
         deviceId: DEFAULT_OUTPUT_DEVICE_ID,
@@ -421,9 +429,24 @@ export const useCallStore = defineStore("call", {
       },
     activeChannelFor: (state) => (serverId: string): string | null => {
       return state.activeVoiceChannelByServer[serverId] ?? null;
+    },
+    micMutedForServer: (state) => (serverId: string): boolean => {
+      return state.audioPrefsByServer[serverId]?.micMuted ?? false;
+    },
+    deafenedForServer: (state) => (serverId: string): boolean => {
+      return state.audioPrefsByServer[serverId]?.deafened ?? false;
     }
   },
   actions: {
+    ensureAudioPrefs(serverId: string): { micMuted: boolean; deafened: boolean } {
+      if (!this.audioPrefsByServer[serverId]) {
+        this.audioPrefsByServer[serverId] = {
+          micMuted: false,
+          deafened: false
+        };
+      }
+      return this.audioPrefsByServer[serverId];
+    },
     ensureSession(serverId: string, channelId: string): string {
       const key = sessionKey(serverId, channelId);
       if (!this.sessionsByKey[key]) {
@@ -731,7 +754,10 @@ export const useCallStore = defineStore("call", {
       void this.refreshOutputDevices();
       void this.selectOutputDevice(this.selectedOutputDeviceId);
       const key = this.ensureSession(params.serverId, params.channelId);
+      const audioPrefs = this.ensureAudioPrefs(params.serverId);
       const session = this.sessionsByKey[key];
+      session.micMuted = audioPrefs.micMuted;
+      session.deafened = audioPrefs.deafened;
       this.stopMicUplink(params.serverId, params.channelId);
       session.state = "joining";
       session.errorMessage = null;
@@ -941,11 +967,30 @@ export const useCallStore = defineStore("call", {
       }
     },
     toggleMic(serverId: string): void {
+      const audioPrefs = this.ensureAudioPrefs(serverId);
       const channelId = this.activeVoiceChannelByServer[serverId];
-      if (!channelId) return;
+      if (!channelId) {
+        if (audioPrefs.deafened) {
+          audioPrefs.deafened = false;
+          audioPrefs.micMuted = false;
+          setPlaybackMuted(false);
+          return;
+        }
+        audioPrefs.micMuted = !audioPrefs.micMuted;
+        return;
+      }
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
-      session.micMuted = !session.micMuted;
+      if (session.deafened) {
+        session.deafened = false;
+        session.micMuted = false;
+        audioPrefs.deafened = false;
+        audioPrefs.micMuted = false;
+        setPlaybackMuted(false);
+      } else {
+        session.micMuted = !session.micMuted;
+        audioPrefs.micMuted = session.micMuted;
+      }
       if (!session.micMuted && session.state === "active") {
         void this.startMicUplink(serverId, channelId);
       }
@@ -962,11 +1007,23 @@ export const useCallStore = defineStore("call", {
       });
     },
     toggleDeafen(serverId: string): void {
+      const audioPrefs = this.ensureAudioPrefs(serverId);
       const channelId = this.activeVoiceChannelByServer[serverId];
-      if (!channelId) return;
+      if (!channelId) {
+        audioPrefs.deafened = !audioPrefs.deafened;
+        if (audioPrefs.deafened) {
+          audioPrefs.micMuted = true;
+        }
+        return;
+      }
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
       session.deafened = !session.deafened;
+      if (session.deafened) {
+        session.micMuted = true;
+      }
+      audioPrefs.deafened = session.deafened;
+      audioPrefs.micMuted = session.micMuted;
       setPlaybackMuted(session.deafened);
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;

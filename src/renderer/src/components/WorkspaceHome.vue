@@ -2,6 +2,7 @@
 import AddServerDialog from "./AddServerDialog.vue";
 import AppTaskbar from "./AppTaskbar.vue";
 import ChannelPane from "./ChannelPane.vue";
+import ChannelPaneUserDock from "./ChannelPaneUserDock.vue";
 import ChatPane from "./ChatPane.vue";
 import MembersPane from "./MembersPane.vue";
 import ServerRail from "./ServerRail.vue";
@@ -16,8 +17,11 @@ const shell = useWorkspaceShell();
     <AppTaskbar v-bind="shell.taskbarProps.value" />
 
     <section class="layout" :class="shell.layoutClasses.value">
-      <ServerRail v-bind="shell.serverRailProps.value" v-on="shell.serverRailListeners" />
-      <ChannelPane v-bind="shell.channelPaneProps.value" v-on="shell.channelPaneListeners" />
+      <div class="sidebar-stack">
+        <ServerRail v-bind="shell.serverRailProps.value" v-on="shell.serverRailListeners" />
+        <ChannelPane v-bind="shell.channelPaneProps.value" v-on="shell.channelPaneListeners" />
+        <ChannelPaneUserDock v-bind="shell.userDockProps.value" v-on="shell.userDockListeners" />
+      </div>
       <WorkspaceToolbar v-bind="shell.workspaceToolbarProps.value" v-on="shell.workspaceToolbarListeners" />
       <ChatPane class="chat-pane-slot" v-bind="shell.chatPaneProps.value" v-on="shell.chatPaneListeners" />
       <MembersPane class="members-pane-slot" v-bind="shell.membersPaneProps.value" v-on="shell.membersPaneListeners" />
