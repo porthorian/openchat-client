@@ -102,6 +102,7 @@ const selectedInputDeviceLabel = computed(() => {
 const canSelectInputDevice = computed(() => props.inputDevices.length > 1);
 const canSelectOutputDevice = computed(() => props.outputSelectionSupported && props.outputDevices.length > 1);
 const micEffectivelyMuted = computed(() => props.micMuted || props.deafened);
+const hasVoiceConnectedCard = computed(() => props.callState !== "idle" || Boolean(props.activeVoiceChannelName));
 
 function onWindowPointerDown(event: PointerEvent): void {
   const target = event.target as HTMLElement | null;
@@ -275,238 +276,240 @@ onBeforeUnmount(() => {
 
 <template>
   <footer class="user-dock">
-    <ChannelVoiceConnectedCard
-      :server-name="serverName"
-      :active-voice-channel-name="activeVoiceChannelName"
-      :call-state="callState"
-      :call-participant-count="callParticipantCount"
-      :call-error-message="callErrorMessage"
-      @leave="emit('leaveVoiceChannel')"
-    />
+    <div class="user-dock-panel" :class="{ 'has-voice-card': hasVoiceConnectedCard }">
+      <ChannelVoiceConnectedCard
+        :server-name="serverName"
+        :active-voice-channel-name="activeVoiceChannelName"
+        :call-state="callState"
+        :call-participant-count="callParticipantCount"
+        :call-error-message="callErrorMessage"
+        @leave="emit('leaveVoiceChannel')"
+      />
 
-    <div class="user-dock-main">
-      <button type="button" class="user-identity-btn" @click="toggleProfileCard">
-        <div class="avatar-pill" :class="{ 'is-speaking': localVoiceTransmitting }" :style="profileAvatarStyle">
-          <img v-if="hasUploadedProfileAvatar" class="avatar-pill-image" :src="profileAvatarImageDataUrl ?? ''" alt="" />
-          <template v-else>{{ profileAvatarText }}</template>
-          <span class="presence-dot" :class="`is-${presenceStatus}`" />
-        </div>
-        <div class="user-meta">
-          <strong>{{ profileDisplayNameLabel }}</strong>
-          <small>{{ profileHandle }}</small>
-        </div>
-      </button>
-
-      <div class="user-actions">
-        <div class="voice-control-group input-control-wrap" :class="{ 'is-muted': micEffectivelyMuted }">
-          <button
-            type="button"
-            class="voice-control-btn"
-            :aria-label="micEffectivelyMuted ? 'Unmute microphone' : 'Mute microphone'"
-            @click="emit('toggleMic')"
-          >
-            <AppIcon :path="micEffectivelyMuted ? mdiMicrophoneOff : mdiMicrophone" :size="16" />
-          </button>
-          <button
-            type="button"
-            class="voice-control-btn voice-control-caret input-settings-trigger"
-            :class="{ 'is-open': inputSettingsMenuOpen }"
-            aria-label="Input options"
-            :aria-expanded="inputSettingsMenuOpen"
-            aria-controls="input-settings-menu"
-            @click.stop="toggleInputSettingsMenu"
-          >
-            <AppIcon :path="mdiChevronDown" :size="14" />
-            <span class="icon-tooltip">Input Options</span>
-          </button>
-
-          <section
-            v-if="inputSettingsMenuOpen"
-            id="input-settings-menu"
-            class="input-settings-menu"
-            role="dialog"
-            aria-label="Input settings"
-          >
-            <div class="device-row-wrap">
-              <button
-                type="button"
-                class="input-settings-row input-device-trigger"
-                :disabled="!canSelectInputDevice"
-                :aria-expanded="inputDeviceListOpen"
-                @click.stop="toggleInputDeviceList"
-              >
-                <span class="input-settings-copy">
-                  <strong>Input Device</strong>
-                  <small>{{ selectedInputDeviceLabel }}</small>
-                </span>
-                <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': inputDeviceListOpen }" />
-              </button>
-
-              <section v-if="inputDeviceListOpen" class="device-selection-popout input-device-popout" role="dialog">
-                <button
-                  v-for="device in inputDevices"
-                  :key="device.deviceId"
-                  type="button"
-                  class="device-selection-option"
-                  :class="{ 'is-active': device.deviceId === selectedInputDeviceId }"
-                  @click="chooseInputDevice(device.deviceId)"
-                >
-                  <span class="device-selection-copy">
-                    <strong>{{ splitDeviceLabel(device.label).primary }}</strong>
-                    <small v-if="splitDeviceLabel(device.label).secondary">
-                      {{ splitDeviceLabel(device.label).secondary }}
-                    </small>
-                  </span>
-                  <span class="device-selection-indicator" :class="{ 'is-active': device.deviceId === selectedInputDeviceId }" />
-                </button>
-                <button type="button" class="device-selection-more" @click="refreshInputDevices">Show more...</button>
-                <p v-if="inputDeviceError" class="output-settings-error">{{ inputDeviceError }}</p>
-              </section>
-            </div>
-
-            <button type="button" class="input-settings-row">
-              <span class="input-settings-copy">
-                <strong>Input Profile</strong>
-                <small>Custom</small>
-              </span>
-              <AppIcon :path="mdiChevronRight" :size="16" />
-            </button>
-
-            <div class="input-settings-divider" />
-
-            <div class="input-volume-group">
-              <p>Input Volume</p>
-              <label class="input-volume-slider">
-                <span class="sr-only">Input volume</span>
-                <input
-                  :value="inputVolume"
-                  type="range"
-                  min="0"
-                  max="200"
-                  @input="emit('updateInputVolume', Number(($event.target as HTMLInputElement).value))"
-                />
-              </label>
-            </div>
-
-            <div class="input-settings-divider" />
-
-            <button type="button" class="input-settings-row is-settings">
-              <span class="input-settings-copy">
-                <strong>Voice Settings</strong>
-              </span>
-              <AppIcon :path="mdiCogOutline" :size="16" />
-            </button>
-          </section>
-        </div>
-
-        <div class="voice-control-group output-control-wrap" :class="{ 'is-muted': deafened }">
-          <button
-            type="button"
-            class="voice-control-btn"
-            :aria-label="deafened ? 'Undeafen audio' : 'Deafen audio'"
-            @click="emit('toggleDeafen')"
-          >
-            <AppIcon :path="deafened ? mdiHeadphonesOff : mdiHeadphones" :size="16" />
-          </button>
-          <button
-            type="button"
-            class="voice-control-btn voice-control-caret output-settings-trigger"
-            :class="{ 'is-open': outputSettingsMenuOpen }"
-            aria-label="Output options"
-            :aria-expanded="outputSettingsMenuOpen"
-            aria-controls="output-settings-menu"
-            @click.stop="toggleOutputSettingsMenu"
-          >
-            <AppIcon :path="mdiChevronDown" :size="14" />
-            <span class="icon-tooltip">Output Options</span>
-          </button>
-
-          <section
-            v-if="outputSettingsMenuOpen"
-            id="output-settings-menu"
-            class="output-settings-menu"
-            role="dialog"
-            aria-label="Output settings"
-          >
-            <div class="device-row-wrap">
-              <button
-                type="button"
-                class="output-settings-row output-device-trigger"
-                :disabled="!canSelectOutputDevice"
-                :aria-expanded="outputDeviceListOpen"
-                @click.stop="toggleOutputDeviceList($event)"
-              >
-                <span class="output-settings-copy">
-                  <strong>Output Device</strong>
-                  <small>{{ selectedOutputDeviceLabel }}</small>
-                </span>
-                <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': outputDeviceListOpen }" />
-              </button>
-
-              <section
-                v-if="outputDeviceListOpen && canSelectOutputDevice"
-                :class="[
-                  'device-selection-popout',
-                  'output-device-popout',
-                  outputDevicePopoutSide === 'right' ? 'is-side-right' : 'is-side-left'
-                ]"
-                role="dialog"
-              >
-                <button
-                  v-for="device in outputDevices"
-                  :key="device.deviceId"
-                  type="button"
-                  class="device-selection-option"
-                  :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
-                  @click="chooseOutputDevice(device.deviceId)"
-                >
-                  <span class="device-selection-copy">
-                    <strong>{{ splitDeviceLabel(device.label).primary }}</strong>
-                    <small v-if="splitDeviceLabel(device.label).secondary">
-                      {{ splitDeviceLabel(device.label).secondary }}
-                    </small>
-                  </span>
-                  <span
-                    class="device-selection-indicator"
-                    :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
-                  />
-                </button>
-                <button type="button" class="device-selection-more" @click="emit('openOutputOptions')">Show more...</button>
-              </section>
-            </div>
-
-            <div class="output-settings-divider" />
-
-            <div class="output-volume-group">
-              <p>Output Volume</p>
-              <label class="output-volume-slider">
-                <span class="sr-only">Output volume</span>
-                <input
-                  :value="outputVolume"
-                  type="range"
-                  min="0"
-                  max="100"
-                  @input="emit('updateOutputVolume', Number(($event.target as HTMLInputElement).value))"
-                />
-              </label>
-            </div>
-
-            <div class="output-settings-divider" />
-
-            <button type="button" class="output-settings-row is-settings">
-              <span class="output-settings-copy">
-                <strong>Voice Settings</strong>
-              </span>
-              <AppIcon :path="mdiCogOutline" :size="16" />
-            </button>
-
-            <p v-if="outputDeviceError" class="output-settings-error">{{ outputDeviceError }}</p>
-          </section>
-        </div>
-
-        <button type="button" class="user-settings-btn">
-          <AppIcon :path="mdiCogOutline" :size="16" />
+      <div class="user-dock-main">
+        <button type="button" class="user-identity-btn" @click="toggleProfileCard">
+          <div class="avatar-pill" :class="{ 'is-speaking': localVoiceTransmitting }" :style="profileAvatarStyle">
+            <img v-if="hasUploadedProfileAvatar" class="avatar-pill-image" :src="profileAvatarImageDataUrl ?? ''" alt="" />
+            <template v-else>{{ profileAvatarText }}</template>
+            <span class="presence-dot" :class="`is-${presenceStatus}`" />
+          </div>
+          <div class="user-meta">
+            <strong>{{ profileDisplayNameLabel }}</strong>
+            <small>{{ profileHandle }}</small>
+          </div>
         </button>
+
+        <div class="user-actions">
+          <div class="voice-control-group input-control-wrap" :class="{ 'is-muted': micEffectivelyMuted }">
+            <button
+              type="button"
+              class="voice-control-btn"
+              :aria-label="micEffectivelyMuted ? 'Unmute microphone' : 'Mute microphone'"
+              @click="emit('toggleMic')"
+            >
+              <AppIcon :path="micEffectivelyMuted ? mdiMicrophoneOff : mdiMicrophone" :size="16" />
+            </button>
+            <button
+              type="button"
+              class="voice-control-btn voice-control-caret input-settings-trigger"
+              :class="{ 'is-open': inputSettingsMenuOpen }"
+              aria-label="Input options"
+              :aria-expanded="inputSettingsMenuOpen"
+              aria-controls="input-settings-menu"
+              @click.stop="toggleInputSettingsMenu"
+            >
+              <AppIcon :path="mdiChevronDown" :size="14" />
+              <span class="icon-tooltip">Input Options</span>
+            </button>
+
+            <section
+              v-if="inputSettingsMenuOpen"
+              id="input-settings-menu"
+              class="input-settings-menu"
+              role="dialog"
+              aria-label="Input settings"
+            >
+              <div class="device-row-wrap">
+                <button
+                  type="button"
+                  class="input-settings-row input-device-trigger"
+                  :disabled="!canSelectInputDevice"
+                  :aria-expanded="inputDeviceListOpen"
+                  @click.stop="toggleInputDeviceList"
+                >
+                  <span class="input-settings-copy">
+                    <strong>Input Device</strong>
+                    <small>{{ selectedInputDeviceLabel }}</small>
+                  </span>
+                  <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': inputDeviceListOpen }" />
+                </button>
+
+                <section v-if="inputDeviceListOpen" class="device-selection-popout input-device-popout" role="dialog">
+                  <button
+                    v-for="device in inputDevices"
+                    :key="device.deviceId"
+                    type="button"
+                    class="device-selection-option"
+                    :class="{ 'is-active': device.deviceId === selectedInputDeviceId }"
+                    @click="chooseInputDevice(device.deviceId)"
+                  >
+                    <span class="device-selection-copy">
+                      <strong>{{ splitDeviceLabel(device.label).primary }}</strong>
+                      <small v-if="splitDeviceLabel(device.label).secondary">
+                        {{ splitDeviceLabel(device.label).secondary }}
+                      </small>
+                    </span>
+                    <span class="device-selection-indicator" :class="{ 'is-active': device.deviceId === selectedInputDeviceId }" />
+                  </button>
+                  <button type="button" class="device-selection-more" @click="refreshInputDevices">Show more...</button>
+                  <p v-if="inputDeviceError" class="output-settings-error">{{ inputDeviceError }}</p>
+                </section>
+              </div>
+
+              <button type="button" class="input-settings-row">
+                <span class="input-settings-copy">
+                  <strong>Input Profile</strong>
+                  <small>Custom</small>
+                </span>
+                <AppIcon :path="mdiChevronRight" :size="16" />
+              </button>
+
+              <div class="input-settings-divider" />
+
+              <div class="input-volume-group">
+                <p>Input Volume</p>
+                <label class="input-volume-slider">
+                  <span class="sr-only">Input volume</span>
+                  <input
+                    :value="inputVolume"
+                    type="range"
+                    min="0"
+                    max="200"
+                    @input="emit('updateInputVolume', Number(($event.target as HTMLInputElement).value))"
+                  />
+                </label>
+              </div>
+
+              <div class="input-settings-divider" />
+
+              <button type="button" class="input-settings-row is-settings">
+                <span class="input-settings-copy">
+                  <strong>Voice Settings</strong>
+                </span>
+                <AppIcon :path="mdiCogOutline" :size="16" />
+              </button>
+            </section>
+          </div>
+
+          <div class="voice-control-group output-control-wrap" :class="{ 'is-muted': deafened }">
+            <button
+              type="button"
+              class="voice-control-btn"
+              :aria-label="deafened ? 'Undeafen audio' : 'Deafen audio'"
+              @click="emit('toggleDeafen')"
+            >
+              <AppIcon :path="deafened ? mdiHeadphonesOff : mdiHeadphones" :size="16" />
+            </button>
+            <button
+              type="button"
+              class="voice-control-btn voice-control-caret output-settings-trigger"
+              :class="{ 'is-open': outputSettingsMenuOpen }"
+              aria-label="Output options"
+              :aria-expanded="outputSettingsMenuOpen"
+              aria-controls="output-settings-menu"
+              @click.stop="toggleOutputSettingsMenu"
+            >
+              <AppIcon :path="mdiChevronDown" :size="14" />
+              <span class="icon-tooltip">Output Options</span>
+            </button>
+
+            <section
+              v-if="outputSettingsMenuOpen"
+              id="output-settings-menu"
+              class="output-settings-menu"
+              role="dialog"
+              aria-label="Output settings"
+            >
+              <div class="device-row-wrap">
+                <button
+                  type="button"
+                  class="output-settings-row output-device-trigger"
+                  :disabled="!canSelectOutputDevice"
+                  :aria-expanded="outputDeviceListOpen"
+                  @click.stop="toggleOutputDeviceList($event)"
+                >
+                  <span class="output-settings-copy">
+                    <strong>Output Device</strong>
+                    <small>{{ selectedOutputDeviceLabel }}</small>
+                  </span>
+                  <AppIcon :path="mdiChevronRight" :size="16" :class="{ 'is-rotated': outputDeviceListOpen }" />
+                </button>
+
+                <section
+                  v-if="outputDeviceListOpen && canSelectOutputDevice"
+                  :class="[
+                    'device-selection-popout',
+                    'output-device-popout',
+                    outputDevicePopoutSide === 'right' ? 'is-side-right' : 'is-side-left'
+                  ]"
+                  role="dialog"
+                >
+                  <button
+                    v-for="device in outputDevices"
+                    :key="device.deviceId"
+                    type="button"
+                    class="device-selection-option"
+                    :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
+                    @click="chooseOutputDevice(device.deviceId)"
+                  >
+                    <span class="device-selection-copy">
+                      <strong>{{ splitDeviceLabel(device.label).primary }}</strong>
+                      <small v-if="splitDeviceLabel(device.label).secondary">
+                        {{ splitDeviceLabel(device.label).secondary }}
+                      </small>
+                    </span>
+                    <span
+                      class="device-selection-indicator"
+                      :class="{ 'is-active': device.deviceId === selectedOutputDeviceId }"
+                    />
+                  </button>
+                  <button type="button" class="device-selection-more" @click="emit('openOutputOptions')">Show more...</button>
+                </section>
+              </div>
+
+              <div class="output-settings-divider" />
+
+              <div class="output-volume-group">
+                <p>Output Volume</p>
+                <label class="output-volume-slider">
+                  <span class="sr-only">Output volume</span>
+                  <input
+                    :value="outputVolume"
+                    type="range"
+                    min="0"
+                    max="100"
+                    @input="emit('updateOutputVolume', Number(($event.target as HTMLInputElement).value))"
+                  />
+                </label>
+              </div>
+
+              <div class="output-settings-divider" />
+
+              <button type="button" class="output-settings-row is-settings">
+                <span class="output-settings-copy">
+                  <strong>Voice Settings</strong>
+                </span>
+                <AppIcon :path="mdiCogOutline" :size="16" />
+              </button>
+
+              <p v-if="outputDeviceError" class="output-settings-error">{{ outputDeviceError }}</p>
+            </section>
+          </div>
+
+          <button type="button" class="user-settings-btn">
+            <AppIcon :path="mdiCogOutline" :size="16" />
+          </button>
+        </div>
       </div>
     </div>
 
