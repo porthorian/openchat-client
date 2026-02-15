@@ -1068,6 +1068,33 @@ export const useCallStore = defineStore("call", {
         this.activeVoiceChannelByServer[serverId] = null;
       }
     },
+    clearServerState(serverId: string): void {
+      const activeChannelId = this.activeVoiceChannelByServer[serverId];
+      if (activeChannelId) {
+        this.leaveChannel(serverId, activeChannelId);
+      }
+
+      const keyPrefix = `${serverId}:`;
+      Object.keys(this.sessionsByKey).forEach((key) => {
+        if (!key.startsWith(keyPrefix)) return;
+        const channelId = key.slice(keyPrefix.length);
+        this.stopMicUplink(serverId, channelId);
+        localJoinIdentityByKey.delete(key);
+        this.clearSpeakingForSession(serverId, channelId);
+        const socket = socketsByKey.get(key);
+        if (socket) {
+          intentionallyClosed.add(key);
+          socket.close();
+          socketsByKey.delete(key);
+        }
+        delete this.sessionsByKey[key];
+        intentionallyClosed.delete(key);
+      });
+
+      delete this.activeVoiceChannelByServer[serverId];
+      delete this.audioPrefsByServer[serverId];
+      clearPlaybackState();
+    },
     disconnectAll(): void {
       Object.entries(this.activeVoiceChannelByServer).forEach(([serverId, channelId]) => {
         if (channelId) {

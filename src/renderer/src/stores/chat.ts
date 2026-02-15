@@ -933,6 +933,37 @@ export const useChatStore = defineStore("chat", {
       this.clearTypingForServer(serverId);
       realtimeConnectParamsByServer.delete(serverId);
     },
+    clearServerData(serverId: string): void {
+      const groups = this.groupsByServer[serverId] ?? [];
+      const channelIds: string[] = [];
+      groups.forEach((group) => {
+        group.channels.forEach((channel) => {
+          channelIds.push(channel.id);
+        });
+      });
+
+      this.disconnectServerRealtime(serverId);
+      delete this.groupsByServer[serverId];
+      delete this.membersByServer[serverId];
+      delete this.loadingByServer[serverId];
+      delete this.subscribedChannelByServer[serverId];
+      delete this.currentUserUIDByServer[serverId];
+      delete this.profilesByServer[serverId];
+      delete this.profileSyncStateByServer[serverId];
+      delete this.profileSyncAvailableByServer[serverId];
+
+      channelIds.forEach((channelId) => {
+        delete this.messagesByChannel[channelId];
+        delete this.presenceByChannel[channelId];
+        delete this.typingByChannel[channelId];
+        delete this.loadingMessagesByChannel[channelId];
+        delete this.sendingByChannel[channelId];
+        delete this.unreadByChannel[channelId];
+      });
+
+      delete this.serverMutedById[serverId];
+      this.persistNotificationPreferences();
+    },
     disconnectAllRealtime(): void {
       [...socketsByServer.keys()].forEach((serverId) => {
         this.disconnectServerRealtime(serverId);

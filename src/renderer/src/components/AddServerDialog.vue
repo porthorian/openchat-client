@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { DEFAULT_BACKEND_URL } from "../services/serverRegistryClient";
+
 type DiscoveredServerOption = {
   serverId: string;
   displayName: string;
@@ -67,7 +69,7 @@ function formatBuildLabel(buildVersion: string | null, buildCommit: string | nul
         <input
           type="text"
           :value="backendUrl"
-          placeholder="http://localhost:8080"
+          :placeholder="DEFAULT_BACKEND_URL"
           @input="emit('update:backendUrl', ($event.target as HTMLInputElement).value)"
         />
       </label>

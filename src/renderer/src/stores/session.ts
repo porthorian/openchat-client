@@ -25,6 +25,9 @@ export const useSessionStore = defineStore("session", {
     setSession(serverId: string, payload: ServerSession): void {
       this.sessionsByServer[serverId] = payload;
     },
+    clearSession(serverId: string): void {
+      delete this.sessionsByServer[serverId];
+    },
     setStatus(serverId: string, status: SessionStatus): void {
       const existing = this.sessionsByServer[serverId] ?? {
         ...baseSession

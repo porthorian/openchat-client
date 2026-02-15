@@ -70,8 +70,11 @@ export const useServerRegistryStore = defineStore("server-registry", {
     persistToStorage(): void {
       writeStoredServers(this.servers);
     },
-    async hydrateFromBackend(backendUrl = DEFAULT_BACKEND_URL): Promise<void> {
-      const servers = await fetchServerDirectory(backendUrl);
+    async hydrateFromBackend(
+      backendUrl = DEFAULT_BACKEND_URL,
+      auth?: { userUID: string; deviceID: string }
+    ): Promise<void> {
+      const servers = await fetchServerDirectory(backendUrl, auth);
       this.servers = servers;
       this.persistToStorage();
     },
@@ -83,6 +86,15 @@ export const useServerRegistryStore = defineStore("server-registry", {
         return true;
       }
       return false;
+    },
+    removeServer(serverId: string): boolean {
+      const initialLength = this.servers.length;
+      this.servers = this.servers.filter((item) => item.serverId !== serverId);
+      const removed = this.servers.length < initialLength;
+      if (removed) {
+        this.persistToStorage();
+      }
+      return removed;
     },
     setCapabilities(serverId: string, capabilities: ServerCapabilities): void {
       const target = this.servers.find((item) => item.serverId === serverId);

@@ -305,7 +305,7 @@ function completeCreateModel(): void {
         <input
           type="text"
           :value="backendUrl"
-          placeholder="http://localhost:8080"
+          :placeholder="DEFAULT_BACKEND_URL"
           @input="setBackendUrl(($event.target as HTMLInputElement).value)"
         />
       </label>

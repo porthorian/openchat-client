@@ -4,7 +4,12 @@ import type { Channel, ChannelGroup } from "@renderer/types/chat";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
-import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
+import {
+  DEFAULT_BACKEND_URL,
+  fetchServerDirectory,
+  leaveServerMembership,
+  ServerRegistryRequestError
+} from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { useAppUIStore, useCallStore, useChatStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
@@ -442,6 +447,59 @@ export function useWorkspaceShell() {
     }
   }
 
+  function isServerUnreachableError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("failed to fetch") ||
+      message.includes("networkerror") ||
+      message.includes("network request failed") ||
+      message.includes("load failed")
+    );
+  }
+
+  async function removeServerFromClient(serverId: string, reasonMessage: string): Promise<void> {
+    const wasActiveServer = appUI.activeServerId === serverId;
+    chat.clearServerData(serverId);
+    call.clearServerState(serverId);
+    session.clearSession(serverId);
+    appUI.clearServerContext(serverId);
+    registry.removeServer(serverId);
+
+    if (registry.servers.length === 0) {
+      appUI.setActiveServer("");
+      startupError.value = reasonMessage;
+      return;
+    }
+
+    if (!wasActiveServer) {
+      startupError.value = reasonMessage;
+      return;
+    }
+
+    const fallbackServerID = registry.servers[0].serverId;
+    appUI.setActiveServer(fallbackServerID);
+    startupError.value = reasonMessage;
+    await hydrateServerWithReachabilityHandling(fallbackServerID);
+  }
+
+  async function hydrateServerWithReachabilityHandling(serverId: string): Promise<void> {
+    const targetServer = registry.byId(serverId);
+    if (!targetServer) return;
+    try {
+      await hydrateServer(serverId);
+      startupError.value = null;
+    } catch (error) {
+      if (!isServerUnreachableError(error)) {
+        throw error;
+      }
+      await removeServerFromClient(
+        serverId,
+        `Removed unreachable server ${targetServer.displayName}. Add it again once reachable.`
+      );
+    }
+  }
+
   onMounted(async () => {
     identity.initializeIdentity();
     chat.hydrateNotificationPreferences();
@@ -457,7 +515,10 @@ export function useWorkspaceShell() {
 
     try {
       if (registry.servers.length === 0) {
-        await registry.hydrateFromBackend();
+        await registry.hydrateFromBackend(DEFAULT_BACKEND_URL, {
+          userUID: directoryRequesterUID(DEFAULT_BACKEND_URL),
+          deviceID: localDeviceID.value
+        });
       }
       if (registry.servers.length === 0) {
         startupError.value = "No servers available from backend.";
@@ -469,7 +530,7 @@ export function useWorkspaceShell() {
         appUI.setActiveServer(initialServerID);
       }
       startupError.value = null;
-      await hydrateServer(initialServerID);
+      await hydrateServerWithReachabilityHandling(initialServerID);
     } catch (error) {
       const connectError = (error as Error).message;
       startupError.value = startupError.value ? `${startupError.value} | ${connectError}` : connectError;
@@ -518,7 +579,37 @@ export function useWorkspaceShell() {
       chat.unsubscribeFromChannel(previousServerID, previousChannelID);
     }
     appUI.setActiveServer(serverId);
-    await hydrateServer(serverId);
+    await hydrateServerWithReachabilityHandling(serverId);
+  }
+
+  async function leaveServer(serverId: string): Promise<void> {
+    const leavingServer = registry.byId(serverId);
+    if (!leavingServer) return;
+
+    const leavingSession = session.sessionsByServer[serverId];
+    const userUID = leavingSession?.userUID || identity.getUIDForServer(serverId);
+
+    try {
+      await leaveServerMembership({
+        backendUrl: leavingServer.backendUrl,
+        serverId,
+        userUID,
+        deviceID: localDeviceID.value
+      });
+    } catch (error) {
+      if (isServerUnreachableError(error)) {
+        await removeServerFromClient(serverId, `Removed unreachable server ${leavingServer.displayName}.`);
+        return;
+      }
+      if (error instanceof ServerRegistryRequestError && error.status === 404) {
+        await removeServerFromClient(serverId, `Removed missing server ${leavingServer.displayName}.`);
+        return;
+      }
+      startupError.value = `Failed to leave server ${leavingServer.displayName}: ${(error as Error).message}`;
+      return;
+    }
+
+    await removeServerFromClient(serverId, "Left server.");
   }
 
   async function selectChannel(channelId: string): Promise<void> {
@@ -569,7 +660,7 @@ export function useWorkspaceShell() {
       });
     });
     chat.disconnectAllRealtime();
-    void hydrateServer(appUI.activeServerId);
+    void hydrateServerWithReachabilityHandling(appUI.activeServerId);
   }
 
   function toggleMembersPane(): void {
@@ -650,6 +741,11 @@ export function useWorkspaceShell() {
 
   function normalizeBackendURL(value: string): string {
     return value.trim().replace(/\/$/, "");
+  }
+
+  function directoryRequesterUID(backendUrl: string): string {
+    const scopeKey = normalizeBackendURL(backendUrl) || "server_directory";
+    return identity.getUIDForServer(`directory:${scopeKey}`);
   }
 
   function isLikelyLocalhost(url: URL): boolean {
@@ -804,7 +900,10 @@ export function useWorkspaceShell() {
     addServerForm.value.isSubmitting = true;
     addServerForm.value.errorMessage = null;
     try {
-      const discovered = await fetchServerDirectory(backendUrl);
+      const discovered = await fetchServerDirectory(backendUrl, {
+        userUID: directoryRequesterUID(backendUrl),
+        deviceID: localDeviceID.value
+      });
       if (discovered.length === 0) {
         addServerForm.value.errorMessage = `No servers available at ${backendUrl}/v1/servers`;
         addServerForm.value.discoveredServers = [];
@@ -882,7 +981,7 @@ export function useWorkspaceShell() {
       appUI.setActiveServer(profile.serverId);
       startupError.value = probe.warningMessage;
       isAddServerDialogOpen.value = false;
-      await hydrateServer(profile.serverId);
+      await hydrateServerWithReachabilityHandling(profile.serverId);
     } catch (error) {
       addServerForm.value.errorMessage = (error as Error).message;
     } finally {
@@ -1041,7 +1140,8 @@ export function useWorkspaceShell() {
     addServer: openAddServerDialog,
     toggleServerMuted: (serverId: string) => {
       chat.toggleServerMuted(serverId);
-    }
+    },
+    leaveServer
   };
 
   const channelPaneListeners = {

@@ -15,6 +15,7 @@ const emit = defineEmits<{
   selectServer: [serverId: string];
   addServer: [];
   toggleServerMuted: [serverId: string];
+  leaveServer: [serverId: string];
 }>();
 
 type ServerContextMenuState = {
@@ -74,6 +75,13 @@ function toggleServerMuted(): void {
   const serverId = serverContextMenu.value.serverId;
   if (!serverId) return;
   emit("toggleServerMuted", serverId);
+  closeServerContextMenu();
+}
+
+function leaveServerFromContextMenu(): void {
+  const serverId = serverContextMenu.value.serverId;
+  if (!serverId) return;
+  emit("leaveServer", serverId);
   closeServerContextMenu();
 }
 
@@ -193,7 +201,9 @@ onBeforeUnmount(() => {
 
       <div class="server-context-divider" />
 
-      <button type="button" class="server-context-item is-danger" role="menuitem" @click="runServerContextAction">Leave Server</button>
+      <button type="button" class="server-context-item is-danger" role="menuitem" @click="leaveServerFromContextMenu">
+        Leave Server
+      </button>
       <p v-if="selectedContextServer" class="server-context-caption">{{ selectedContextServer.displayName }}</p>
     </section>
   </aside>

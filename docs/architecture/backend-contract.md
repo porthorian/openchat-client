@@ -2,6 +2,10 @@
 
 This document defines backend assumptions required by the OpenChat client. It is a client-facing contract reference, not backend implementation guidance.
 
+## Contract Status
+- Maturity: `Pre-Alpha`
+- Stability expectation: endpoint shapes, capability fields, and behavior requirements may change before Beta.
+
 ## 1) Contract Principles
 - This repository remains client-only.
 - Backend behavior is represented by typed contracts and capability negotiation.
@@ -101,6 +105,31 @@ All realtime events should include:
 - Presence and typing update streams.
 
 The exact URI layout is backend-defined, but capabilities must describe available operations and versions.
+
+## 6.1) Server Membership Leave Contract
+
+### Required requester headers
+- `X-OpenChat-User-UID`
+- `X-OpenChat-Device-ID`
+
+### Directory read behavior
+- `GET /v1/servers` should return the requester-scoped joined server list.
+- If requester headers are omitted, backend may return a default/public directory view.
+
+### Leave endpoint
+- `DELETE /v1/servers/{server_id}/membership`
+  - marks membership as left for the requester identity.
+  - should be idempotent for repeated calls on the same server/user pair.
+  - response payload should include:
+    - `server_id`
+    - `user_uid`
+    - `left` (`true`)
+    - `left_at` (timestamp)
+
+### Error behavior
+- `404` for unknown `server_id`
+- `401` for missing/invalid identity in strict auth mode
+- standard error envelope (`code`, `message`, `retryable`)
 
 ## 7) Pagination and Synchronization
 - Cursor-based pagination is preferred for message history.
