@@ -2658,6 +2658,12 @@ button {
   line-height: 1.1;
 }
 
+.server-discovery-build {
+  color: #98a9ce;
+  font-size: 0.71rem;
+  font-style: italic;
+}
+
 .server-trust-pill {
   min-width: 76px;
   height: 22px;
@@ -2709,6 +2715,11 @@ button {
   font-size: 0.78rem;
   line-height: 1.2;
   overflow-wrap: anywhere;
+}
+
+.server-probe-build {
+  color: #a7b4d4;
+  font-style: italic;
 }
 
 .server-probe-warning {

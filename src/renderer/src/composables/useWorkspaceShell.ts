@@ -37,6 +37,8 @@ type ServerJoinProbeSummary = {
   serverName: string;
   backendUrl: string;
   trustState: ServerProfile["trustState"];
+  buildVersion: string | null;
+  buildCommit: string | null;
   userUidPolicy: ServerCapabilities["userUidPolicy"];
   identityHandshakeMode: ServerProfile["identityHandshakeStrategy"];
   messagingEnabled: boolean;
@@ -692,6 +694,8 @@ export function useWorkspaceShell() {
       serverName: capabilities.serverName,
       backendUrl,
       trustState,
+      buildVersion: capabilities.buildVersion,
+      buildCommit: capabilities.buildCommit,
       userUidPolicy: capabilities.userUidPolicy,
       identityHandshakeMode: toHandshakeStrategy(capabilities),
       messagingEnabled: capabilities.features.messaging,
@@ -739,6 +743,12 @@ export function useWorkspaceShell() {
       const summary = result.summary;
       addServerForm.value.probeSummary = summary;
       addServerForm.value.probedCapabilities = result.capabilities;
+      const selectedServerId = addServerForm.value.selectedDiscoveredServerId;
+      if (selectedServerId) {
+        addServerForm.value.discoveredServers = addServerForm.value.discoveredServers.map((server) =>
+          server.serverId === selectedServerId ? { ...server, capabilities: result.capabilities } : server
+        );
+      }
       if (!addServerForm.value.serverId.trim()) {
         addServerForm.value.serverId = summary.serverId;
       }
@@ -801,7 +811,14 @@ export function useWorkspaceShell() {
         return;
       }
 
-      addServerForm.value.discoveredServers = discovered;
+      addServerForm.value.discoveredServers = discovered.map((server) => {
+        const existing = registry.byId(server.serverId);
+        if (!existing?.capabilities) return server;
+        return {
+          ...server,
+          capabilities: existing.capabilities
+        };
+      });
       selectDiscoveredServer(discovered[0].serverId);
       await probeAddServerTarget();
     } catch (directoryError) {
@@ -998,7 +1015,13 @@ export function useWorkspaceShell() {
     displayName: addServerForm.value.displayName,
     errorMessage: addServerForm.value.errorMessage,
     isSubmitting: addServerForm.value.isSubmitting,
-    discoveredServers: addServerForm.value.discoveredServers,
+    discoveredServers: addServerForm.value.discoveredServers.map((server) => ({
+      serverId: server.serverId,
+      displayName: server.displayName,
+      trustState: server.trustState,
+      buildVersion: server.capabilities?.buildVersion ?? null,
+      buildCommit: server.capabilities?.buildCommit ?? null
+    })),
     selectedDiscoveredServerId: addServerForm.value.selectedDiscoveredServerId,
     probeSummary: addServerForm.value.probeSummary
   }));

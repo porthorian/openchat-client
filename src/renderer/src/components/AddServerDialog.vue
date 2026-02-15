@@ -3,6 +3,8 @@ type DiscoveredServerOption = {
   serverId: string;
   displayName: string;
   trustState: "verified" | "unverified";
+  buildVersion: string | null;
+  buildCommit: string | null;
 };
 
 type ServerJoinProbeSummary = {
@@ -10,6 +12,8 @@ type ServerJoinProbeSummary = {
   serverName: string;
   backendUrl: string;
   trustState: "verified" | "unverified";
+  buildVersion: string | null;
+  buildCommit: string | null;
   userUidPolicy: "server_scoped" | "global" | "either";
   identityHandshakeMode: "challenge_signature" | "token_proof";
   messagingEnabled: boolean;
@@ -41,6 +45,13 @@ const emit = defineEmits<{
   "update:serverId": [value: string];
   "update:displayName": [value: string];
 }>();
+
+function formatBuildLabel(buildVersion: string | null, buildCommit: string | null): string {
+  const versionLabel = buildVersion?.trim() || "unknown";
+  const commitValue = buildCommit?.trim() || "unknown";
+  const commitLabel = commitValue.length > 12 ? commitValue.slice(0, 12) : commitValue;
+  return `${versionLabel} · ${commitLabel}`;
+}
 </script>
 
 <template>
@@ -80,6 +91,7 @@ const emit = defineEmits<{
           <span class="server-discovery-copy">
             <strong>{{ server.displayName }}</strong>
             <small>{{ server.serverId }}</small>
+            <small class="server-discovery-build">Build {{ formatBuildLabel(server.buildVersion, server.buildCommit) }}</small>
           </span>
           <span class="server-trust-pill" :class="`is-${server.trustState}`">
             {{ server.trustState === "verified" ? "Verified" : "Unverified" }}
@@ -128,6 +140,7 @@ const emit = defineEmits<{
           </span>
         </header>
         <p>{{ probeSummary.backendUrl }}</p>
+        <p class="server-probe-build">Build: {{ formatBuildLabel(probeSummary.buildVersion, probeSummary.buildCommit) }}</p>
         <p>UID policy: {{ probeSummary.userUidPolicy }} · Handshake: {{ probeSummary.identityHandshakeMode }}</p>
         <p>
           Features:
