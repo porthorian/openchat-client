@@ -36,7 +36,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "23.9.0"
           cache: "yarn"
 
       - name: Enable Corepack + Yarn 4
@@ -47,6 +47,21 @@ jobs:
 
       - name: Install dependencies
         run: corepack yarn install --immutable
+      
+      - name: Stamp package version (CI only)
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const packageJsonPath = "package.json";
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+          const baseVersion = String(packageJson.version || "0.0.0").split("-")[0].split("+")[0];
+          const runNumber = process.env.GITHUB_RUN_NUMBER || "0";
+          const shortSha = (process.env.GITHUB_SHA || "local").slice(0, 7).toLowerCase();
+          const stampedVersion = `${baseVersion}-ci.${runNumber}.${shortSha}`;
+          packageJson.version = stampedVersion;
+          fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          console.log(`Stamped package.json version: ${stampedVersion}`);
+          NODE
 
       - name: Import Apple code signing certificate
         if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_CERTIFICATE_PASSWORD != ''
