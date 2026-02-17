@@ -1,6 +1,7 @@
 appId: io.openchat.client
 productName: OpenChat Client
 asar: true
+icon: logo.png
 
 directories:
   output: release
@@ -8,6 +9,7 @@ directories:
 files:
   - out/**
   - package.json
+  - logo.png
 
 extraMetadata:
   main: out/main/index.js
@@ -16,10 +18,12 @@ artifactName: openchat-client-${version}-${os}-${arch}.${ext}
 
 mac:
   category: public.app-category.social-networking
+  icon: logo.png
   target:
     - dmg
 
 win:
+  icon: logo.png
   target:
     - target: nsis
       arch:
@@ -28,6 +32,7 @@ win:
 linux:
   category: Network
   maintainer: OpenChat Maintainers <maintainers@marone.us>
+  icon: logo.png
   target:
     - AppImage
     - deb
