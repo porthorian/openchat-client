@@ -115,6 +115,27 @@ function closePolicyDocument(): void {
   activePolicyDocument.value = null;
 }
 
+function agreeToPolicyDocument(): void {
+  if (activePolicyDocument.value === "privacy") {
+    hasAcceptedPrivacyPolicy.value = true;
+  } else if (activePolicyDocument.value === "terms") {
+    hasAcceptedTermsOfService.value = true;
+  }
+  errorMessage.value = null;
+  closePolicyDocument();
+}
+
+function declinePolicyDocument(): void {
+  if (activePolicyDocument.value === "privacy") {
+    hasAcceptedPrivacyPolicy.value = false;
+    errorMessage.value = "You cannot use OpenChat while you disagree with the Privacy Policy.";
+  } else if (activePolicyDocument.value === "terms") {
+    hasAcceptedTermsOfService.value = false;
+    errorMessage.value = "You cannot use OpenChat while you disagree with the Terms of Service.";
+  }
+  closePolicyDocument();
+}
+
 function completeSetup(): void {
   const normalizedUsername = username.value.trim();
   if (!normalizedUsername) {
@@ -126,12 +147,20 @@ function completeSetup(): void {
     errorMessage.value = "Age verification is required.";
     return;
   }
-  if (!hasViewedPrivacyPolicy.value || !hasAcceptedPrivacyPolicy.value) {
-    errorMessage.value = "View and accept the Privacy Policy to continue.";
+  if (!hasViewedPrivacyPolicy.value) {
+    errorMessage.value = "View the Privacy Policy to continue.";
     return;
   }
-  if (!hasViewedTermsOfService.value || !hasAcceptedTermsOfService.value) {
-    errorMessage.value = "View and accept the Terms of Service to continue.";
+  if (!hasAcceptedPrivacyPolicy.value) {
+    errorMessage.value = "You cannot use OpenChat while you disagree with the Privacy Policy.";
+    return;
+  }
+  if (!hasViewedTermsOfService.value) {
+    errorMessage.value = "View the Terms of Service to continue.";
+    return;
+  }
+  if (!hasAcceptedTermsOfService.value) {
+    errorMessage.value = "You cannot use OpenChat while you disagree with the Terms of Service.";
     return;
   }
 
@@ -296,7 +325,8 @@ function completeSetup(): void {
             <p>By continuing, you acknowledge these terms for this client application.</p>
           </div>
           <footer>
-            <button type="button" class="policy-close-btn" @click="closePolicyDocument">Done</button>
+            <button type="button" class="policy-decline-btn" @click="declinePolicyDocument">Decline</button>
+            <button type="button" class="policy-close-btn" @click="agreeToPolicyDocument">Agree</button>
           </footer>
         </section>
       </div>
@@ -585,7 +615,17 @@ function completeSetup(): void {
 
 .policy-modal footer {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
+}
+
+.policy-decline-btn {
+  min-height: 34px;
+  border-radius: 8px;
+  border: 1px solid #73444b;
+  background: #4d2b31;
+  color: #ffe5e8;
+  padding: 0 12px;
 }
 
 .policy-close-btn {
