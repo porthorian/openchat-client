@@ -1,6 +1,6 @@
 # Contributing to OpenChat Client
 
-Thanks for contributing. This project is in early planning and documentation-first execution.
+Thanks for contributing. This project is `Pre-Alpha` with active implementation and documentation-first change control.
 
 ## Repository Scope
 - This repository is strictly for the client UI and client runtime integration.

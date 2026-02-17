@@ -57,7 +57,7 @@ AT-enabled servers need reliable message interoperability while preserving OpenC
 - Error model distinguishes transient vs permanent sync errors.
 
 ## Client Data Model and State Impact
-- Stores touched: `useMessageStore`, `useChannelStore`, `useSessionStore`.
+- Stores touched: planned message-sync split stores (current baseline uses `useChatStore` and `useSessionStore`).
 - Caches affected: per-channel message window caches and send queue metadata.
 - Persistence requirements:
   - persist bounded local send queue metadata per `server_id`

@@ -47,9 +47,9 @@ Adopt a WebRTC architecture with SFU-first topology for channel voice/video:
 - Introduces more detailed capability schema and contract testing requirements.
 
 ## Implementation Notes
-- Add frontend capability interfaces for RTC negotiation and capability snapshots.
-- Add feature spec for voice/video UX, state, security, and testing (`0007-voice-video-webrtc.md`).
-- Planned frontend modules/stores:
-  - `media-layer` services (device manager, session controller, connection monitor)
-  - `useCallStore` keyed by `server_id` and `channel_id`
-- Update client contract fixtures and integration tests with RTC capability variants.
+- Frontend capability interfaces for RTC negotiation and capability snapshots are implemented.
+- Voice/media state is implemented in `useCallStore` keyed by `server_id` and `channel_id`.
+- Feature spec exists for voice/video UX, state, security, and testing (`0007-voice-video-webrtc.md`).
+- Remaining work:
+  - peer-connection/media architecture hardening against this ADR target
+  - expanded integration/e2e coverage for RTC capability variants

@@ -13,14 +13,15 @@ Use Pinia as the primary state management layer for client and UI state.
 
 Adopt a service-layer-first model for transport and request logic. Optional `@tanstack/vue-query` usage is allowed where request cache/synchronization complexity justifies it.
 
-Planned store boundaries:
-- `useAppUiStore`
+Current store boundaries in this repository:
+- `useAppUIStore`
+- `useIdentityStore`
 - `useSessionStore`
 - `useServerRegistryStore`
-- `useChannelStore`
-- `useMessageStore`
-- `usePresenceStore`
-- `useSettingsStore`
+- `useChatStore` (channels, messages, presence, typing, profile sync, unread state, notification prefs)
+- `useCallStore`
+
+The original planned split (`useChannelStore`/`useMessageStore`/`usePresenceStore`/`useSettingsStore`) is deferred; those concerns are currently consolidated in `useChatStore` for M1/M2 velocity.
 
 ## Alternatives Considered
 - Vuex.

@@ -19,7 +19,7 @@ All user-facing features must have a feature spec before implementation.
 - `0004-message-timeline-composer.md` (Implemented M2 baseline)
 - `0005-notifications.md` (Implemented M2 baseline)
 - `0006-settings-accessibility.md` (Draft)
-- `0007-voice-video-webrtc.md` (Draft)
+- `0007-voice-video-webrtc.md` (In progress: voice baseline implemented)
 - `0008-moderation-and-governance.md` (Draft)
 - `0009-server-context-menu-todo.md` (Draft TODO)
 - `0010-atproto-identity-linking.md` (Draft)

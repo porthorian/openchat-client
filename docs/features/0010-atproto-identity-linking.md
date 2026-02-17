@@ -47,7 +47,7 @@ Users need a safe, server-scoped way to link an AT identity so AT-enabled server
 - Degraded/Offline: unable to re-verify existing link; state marked stale.
 
 ## Backend Capability Assumptions
-- `GET /client/capabilities` includes `atproto.enabled`, `atproto.auth_modes`, and compatibility flags.
+- `GET /v1/client/capabilities` (or legacy `/client/capabilities`) includes `atproto.enabled`, `atproto.auth_modes`, and compatibility flags.
 - Backend exposes link lifecycle endpoints (naming TBD in contract):
   - start link challenge
   - complete link challenge

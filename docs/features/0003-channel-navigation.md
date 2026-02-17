@@ -2,7 +2,7 @@
 
 - Status: Implemented (M2 baseline)
 - Owners: Maintainers
-- Last Updated: 2026-02-13
+- Last Updated: 2026-02-17
 - Related ADRs: `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0004-multi-server-isolation.md`
 - Related Issues: TBD
 
@@ -11,16 +11,16 @@ Users need fast, predictable navigation across channel structures while preservi
 
 ## User Stories
 - As a user, I want to browse channels by section so that I can find conversations quickly.
-- As a user, I want unread and mention indicators so that I can prioritize attention.
-- As a user, I want keyboard shortcuts for channel navigation so that I can move efficiently.
+- As a user, I want unread indicators so that I can prioritize attention.
+- As a user, I want fast click-based channel switching with clear active state.
 
 ## Scope
 ### In Scope
 - Channel tree rendering with sections/categories.
 - Active channel selection and persisted per-server context.
-- Unread and mention badges in channel list.
-- Keyboard navigation for channel focus and selection.
+- Unread badges in channel list.
 - Search/filter within channel list (basic text filter).
+- Voice channel list rows with active-channel state and participant badges.
 
 ### Out of Scope
 - Channel creation/edit moderation interfaces.
@@ -30,7 +30,7 @@ Users need fast, predictable navigation across channel structures while preservi
 ## UX Flow
 1. User selects a server.
 2. Client loads channel tree for that server.
-3. User navigates via click or keyboard.
+3. User navigates via click.
 4. Active channel updates timeline pane.
 5. Unread indicators update in real time.
 
@@ -42,13 +42,12 @@ Users need fast, predictable navigation across channel structures while preservi
 - Degraded/Offline: stale channel tree shown with offline indicator.
 
 ## Backend Capability Assumptions
-- Endpoint or stream available for channel list.
-- Channel payload includes ids, hierarchy metadata, permissions, unread stats.
-- Update events for channel changes and unread counters.
+- `GET /v1/servers/{server_id}/channels` returns channel groups and channels.
+- Realtime events provide message activity used for unread increments.
 
 ## Client Data Model and State Impact
-- Stores touched: `useChannelStore`, `useServerRegistryStore`, `useAppUiStore`.
-- Caches affected: channel tree cache per `server_id`.
+- Stores touched: `useChatStore`, `useServerRegistryStore`, `useAppUiStore`.
+- Caches affected: channel groups per `server_id` and per-channel unread counts.
 - Persistence requirements: persist last active channel per server (non-sensitive).
 
 ## Security and Privacy Considerations
@@ -57,21 +56,18 @@ Users need fast, predictable navigation across channel structures while preservi
 - Handle permission errors without revealing restricted channel names.
 
 ## Accessibility Requirements
-- Arrow key navigation within tree/list structures.
 - Focus-visible indicators for active and focused channel rows.
 - ARIA semantics for tree/list roles and expandable groups.
 
 ## Telemetry and Observability
 - Events:
-  - `channel_list_loaded`
-  - `channel_selected`
-  - `channel_navigation_keyboard_used`
+  - channel navigation telemetry is not wired yet in the current baseline.
 - Error logging:
   - channel fetch and permission errors with server context
 
 ## Testing Strategy
 - Unit: channel tree normalization and selection logic.
-- Component: channel row states and keyboard behaviors.
+- Component: channel row states, collapsed groups, and filter behavior.
 - Integration: channel load and active selection persistence.
 - End-to-end: switch servers, switch channels, unread badge updates.
 - Manual QA: rapid server switching and focus behavior consistency.
@@ -82,7 +78,7 @@ Users need fast, predictable navigation across channel structures while preservi
 - Success metrics:
   - channel switch latency
   - navigation error frequency
-  - keyboard navigation adoption
+  - unread indicator correctness during realtime updates
 
 ## Open Questions
 - Do we need pinning/favoriting in MVP channel navigation?

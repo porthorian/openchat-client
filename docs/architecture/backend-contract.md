@@ -17,7 +17,8 @@ This document defines backend assumptions required by the OpenChat client. It is
 ## 2) Server Identity and Capability Discovery
 
 ### Required discovery endpoint
-- `GET /client/capabilities`
+- `GET /v1/client/capabilities` (preferred)
+- `GET /client/capabilities` (legacy compatibility fallback)
 
 ### Required capability response fields
 - `server_name`

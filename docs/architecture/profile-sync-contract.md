@@ -14,7 +14,7 @@ This document defines an optional backend contract extension for cross-client pr
 - Defining image CDN infrastructure requirements.
 
 ## 3) Capability Discovery Additions
-Backends that support profile sync should expose a `profile` capability object in `GET /client/capabilities`.
+Backends that support profile sync should expose a `profile` capability object in `GET /v1/client/capabilities` (or legacy `/client/capabilities`).
 
 ### Required `profile` fields
 - `enabled` (boolean)

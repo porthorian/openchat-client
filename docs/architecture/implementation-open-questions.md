@@ -1,6 +1,6 @@
 # Implementation Open Questions (Frontend)
 
-Last updated: 2026-02-11
+Last updated: 2026-02-17
 
 ## 1) Media Capture and Playback Integration
 - Should first implementation use direct `getUserMedia` + `RTCPeerConnection`, or wrap this behind a renderer `media-layer` abstraction immediately?
@@ -11,7 +11,7 @@ Last updated: 2026-02-11
 - For `timeout` moderation states, should UI remain in listen-only mode with disabled publish controls, or force full disconnect?
 
 ## 3) Capability Refresh Policy
-- Current implementation probes capabilities on voice join; should we add TTL-based background refresh while server is active?
+- Current implementation probes capabilities during server hydration and join flows; should we add TTL-based background refresh while server is active?
 - Should capability mismatches trigger blocking UI warnings or soft degradation banners by default?
 
 ## 4) Multi-Server RTC Sessions

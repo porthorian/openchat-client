@@ -33,13 +33,14 @@ Details: `docs/release/milestones.md`
 | Multi-server switching/isolation | Implemented |
 | Text channels + message timeline/composer | Implemented |
 | Realtime messaging + typing + presence | Implemented |
-| Voice channel join + audio relay controls | In progress |
-| Settings/accessibility deep pass | Planned |
+| Voice channel join + audio relay controls | Implemented baseline (hardening in progress) |
+| Video/screenshare surfaces | Planned |
+| Settings/accessibility deep pass | In progress |
 | Moderation/governance UX | Planned |
 
 ## Quickstart (Development)
 Prerequisites:
-- Node.js `>= 20`
+- Node.js `>= 23.9.0`
 - Corepack enabled (`corepack enable`)
 
 Install and run:
@@ -56,8 +57,9 @@ corepack yarn build
 ```
 
 ## Backend Connection for Local Testing
-- Default backend URL: `http://localhost:8080`
+- Runtime default backend URL: `https://openchat.marone.us`
 - Override with env var: `VITE_OPENCHAT_BACKEND_URL`
+- Local backend example: `VITE_OPENCHAT_BACKEND_URL=http://localhost:8080`
 - Server directory endpoint expected by client: `/v1/servers`
 
 ## Production Builds and Installers

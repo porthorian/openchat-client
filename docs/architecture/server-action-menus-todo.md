@@ -35,6 +35,11 @@ This TODO tracks the remaining work to make server action menus functional.
   - Add event create/list API integration.
   - Add calendar/event list UI surface and notification hooks.
 
+- [x] `Mute/Unmute Server` quick action
+  - Context menu action is wired through `ServerRail` -> `useWorkspaceShell` -> `useChatStore.toggleServerMuted`.
+  - Mute preference persists in local storage (`openchat.chat-notification-prefs.v1`).
+  - Remaining follow-up is richer notification policy controls (see item below).
+
 - [ ] `Notification Settings`
   - Add per-server notification policy model in settings store.
   - Support policies: all messages, mentions only, muted.
@@ -54,6 +59,11 @@ This TODO tracks the remaining work to make server action menus functional.
   - Add server-scoped preference in client settings store.
   - Filter muted channels in channel pane while preserving deep-link navigation.
   - Keep hidden channels visible in server settings for management.
+
+- [x] `Leave Server`
+  - Context menu action is wired and calls backend membership leave.
+  - Client clears realtime/call/session/chat state and safely falls back to another server.
+  - Remaining follow-up: explicit confirm UX before leave.
 
 ## Shared Engineering Tasks
 

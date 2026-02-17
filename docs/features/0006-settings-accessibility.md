@@ -56,7 +56,7 @@ Users need consistent settings and accessibility controls so the client remains 
 - Optional future capability flags may inform server-specific defaults.
 
 ## Client Data Model and State Impact
-- Stores touched: `useSettingsStore`, `useIdentityStore`, `useAppUiStore`.
+- Stores touched: planned `useSettingsStore` (current baseline uses `useIdentityStore`, `useAppUiStore`, and `useChatStore` for limited prefs).
 - Caches affected: local settings cache.
 - Persistence requirements:
   - persist only non-sensitive values

@@ -1,6 +1,6 @@
 # Server Context Menu TODO
 
-Status: UI scaffold added. Menu actions are currently placeholders only.
+Status: Partially implemented. `Mute/Unmute Server` and `Leave Server` are wired; most other actions remain placeholders.
 
 ## Scope
 - Right-click menu on server rail entries.
@@ -32,10 +32,12 @@ Status: UI scaffold added. Menu actions are currently placeholders only.
 - Add trust/safety copy for sharing server invite links.
 
 ### 3) Unmute Server
-- Add per-server notification preference model in `useSettingsStore`:
-  - `muted`, `muteUntil`, `mentionsOnly`, `channelOverrides`.
-- Wire mute state into desktop/in-app notification delivery logic.
-- Toggle label dynamically (`Mute Server` / `Unmute Server`).
+- Implemented baseline:
+  - Toggle is wired in `useChatStore` (`toggleServerMuted` / `setServerMuted`).
+  - Label updates dynamically (`Mute Server` / `Unmute Server`).
+  - Preference persists locally (`openchat.chat-notification-prefs.v1`).
+- Remaining:
+  - Expand beyond binary mute into richer notification policies.
 
 ### 4) Notification Settings
 - Implement submenu with server-level options:
@@ -75,13 +77,12 @@ Status: UI scaffold added. Menu actions are currently placeholders only.
 - Add notification/reminder behavior.
 
 ### 10) Leave Server
-- Add confirm flow with explicit consequences.
-- On confirm:
-  - remove server profile from registry,
-  - clear server-scoped volatile caches (messages/presence/call),
-  - disconnect realtime and voice sessions,
-  - switch to next available server safely.
-- Define backend leave API only if membership is server-managed.
+- Implemented baseline:
+  - Menu action triggers backend leave (`DELETE /v1/servers/{server_id}/membership`) when reachable.
+  - Client removes server from registry and clears server-scoped state (chat/session/realtime/call/UI context).
+  - Client falls back to another available server when needed.
+- Remaining:
+  - Add confirm flow with explicit consequences before leave.
 
 ## Cross-cutting TODOs
 - Accessibility:

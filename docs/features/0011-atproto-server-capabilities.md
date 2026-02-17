@@ -31,7 +31,7 @@ OpenChat servers can expose different AT Protocol behaviors. The client needs a 
 
 ## UX Flow
 1. User initiates server join with URL/invite.
-2. Client probes `GET /client/capabilities`.
+2. Client probes `GET /v1/client/capabilities` (or legacy `/client/capabilities`).
 3. Client evaluates AT support, trust signals, and compatibility requirements.
 4. Client shows join summary with enabled/disabled AT features and warnings.
 5. After join, server settings include AT diagnostics and last probe timestamp.

@@ -2,6 +2,11 @@
 
 This document defines how the renderer UI is built with Vue 3, PrimeVue (unstyled), and local design-system wrappers.
 
+Current implementation snapshot (2026-02-17):
+- Renderer surfaces are currently built with local Vue components plus tokenized CSS (`tokens.css`, `base.css`).
+- PrimeVue is configured as a dependency but wrapper primitives are still pending broader adoption.
+- This document remains the target model for upcoming design-system hardening work.
+
 ## 1) Goals
 - Deliver a Discord-like interaction model with a fully custom visual language.
 - Keep accessibility and interaction behavior predictable.
