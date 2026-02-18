@@ -3084,6 +3084,45 @@ button {
   font-size: 0.69rem;
 }
 
+.message-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 7px;
+  max-width: min(100%, 720px);
+}
+
+.message-attachment-card {
+  max-width: min(100%, 360px);
+  border-radius: 10px;
+  border: 1px solid #2f3446;
+  background: #171c27;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+}
+
+.message-attachment-card:hover {
+  border-color: #3e4763;
+  background: #1d2432;
+}
+
+.message-attachment-image {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  background: #0d1118;
+}
+
+.message-attachment-name {
+  padding: 7px 10px 8px;
+  color: #cfd4e2;
+  font-size: 0.86rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .message-link-preview-list {
   display: grid;
   gap: 8px;
@@ -3190,9 +3229,129 @@ button {
   }
 }
 
+.composer-shell {
+  margin: 0 16px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.composer-upload-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.composer-upload-preview {
+  width: min(100%, 460px);
+  border-radius: 16px;
+  border: 1px solid #3a3f52;
+  background: linear-gradient(180deg, #262a38, #222635);
+  overflow: hidden;
+  display: grid;
+  position: relative;
+}
+
+.composer-upload-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid #3f4458;
+  background: rgb(34 38 50 / 92%);
+  backdrop-filter: blur(3px);
+}
+
+.composer-upload-action {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #d5dbec;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer-upload-action:hover:not(:disabled) {
+  border-color: #495270;
+  background: #333b52;
+  color: #f0f4ff;
+}
+
+.composer-upload-action.is-danger {
+  color: #ff8f98;
+}
+
+.composer-upload-action.is-danger:hover:not(:disabled) {
+  border-color: #7d4754;
+  background: #532f38;
+  color: #ffdbe0;
+}
+
+.composer-upload-action:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.composer-upload-preview-media {
+  height: 220px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #151a27;
+  border-bottom: 1px solid #31384c;
+}
+
+.composer-upload-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0f141f;
+  border-radius: 10px;
+}
+
+.composer-upload-preview-meta {
+  padding: 10px 12px 12px;
+  display: grid;
+  gap: 2px;
+}
+
+.composer-upload-preview-name {
+  color: #ecf1ff;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-upload-preview-size {
+  color: #9ea8bd;
+  font-size: 0.77rem;
+}
+
+.composer-upload-preview.is-disabled {
+  opacity: 0.68;
+}
+
+.composer-upload-error {
+  border-radius: 8px;
+  border: 1px solid #6f3a45;
+  background: #492930;
+  color: #ffcdd5;
+  padding: 6px 8px;
+  font-size: 0.82rem;
+}
+
 .composer {
   height: var(--composer-row-height);
-  margin: 0 16px 12px;
   border: 1px solid #2f323d;
   border-radius: var(--radius-md);
   background: #23252d;
@@ -3221,6 +3380,10 @@ button {
   background: #3a3d49;
   color: #d4d6de;
   font-size: 1.2rem;
+}
+
+.composer-file-input {
+  display: none;
 }
 
 .composer-actions {
@@ -3256,9 +3419,14 @@ button {
   cursor: not-allowed;
 }
 
-.composer-actions button:hover {
+.composer-actions button:hover:not(:disabled) {
   background: #353946;
   color: #e9ebf1;
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .status-stack {

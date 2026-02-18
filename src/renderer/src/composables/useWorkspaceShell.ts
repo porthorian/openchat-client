@@ -886,14 +886,15 @@ export function useWorkspaceShell() {
     call.setOutputVolume(volume);
   }
 
-  async function sendMessage(body: string): Promise<void> {
+  async function sendMessage(payload: { body: string; attachments: File[] }): Promise<void> {
     const server = activeServer.value;
     const currentUID = activeSession.value?.userUID;
     if (!server || !currentUID || !appUI.activeChannelId) return;
     await chat.sendMessage({
       backendUrl: server.backendUrl,
       channelId: appUI.activeChannelId,
-      body,
+      body: payload.body,
+      attachments: payload.attachments,
       userUID: currentUID,
       deviceID: localDeviceID.value
     });
@@ -1465,6 +1466,8 @@ export function useWorkspaceShell() {
     messages: activeMessages.value,
     isLoadingMessages: isLoadingMessages.value,
     isSendingMessage: isSendingMessage.value,
+    attachmentsEnabled: activeServer.value?.capabilities?.features.attachments ?? true,
+    maxUploadBytes: activeServer.value?.capabilities?.limits.maxUploadBytes ?? 10 * 1024 * 1024,
     typingUsers: activeTypingUsers.value,
     currentUserUID: activeSession.value?.userUID ?? "",
     localProfileDisplayName: identity.profileDisplayName,

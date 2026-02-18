@@ -22,6 +22,8 @@ const props = defineProps<{
   messages: ChatMessage[];
   isLoadingMessages: boolean;
   isSendingMessage: boolean;
+  attachmentsEnabled: boolean;
+  maxUploadBytes: number | null;
   typingUsers: string[];
   currentUserUID: string;
   localProfileDisplayName: string;
@@ -32,7 +34,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  sendMessage: [body: string];
+  sendMessage: [payload: { body: string; attachments: File[] }];
   typingActivity: [isTyping: boolean];
 }>();
 
@@ -227,6 +229,8 @@ watch(
     <ChatComposer
       :channel-id="channelId"
       :is-sending-message="isSendingMessage"
+      :attachments-enabled="attachmentsEnabled"
+      :max-upload-bytes="maxUploadBytes"
       @send-message="emit('sendMessage', $event)"
       @typing-activity="emit('typingActivity', $event)"
     />

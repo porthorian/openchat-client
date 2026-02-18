@@ -1,24 +1,47 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { mdiEmoticonHappyOutline, mdiImageOutline, mdiPlusCircleOutline } from "@mdi/js";
+import {
+  mdiDeleteOutline,
+  mdiEmoticonHappyOutline,
+  mdiEyeOutline,
+  mdiImageOutline,
+  mdiPencilOutline,
+  mdiPlusCircleOutline
+} from "@mdi/js";
 import AppIcon from "./AppIcon.vue";
+
+type PendingAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
 
 const props = defineProps<{
   channelId: string;
   isSendingMessage: boolean;
+  attachmentsEnabled: boolean;
+  maxUploadBytes: number | null;
 }>();
 
 const emit = defineEmits<{
-  sendMessage: [body: string];
+  sendMessage: [payload: { body: string; attachments: File[] }];
   typingActivity: [isTyping: boolean];
 }>();
 
 const draftMessage = ref("");
 const composerInputRef = ref<HTMLInputElement | null>(null);
-const isDraftEmpty = computed(() => draftMessage.value.trim().length === 0);
+const fileInputRef = ref<HTMLInputElement | null>(null);
+const pendingAttachments = ref<PendingAttachment[]>([]);
+const uploadError = ref<string | null>(null);
 const typingRefreshMS = 2500;
+const maxAttachmentsPerMessage = 4;
 const typingActive = ref(false);
 const lastTypingSentAt = ref(0);
+const attachmentCounter = ref(0);
+const replaceTargetAttachmentId = ref<string | null>(null);
+const isComposerEmpty = computed(() => {
+  return draftMessage.value.trim().length === 0 && pendingAttachments.value.length === 0;
+});
 
 function emitTypingActivity(isTyping: boolean, forceHeartbeat = false): void {
   if (!forceHeartbeat && typingActive.value === isTyping) {
@@ -41,12 +64,174 @@ function syncTypingActivity(): void {
   }
 }
 
+function revokeAttachmentPreview(attachment: PendingAttachment): void {
+  URL.revokeObjectURL(attachment.previewUrl);
+}
+
+function clearPendingAttachments(): void {
+  pendingAttachments.value.forEach((attachment) => {
+    revokeAttachmentPreview(attachment);
+  });
+  pendingAttachments.value = [];
+  replaceTargetAttachmentId.value = null;
+}
+
+function createPendingAttachment(file: File, attachmentId?: string): PendingAttachment | null {
+  if (!file.type.startsWith("image/")) {
+    return null;
+  }
+  const maxBytes = props.maxUploadBytes;
+  if (typeof maxBytes === "number" && maxBytes > 0 && file.size > maxBytes) {
+    uploadError.value = `Image is too large. Max ${formatBytes(maxBytes)}.`;
+    return null;
+  }
+
+  const id =
+    attachmentId ??
+    (() => {
+      attachmentCounter.value += 1;
+      return `pending-image-${attachmentCounter.value}`;
+    })();
+  return {
+    id,
+    file,
+    previewUrl: URL.createObjectURL(file)
+  };
+}
+
+function addPendingFiles(files: File[]): void {
+  uploadError.value = null;
+  if (!props.attachmentsEnabled || files.length === 0) return;
+
+  const availableSlots = maxAttachmentsPerMessage - pendingAttachments.value.length;
+  if (availableSlots <= 0) {
+    uploadError.value = `Up to ${maxAttachmentsPerMessage} images per message.`;
+    return;
+  }
+
+  const next: PendingAttachment[] = [];
+  for (const file of files) {
+    const pendingAttachment = createPendingAttachment(file);
+    if (!pendingAttachment) continue;
+    next.push(pendingAttachment);
+    if (next.length >= availableSlots) {
+      break;
+    }
+  }
+
+  if (next.length === 0) {
+    if (!uploadError.value) {
+      uploadError.value = "Paste or choose an image file.";
+    }
+    return;
+  }
+  if (files.length > availableSlots) {
+    uploadError.value = `Only the first ${availableSlots} image${availableSlots === 1 ? "" : "s"} were added.`;
+  }
+
+  pendingAttachments.value = [...pendingAttachments.value, ...next];
+}
+
+function removePendingAttachment(attachmentId: string): void {
+  const index = pendingAttachments.value.findIndex((attachment) => attachment.id === attachmentId);
+  if (index === -1) return;
+  const [removed] = pendingAttachments.value.splice(index, 1);
+  revokeAttachmentPreview(removed);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function openFilePicker(replaceAttachmentId: string | null): void {
+  if (props.isSendingMessage || !props.attachmentsEnabled) return;
+  replaceTargetAttachmentId.value = replaceAttachmentId;
+  fileInputRef.value?.click();
+}
+
+function openAddAttachmentPicker(): void {
+  openFilePicker(null);
+}
+
+function replacePendingAttachment(attachmentId: string, files: File[]): void {
+  uploadError.value = null;
+  if (!props.attachmentsEnabled || files.length === 0) return;
+
+  const index = pendingAttachments.value.findIndex((attachment) => attachment.id === attachmentId);
+  if (index === -1) return;
+
+  for (const file of files) {
+    const replacement = createPendingAttachment(file, attachmentId);
+    if (!replacement) continue;
+    const [current] = pendingAttachments.value.splice(index, 1, replacement);
+    revokeAttachmentPreview(current);
+    return;
+  }
+
+  if (!uploadError.value) {
+    uploadError.value = "Paste or choose an image file.";
+  }
+}
+
+function handleFileInputChange(event: Event): void {
+  const input = event.target as HTMLInputElement | null;
+  const files = input?.files ? Array.from(input.files) : [];
+  const replaceAttachmentId = replaceTargetAttachmentId.value;
+  replaceTargetAttachmentId.value = null;
+  if (replaceAttachmentId) {
+    replacePendingAttachment(replaceAttachmentId, files);
+  } else {
+    addPendingFiles(files);
+  }
+  if (input) {
+    input.value = "";
+  }
+}
+
+function openPendingAttachment(attachment: PendingAttachment): void {
+  if (props.isSendingMessage) return;
+  window.open(attachment.previewUrl, "_blank", "noopener,noreferrer");
+}
+
+function beginAttachmentReplace(attachmentId: string): void {
+  if (props.isSendingMessage) return;
+  openFilePicker(attachmentId);
+}
+
+function handlePaste(event: ClipboardEvent): void {
+  if (props.isSendingMessage || !props.attachmentsEnabled) return;
+  const clipboardItems = event.clipboardData?.items;
+  if (!clipboardItems || clipboardItems.length === 0) return;
+
+  const imageFiles: File[] = [];
+  for (const item of clipboardItems) {
+    if (item.kind !== "file") continue;
+    if (!item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    imageFiles.push(file);
+  }
+  if (imageFiles.length === 0) return;
+
+  event.preventDefault();
+  addPendingFiles(imageFiles);
+}
+
 function submitMessage(): void {
   const body = draftMessage.value.trim();
-  if (!body || props.isSendingMessage) return;
-  emit("sendMessage", body);
+  if (props.isSendingMessage) return;
+  if (body.length === 0 && pendingAttachments.value.length === 0) return;
+
+  emit("sendMessage", {
+    body,
+    attachments: pendingAttachments.value.map((attachment) => attachment.file)
+  });
   emitTypingActivity(false);
   draftMessage.value = "";
+  uploadError.value = null;
+  clearPendingAttachments();
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -84,6 +269,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   emitTypingActivity(false);
   window.removeEventListener("keydown", handleGlobalTyping);
+  clearPendingAttachments();
 });
 
 watch(
@@ -97,36 +283,84 @@ watch(
   () => props.channelId,
   () => {
     emitTypingActivity(false);
+    uploadError.value = null;
+    clearPendingAttachments();
   }
 );
 </script>
 
 <template>
-  <footer class="composer">
-    <button type="button" class="composer-icon">
-      <AppIcon :path="mdiPlusCircleOutline" :size="18" />
-    </button>
-    <input
-      ref="composerInputRef"
-      v-model="draftMessage"
-      type="text"
-      :placeholder="`Message #${channelId}`"
-      aria-label="Message composer"
-      :disabled="isSendingMessage"
-      @blur="emitTypingActivity(false)"
-      @focus="syncTypingActivity"
-      @keydown.enter.prevent="submitMessage"
-    />
-    <div class="composer-actions">
-      <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isDraftEmpty" @click="submitMessage">
-        {{ isSendingMessage ? "Sending..." : "Send" }}
+  <footer class="composer-shell">
+    <div v-if="pendingAttachments.length > 0" class="composer-upload-preview-list">
+      <article
+        v-for="attachment in pendingAttachments"
+        :key="attachment.id"
+        class="composer-upload-preview"
+        :class="{ 'is-disabled': isSendingMessage }"
+      >
+        <div class="composer-upload-actions">
+          <button type="button" class="composer-upload-action" :disabled="isSendingMessage" @click="openPendingAttachment(attachment)">
+            <AppIcon :path="mdiEyeOutline" :size="18" />
+          </button>
+          <button type="button" class="composer-upload-action" :disabled="isSendingMessage" @click="beginAttachmentReplace(attachment.id)">
+            <AppIcon :path="mdiPencilOutline" :size="18" />
+          </button>
+          <button
+            type="button"
+            class="composer-upload-action is-danger"
+            :disabled="isSendingMessage"
+            @click="removePendingAttachment(attachment.id)"
+          >
+            <AppIcon :path="mdiDeleteOutline" :size="18" />
+          </button>
+        </div>
+        <div class="composer-upload-preview-media">
+          <img :src="attachment.previewUrl" :alt="attachment.file.name || 'Attached image'" />
+        </div>
+        <div class="composer-upload-preview-meta">
+          <p class="composer-upload-preview-name">{{ attachment.file.name || "image.png" }}</p>
+          <p class="composer-upload-preview-size">{{ formatBytes(attachment.file.size) }}</p>
+        </div>
+      </article>
+    </div>
+    <p v-if="uploadError" class="composer-upload-error">{{ uploadError }}</p>
+
+    <div class="composer">
+      <button type="button" class="composer-icon" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
+        <AppIcon :path="mdiPlusCircleOutline" :size="18" />
       </button>
-      <button type="button">
-        <AppIcon :path="mdiImageOutline" :size="18" />
-      </button>
-      <button type="button">
-        <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
-      </button>
+      <input
+        ref="composerInputRef"
+        v-model="draftMessage"
+        type="text"
+        :placeholder="`Message #${channelId}`"
+        aria-label="Message composer"
+        :disabled="isSendingMessage"
+        @blur="emitTypingActivity(false)"
+        @focus="syncTypingActivity"
+        @paste="handlePaste"
+        @keydown.enter.prevent="submitMessage"
+      />
+      <div class="composer-actions">
+        <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isComposerEmpty" @click="submitMessage">
+          {{ isSendingMessage ? "Sending..." : "Send" }}
+        </button>
+        <button type="button" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
+          <AppIcon :path="mdiImageOutline" :size="18" />
+        </button>
+        <button type="button">
+          <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
+        </button>
+      </div>
+      <input
+        ref="fileInputRef"
+        class="composer-file-input"
+        type="file"
+        accept="image/png,image/jpeg,image/gif"
+        :multiple="replaceTargetAttachmentId === null"
+        :disabled="isSendingMessage || !attachmentsEnabled"
+        @change="handleFileInputChange"
+      />
     </div>
   </footer>
 </template>

@@ -27,6 +27,7 @@ export type ChatMessage = {
   body: string;
   createdAt: string;
   linkPreviews?: LinkPreview[];
+  attachments?: MessageAttachment[];
 };
 
 export type LinkPreview = {
@@ -35,6 +36,16 @@ export type LinkPreview = {
   description: string | null;
   siteName: string | null;
   imageUrl: string | null;
+};
+
+export type MessageAttachment = {
+  attachmentId: string;
+  fileName: string;
+  url: string;
+  width: number;
+  height: number;
+  contentType: string;
+  bytes: number;
 };
 
 export type ChannelPresenceMember = {

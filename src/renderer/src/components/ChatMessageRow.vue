@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ChatMessage, LinkPreview } from "@renderer/types/chat";
+import type { ChatMessage, LinkPreview, MessageAttachment } from "@renderer/types/chat";
 import { splitMessageTextSegments } from "@renderer/utils/linkify";
 import { computed } from "vue";
 
@@ -15,6 +15,8 @@ const props = defineProps<{
 
 const messageTextSegments = computed(() => splitMessageTextSegments(props.message.body));
 const linkPreviews = computed(() => props.message.linkPreviews ?? []);
+const attachments = computed(() => props.message.attachments ?? []);
+const hasBodyText = computed(() => props.message.body.trim().length > 0);
 
 function formatHeaderTimestamp(isoTimestamp: string): string {
   const date = new Date(isoTimestamp);
@@ -51,6 +53,18 @@ function previewSiteLabel(preview: LinkPreview): string {
     return "Link preview";
   }
 }
+
+function isImageAttachment(attachment: MessageAttachment): boolean {
+  return attachment.contentType.toLowerCase().startsWith("image/");
+}
+
+function attachmentAlt(attachment: MessageAttachment): string {
+  const name = attachment.fileName.trim();
+  if (name) {
+    return name;
+  }
+  return "Attached image";
+}
 </script>
 
 <template>
@@ -70,7 +84,7 @@ function previewSiteLabel(preview: LinkPreview): string {
         <strong class="message-author">{{ authorName }}</strong>
         <time class="message-time">{{ formatHeaderTimestamp(props.message.createdAt) }}</time>
       </header>
-      <p class="message-text">
+      <p v-if="hasBodyText" class="message-text">
         <template v-for="(segment, index) in messageTextSegments" :key="`${props.message.id}-segment-${index}`">
           <a
             v-if="segment.kind === 'link'"
@@ -85,6 +99,25 @@ function previewSiteLabel(preview: LinkPreview): string {
         </template>
         <time v-if="isCompact" class="message-time-inline">{{ formatFallbackTime(props.message.createdAt) }}</time>
       </p>
+      <div v-if="attachments.length > 0" class="message-attachment-list">
+        <a
+          v-for="attachment in attachments"
+          :key="attachment.attachmentId"
+          class="message-attachment-card"
+          :href="attachment.url"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <img
+            v-if="isImageAttachment(attachment)"
+            class="message-attachment-image"
+            :src="attachment.url"
+            :alt="attachmentAlt(attachment)"
+            loading="lazy"
+          />
+          <p class="message-attachment-name">{{ attachment.fileName }}</p>
+        </a>
+      </div>
       <div v-if="linkPreviews.length > 0" class="message-link-preview-list">
         <a
           v-for="preview in linkPreviews"

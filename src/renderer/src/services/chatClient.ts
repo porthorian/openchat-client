@@ -1,4 +1,4 @@
-import type { ChannelGroup, ChatMessage, LinkPreview, MemberItem } from "@renderer/types/chat";
+import type { ChannelGroup, ChatMessage, LinkPreview, MemberItem, MessageAttachment } from "@renderer/types/chat";
 
 export type RealtimeEnvelope = {
   type: string;
@@ -97,6 +97,31 @@ function normalizeLinkPreviews(input: unknown): LinkPreview[] | undefined {
   return previews.length > 0 ? previews : undefined;
 }
 
+function normalizeMessageAttachment(input: unknown): MessageAttachment | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const attachmentId = String(payload.attachment_id ?? "").trim();
+  const url = String(payload.url ?? "").trim();
+  if (!attachmentId || !url) return null;
+  return {
+    attachmentId,
+    fileName: String(payload.file_name ?? "image.png"),
+    url,
+    width: Number(payload.width ?? 0),
+    height: Number(payload.height ?? 0),
+    contentType: String(payload.content_type ?? "application/octet-stream"),
+    bytes: Number(payload.bytes ?? 0)
+  };
+}
+
+function normalizeMessageAttachments(input: unknown): MessageAttachment[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const attachments = input
+    .map((item) => normalizeMessageAttachment(item))
+    .filter((item): item is MessageAttachment => item !== null);
+  return attachments.length > 0 ? attachments : undefined;
+}
+
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const response = await fetch(dataUrl);
   if (!response.ok) {
@@ -139,6 +164,7 @@ export async function fetchMessages(backendUrl: string, channelId: string, limit
       body: string;
       created_at: string;
       link_previews?: unknown;
+      attachments?: unknown;
     }>;
   };
   return (payload.messages ?? []).map((message) => ({
@@ -147,7 +173,8 @@ export async function fetchMessages(backendUrl: string, channelId: string, limit
     authorUID: message.author_uid,
     body: message.body,
     createdAt: message.created_at,
-    linkPreviews: normalizeLinkPreviews(message.link_previews)
+    linkPreviews: normalizeLinkPreviews(message.link_previews),
+    attachments: normalizeMessageAttachments(message.attachments)
   }));
 }
 
@@ -155,21 +182,40 @@ export async function createMessage(params: {
   backendUrl: string;
   channelId: string;
   body: string;
+  attachments?: File[];
   userUID: string;
   deviceID: string;
 }): Promise<ChatMessage> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/messages`;
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-OpenChat-User-UID": params.userUID,
-      "X-OpenChat-Device-ID": params.deviceID
-    },
-    body: JSON.stringify({
-      body: params.body
-    })
-  });
+  const files = params.attachments ?? [];
+  const headers = authHeaders(params.userUID, params.deviceID);
+
+  let response: Response;
+  if (files.length === 0) {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        body: params.body
+      })
+    });
+  } else {
+    const formData = new FormData();
+    formData.set("body", params.body);
+    files.forEach((file, index) => {
+      const fallbackName = `image-${index + 1}.png`;
+      formData.append("files", file, file.name || fallbackName);
+    });
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: formData
+    });
+  }
+
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Failed to send message (${response.status}): ${text}`);
@@ -182,6 +228,7 @@ export async function createMessage(params: {
       body: string;
       created_at: string;
       link_previews?: unknown;
+      attachments?: unknown;
     };
   };
   return {
@@ -190,7 +237,8 @@ export async function createMessage(params: {
     authorUID: payload.message.author_uid,
     body: payload.message.body,
     createdAt: payload.message.created_at,
-    linkPreviews: normalizeLinkPreviews(payload.message.link_previews)
+    linkPreviews: normalizeLinkPreviews(payload.message.link_previews),
+    attachments: normalizeMessageAttachments(payload.message.attachments)
   };
 }
 

@@ -16,7 +16,7 @@ import {
   type RealtimeEnvelope
 } from "@renderer/services/chatClient";
 import type { AvatarMode } from "@renderer/types/models";
-import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, LinkPreview, MemberItem } from "@renderer/types/chat";
+import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, LinkPreview, MemberItem, MessageAttachment } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
 
 type ServerRealtimeState = {
@@ -109,6 +109,31 @@ function normalizeLinkPreviews(input: unknown): LinkPreview[] | undefined {
   return previews.length > 0 ? previews : undefined;
 }
 
+function normalizeMessageAttachment(input: unknown): MessageAttachment | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const attachmentId = String(payload.attachment_id ?? "").trim();
+  const url = String(payload.url ?? "").trim();
+  if (!attachmentId || !url) return null;
+  return {
+    attachmentId,
+    fileName: String(payload.file_name ?? "image.png"),
+    url,
+    width: Number(payload.width ?? 0),
+    height: Number(payload.height ?? 0),
+    contentType: String(payload.content_type ?? "application/octet-stream"),
+    bytes: Number(payload.bytes ?? 0)
+  };
+}
+
+function normalizeMessageAttachments(input: unknown): MessageAttachment[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const attachments = input
+    .map((item) => normalizeMessageAttachment(item))
+    .filter((item): item is MessageAttachment => item !== null);
+  return attachments.length > 0 ? attachments : undefined;
+}
+
 function normalizeOpenGraphMetadata(input: OpenGraphMetadata): LinkPreview | null {
   const url = input.url.trim();
   if (!url) return null;
@@ -192,7 +217,8 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
     authorUID: String(messagePayload.author_uid ?? "uid_unknown"),
     body: String(messagePayload.body ?? ""),
     createdAt: String(messagePayload.created_at ?? new Date().toISOString()),
-    linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews)
+    linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews),
+    attachments: normalizeMessageAttachments(messagePayload.attachments)
   };
 }
 
@@ -521,6 +547,7 @@ export const useChatStore = defineStore("chat", {
       backendUrl: string;
       channelId: string;
       body: string;
+      attachments?: File[];
       userUID: string;
       deviceID: string;
     }): Promise<void> {
@@ -1035,7 +1062,12 @@ export const useChatStore = defineStore("chat", {
       const profile = this.profileForUser(serverId, message.authorUID);
       const authorName = profile?.displayName ?? message.authorUID;
       const title = `${authorName} in #${channelName}`;
-      const body = message.body.length > 120 ? `${message.body.slice(0, 117)}...` : message.body;
+      const trimmedBody = message.body.trim();
+      let body = trimmedBody.length > 120 ? `${trimmedBody.slice(0, 117)}...` : trimmedBody;
+      if (!body) {
+        const attachmentCount = message.attachments?.length ?? 0;
+        body = attachmentCount > 1 ? `Sent ${attachmentCount} attachments.` : attachmentCount === 1 ? "Sent an image." : "New message.";
+      }
       const notification = new Notification(title, {
         body,
         tag: `openchat:${serverId}:${message.channelId}`,
