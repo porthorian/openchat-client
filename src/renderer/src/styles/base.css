@@ -2447,56 +2447,119 @@ button {
   line-height: 1.1;
 }
 
-.screen-share-picker-modal {
-  width: min(840px, 100%);
-  max-height: min(78vh, 760px);
-  grid-template-rows: auto auto minmax(0, 1fr);
+.server-modal.screen-share-picker-modal {
+  width: 80vw;
+  min-width: 80vw;
+  max-width: 80vw;
+  max-height: min(86vh, 860px);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  border: 1px solid #3e4d74;
+  background: linear-gradient(180deg, #1f2740, #1a2138);
+  padding: 16px;
+  overflow: hidden;
 }
 
 .screen-share-picker-subtitle {
-  color: #c8d0e5;
+  color: #d3dcf2;
+  font-size: 0.95rem;
+}
+
+.screen-share-source-tabs {
+  min-height: 44px;
+  border: 1px solid #2f3a5b;
+  border-radius: 10px;
+  background: #101520;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 6px;
+}
+
+.screen-share-source-tab {
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #b9c4df;
   font-size: 0.86rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.screen-share-source-tab span {
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid #455170;
+  background: #252f45;
+  color: #d6def2;
+  font-size: 0.68rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-share-source-tab:hover {
+  background: #1a2238;
+  color: #e2e9fb;
+}
+
+.screen-share-source-tab.is-active {
+  border-color: #4e6394;
+  background: #27324f;
+  color: #f4f7ff;
 }
 
 .screen-share-picker-status {
   border-radius: 8px;
-  border: 1px solid #3a4258;
-  background: #1d2231;
-  color: #d5ddf1;
+  border: 1px solid #445274;
+  background: #232d45;
+  color: #dce5f8;
   padding: 8px 10px;
   font-size: 0.84rem;
 }
 
-.screen-share-source-list {
+.screen-share-source-grid {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-  padding-right: 2px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-content: start;
+  padding-right: 6px;
+  padding-bottom: 6px;
 }
 
-.screen-share-source-item {
+.screen-share-source-card {
   position: relative;
-  border: 1px solid #3a4157;
-  border-radius: 10px;
-  background: #232839;
-  color: #e9efff;
+  border: 1px solid #3e4d74;
+  border-radius: 12px;
+  background: #222b43;
+  color: #eef4ff;
   display: grid;
-  grid-template-rows: 124px auto;
+  grid-template-rows: minmax(0, 1fr) 96px;
+  height: 320px;
   text-align: left;
   overflow: hidden;
 }
 
-.screen-share-source-item:hover {
-  border-color: #4c5c84;
-  background: #293046;
+.screen-share-source-card:hover {
+  border-color: #6d8cd6;
+  background: #283556;
 }
 
 .screen-share-source-thumb {
   position: relative;
-  background: #0d1119;
-  border-bottom: 1px solid #2f374a;
+  z-index: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #0c1018;
+  border-bottom: 1px solid #324066;
   display: grid;
   place-items: center;
 }
@@ -2509,39 +2572,55 @@ button {
 }
 
 .screen-share-source-thumb.is-empty span {
-  color: #9ca8c5;
+  color: #a7b7db;
   font-size: 0.8rem;
   font-weight: 700;
 }
 
-.screen-share-source-copy {
+.screen-share-source-card-copy {
+  position: relative;
+  z-index: 2;
   min-width: 0;
-  padding: 8px 10px 10px;
+  min-height: 96px;
+  padding: 10px 12px 12px;
   display: grid;
-  gap: 2px;
+  gap: 3px;
+  border-top: 1px solid #4d618f;
+  background: linear-gradient(180deg, #273861, #253457);
 }
 
-.screen-share-source-copy strong {
-  color: #eef2ff;
-  font-size: 0.86rem;
+.screen-share-source-card-copy strong {
+  color: #f7faff;
+  font-size: 0.9rem;
   line-height: 1.15;
+  text-shadow: 0 1px 0 rgb(0 0 0 / 45%);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.screen-share-source-copy small {
-  color: #b5bfd6;
-  font-size: 0.74rem;
+.screen-share-source-card-copy small {
+  color: #e0e7f7;
+  font-size: 0.75rem;
   line-height: 1.1;
+  text-shadow: 0 1px 0 rgb(0 0 0 / 35%);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.screen-share-source-id {
+  color: #c2cde6;
+  font-family: ui-monospace, sfmono-regular, menlo, monospace;
+  font-size: 0.68rem;
 }
 
 .screen-share-source-icon {
   position: absolute;
   top: 8px;
   left: 8px;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 4px;
   background: rgb(0 0 0 / 55%);
 }
@@ -3848,12 +3927,27 @@ button {
     font-size: 0.8rem;
   }
 
-  .screen-share-picker-modal {
-    width: min(560px, 100%);
+  .server-modal.screen-share-picker-modal {
+    width: 80vw;
+    min-width: 80vw;
+    max-width: 80vw;
   }
 
-  .screen-share-source-list {
+  .screen-share-source-tabs {
     grid-template-columns: 1fr;
+  }
+
+  .screen-share-source-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .screen-share-source-card {
+    grid-template-rows: minmax(0, 1fr) 84px;
+    height: 260px;
+  }
+
+  .screen-share-source-card-copy {
+    min-height: 84px;
   }
 }
 
