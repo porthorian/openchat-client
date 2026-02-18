@@ -1,6 +1,6 @@
 # Release Milestones
 
-Last updated: 2026-02-17
+Last updated: 2026-02-18
 
 ## M0: Project Foundation
 - Status: `done`
@@ -30,5 +30,7 @@ Last updated: 2026-02-17
 - Current focus:
   - Voice baseline hardening (reconnect stability, device handling, error states).
   - Documentation alignment with implemented behavior.
+  - TODO: add explicit maintainer contact (`maintainers@pennyos.com`) to `SECURITY.md`, `SUPPORT.md`, and `.github/ISSUE_TEMPLATE/config.yml` contact links.
+  - TODO: swap domain references from `marone.us` to `pennyos.com` (for example, `https://openchat.marone.us` -> `https://openchat.pennyos.com`) when cutover is approved.
   - Accessibility and settings follow-up pass.
   - CI/release hardening and contributor workflow polish.

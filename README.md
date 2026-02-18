@@ -77,10 +77,15 @@ Release pipeline:
 - Targets: macOS, Windows, Linux installers + release asset publish
 
 Signing/notarization secrets (optional but recommended):
-- macOS: `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
+- macOS (Developer ID + App Store Connect API key): `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
 - Windows: `WINDOWS_CERT_PFX_BASE64`, `WINDOWS_CERT_PASSWORD`
 
 Unsigned builds still generate artifacts, but OS trust warnings are expected.
+
+macOS entitlement note:
+- `build/entitlements.mac.plist` includes network incoming/outgoing keys (`com.apple.security.network.client`, `com.apple.security.network.server`).
+- For the current non-App-Store Developer ID flow (App Sandbox disabled), networking is already allowed and these keys are effectively no-op.
+- If App Sandbox is enabled later, these keys are required for outbound/inbound networking behavior.
 
 ## Documentation Map
 - Planning and constraints: `AGENTS.md`

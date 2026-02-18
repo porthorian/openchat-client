@@ -21,11 +21,11 @@ jobs:
           - windows-latest
           - macos-latest
     env:
-      APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
       WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
 
@@ -69,11 +69,11 @@ jobs:
           NODE
 
       - name: Import Apple code signing certificate
-        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_CERTIFICATE_PASSWORD != ''
+        if: matrix.os == 'macos-latest' && env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_CERT_PASSWORD != ''
         uses: apple-actions/import-codesign-certs@v6
         with:
-          p12-file-base64: ${{ env.APPLE_CERTIFICATE_P12_BASE64 }}
-          p12-password: ${{ env.APPLE_CERTIFICATE_PASSWORD }}
+          p12-file-base64: ${{ env.MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ env.MACOS_CERT_PASSWORD }}
 
       - name: Prepare Windows code signing certificate
         if: matrix.os == 'windows-latest' && env.WINDOWS_CERT_PFX_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != ''
@@ -85,17 +85,25 @@ jobs:
             [System.Convert]::FromBase64String("${{ env.WINDOWS_CERT_PFX_BASE64 }}")
           )
 
+      - name: Prepare Apple notarization API key
+        if: matrix.os == 'macos-latest' && env.APPLE_API_KEY_P8 != '' && env.APPLE_API_KEY_ID != ''
+        shell: bash
+        run: |
+          key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "${APPLE_API_KEY_P8}" > "${key_path}"
+          echo "APPLE_API_KEY=${key_path}" >> "${GITHUB_ENV}"
+
       - name: Build installers (macOS signed + notarized)
-        if: matrix.os == 'macos-latest' && env.APPLE_CERTIFICATE_P12_BASE64 != '' && env.APPLE_CERTIFICATE_PASSWORD != '' && env.APPLE_ID != '' && env.APPLE_APP_SPECIFIC_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+        if: matrix.os == 'macos-latest' && env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_CERT_PASSWORD != '' && env.APPLE_API_KEY_P8 != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != ''
         run: corepack yarn dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "true"
-          APPLE_ID: ${{ env.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ env.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
 
       - name: Build installers (macOS unsigned fallback)
-        if: matrix.os == 'macos-latest' && (env.APPLE_CERTIFICATE_P12_BASE64 == '' || env.APPLE_CERTIFICATE_PASSWORD == '' || env.APPLE_ID == '' || env.APPLE_APP_SPECIFIC_PASSWORD == '' || env.APPLE_TEAM_ID == '')
+        if: matrix.os == 'macos-latest' && (env.MACOS_CERT_P12_BASE64 == '' || env.MACOS_CERT_PASSWORD == '' || env.APPLE_API_KEY_P8 == '' || env.APPLE_API_KEY_ID == '' || env.APPLE_API_ISSUER == '')
         run: corepack yarn dist
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -121,7 +129,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Warn about unsigned macOS build
-        if: matrix.os == 'macos-latest' && (env.APPLE_CERTIFICATE_P12_BASE64 == '' || env.APPLE_CERTIFICATE_PASSWORD == '' || env.APPLE_ID == '' || env.APPLE_APP_SPECIFIC_PASSWORD == '' || env.APPLE_TEAM_ID == '')
+        if: matrix.os == 'macos-latest' && (env.MACOS_CERT_P12_BASE64 == '' || env.MACOS_CERT_PASSWORD == '' || env.APPLE_API_KEY_P8 == '' || env.APPLE_API_KEY_ID == '' || env.APPLE_API_ISSUER == '')
         run: |
           echo "::warning::macOS artifact was built unsigned/unnotarized. Gatekeeper may show 'damaged' for downloaded apps."
 

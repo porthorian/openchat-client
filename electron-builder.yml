@@ -29,6 +29,10 @@ mac:
   target:
     - dmg
     - zip
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
 
 win:
   icon: logo.png
@@ -39,7 +43,7 @@ win:
 
 linux:
   category: Network
-  maintainer: OpenChat Maintainers <maintainers@marone.us>
+  maintainer: OpenChat Maintainers <maintainers@pennyos.com>
   icon: logo.png
   target:
     - AppImage
