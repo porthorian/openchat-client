@@ -1,5 +1,5 @@
-appId: io.openchat.client
-productName: OpenChat Client
+appId: com.pennyos.openchat
+productName: OpenChat
 asar: true
 icon: logo.png
 

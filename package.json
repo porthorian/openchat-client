@@ -2,8 +2,7 @@
   "name": "openchat-client",
   "author": "Porthorian",
   "version": "develop",
-  "private": true,
-  "description": "OpenChat desktop client (Electron + Vue + PrimeVue + Pinia)",
+  "description": "OpenChat desktop client",
   "main": "./out/main/index.js",
   "type": "module",
   "engines": {
