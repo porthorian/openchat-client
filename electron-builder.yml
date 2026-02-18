@@ -16,11 +16,19 @@ extraMetadata:
 
 artifactName: openchat-client-${version}-${os}-${arch}.${ext}
 
+publish:
+  provider: github
+  owner: porthorian
+  repo: openchat-client
+  releaseType: release
+  vPrefixedTagName: true
+
 mac:
   category: public.app-category.social-networking
   icon: logo.png
   target:
     - dmg
+    - zip
 
 win:
   icon: logo.png

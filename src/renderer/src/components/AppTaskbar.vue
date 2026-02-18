@@ -1,12 +1,22 @@
 <script setup lang="ts">
-import { mdiArrowLeft, mdiArrowRight, mdiBellOutline, mdiDownload } from "@mdi/js";
+import { mdiArrowLeft, mdiArrowRight, mdiBellOutline, mdiDownload, mdiInformationOutline } from "@mdi/js";
 import AppIcon from "./AppIcon.vue";
+
+const emit = defineEmits<{
+  updateAction: [];
+  showClientInfo: [];
+}>();
 
 defineProps<{
   serverIconText: string;
   serverName: string;
   clientBuildVersion: string;
   clientRuntimeLabel: string;
+  showUpdateButton: boolean;
+  updateButtonLabel: string;
+  updateButtonTitle: string;
+  updateButtonTone: "default" | "error";
+  updateButtonDisabled: boolean;
 }>();
 </script>
 
@@ -30,10 +40,22 @@ defineProps<{
     </div>
 
     <div class="taskbar-right">
+      <button type="button" class="taskbar-btn" aria-label="Client info" title="Client info" @click="emit('showClientInfo')">
+        <AppIcon :path="mdiInformationOutline" :size="16" />
+      </button>
       <button type="button" class="taskbar-btn" aria-label="Notifications">
         <AppIcon :path="mdiBellOutline" :size="16" />
       </button>
-      <button type="button" class="taskbar-btn is-download" aria-label="Download">
+      <button
+        v-if="showUpdateButton"
+        type="button"
+        class="taskbar-btn is-download"
+        :class="{ 'is-error': updateButtonTone === 'error' }"
+        :aria-label="updateButtonLabel"
+        :title="updateButtonTitle"
+        :disabled="updateButtonDisabled"
+        @click="emit('updateAction')"
+      >
         <AppIcon :path="mdiDownload" :size="16" />
       </button>
     </div>

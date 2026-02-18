@@ -1,11 +1,20 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { IPCChannels, type RuntimeInfo } from "../shared/ipc";
+import { ClientUpdateService } from "./clientUpdateService";
 
 const isMac = process.platform === "darwin";
+const appName = "OpenChat Client";
+const appID = "io.openchat.client";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let appIconPath: string | null = null;
+
+app.setName(appName);
+if (process.platform === "win32") {
+  app.setAppUserModelId(appID);
+}
 
 function resolvePreloadPath(): string {
   const candidates = [
@@ -34,6 +43,30 @@ function resolvePreloadPath(): string {
   return fallback;
 }
 
+function resolveAppIconPath(): string | null {
+  const candidates = [
+    path.join(process.cwd(), "logo.png"),
+    path.join(app.getAppPath(), "logo.png"),
+    path.join(__dirname, "../../logo.png"),
+    path.join(__dirname, "../../../logo.png"),
+    path.join(process.resourcesPath, "logo.png")
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  console.warn("[openchat/main] app icon not found", {
+    cwd: process.cwd(),
+    appPath: app.getAppPath(),
+    dirname: __dirname,
+    candidates
+  });
+  return null;
+}
+
 function createMainWindow(): BrowserWindow {
   const preloadPath = resolvePreloadPath();
   console.info("[openchat/main] using preload", preloadPath);
@@ -44,8 +77,9 @@ function createMainWindow(): BrowserWindow {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: "#10141c",
-    title: "OpenChat Client",
+    title: appName,
     titleBarStyle: isMac ? "hiddenInset" : "default",
+    icon: appIconPath ?? undefined,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -79,7 +113,7 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
-function registerIPCHandlers(): void {
+function registerIPCHandlers(updateService: ClientUpdateService): void {
   ipcMain.handle(IPCChannels.AppVersion, () => app.getVersion());
   ipcMain.handle(IPCChannels.RuntimeInfo, (): RuntimeInfo => {
     return {
@@ -88,16 +122,46 @@ function registerIPCHandlers(): void {
       electronVersion: process.versions.electron
     };
   });
+  ipcMain.handle(IPCChannels.ProjectLinks, () => updateService.getProjectLinks());
+  ipcMain.handle(IPCChannels.UpdateGetStatus, () => updateService.getStatus());
+  ipcMain.handle(IPCChannels.UpdateCheckForUpdates, () => updateService.checkForUpdates());
+  ipcMain.handle(IPCChannels.UpdateDownload, () => updateService.downloadUpdate());
+  ipcMain.handle(IPCChannels.UpdateQuitAndInstall, () => updateService.quitAndInstall());
 }
 
 app.whenReady().then(() => {
-  registerIPCHandlers();
-  createMainWindow();
+  appIconPath = resolveAppIconPath();
+  if (isMac && appIconPath) {
+    const icon = nativeImage.createFromPath(appIconPath);
+    if (!icon.isEmpty()) {
+      app.dock?.setIcon(icon);
+    }
+  }
+
+  const updateService = new ClientUpdateService({
+    emitStatus: (snapshot) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(IPCChannels.UpdateStatusChanged, snapshot);
+        }
+      });
+    }
+  });
+
+  registerIPCHandlers(updateService);
+  const mainWindow = createMainWindow();
+  updateService.attachWindow(mainWindow);
+  updateService.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+      const window = createMainWindow();
+      updateService.attachWindow(window);
     }
+  });
+
+  app.on("before-quit", () => {
+    updateService.stop();
   });
 });
 

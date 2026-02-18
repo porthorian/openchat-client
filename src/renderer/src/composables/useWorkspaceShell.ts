@@ -12,7 +12,15 @@ import {
 } from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
-import { useAppUIStore, useCallStore, useChatStore, useIdentityStore, useServerRegistryStore, useSessionStore } from "@renderer/stores";
+import {
+  useAppUIStore,
+  useCallStore,
+  useChatStore,
+  useClientUpdateStore,
+  useIdentityStore,
+  useServerRegistryStore,
+  useSessionStore
+} from "@renderer/stores";
 
 type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
 
@@ -57,6 +65,7 @@ export function useWorkspaceShell() {
   const appUI = useAppUIStore();
   const call = useCallStore();
   const chat = useChatStore();
+  const clientUpdate = useClientUpdateStore();
   const identity = useIdentityStore();
   const registry = useServerRegistryStore();
   const session = useSessionStore();
@@ -506,6 +515,13 @@ export function useWorkspaceShell() {
     registry.hydrateFromStorage();
     void call.refreshInputDevices();
     void call.refreshOutputDevices();
+
+    try {
+      await clientUpdate.initialize();
+    } catch (error) {
+      startupError.value = `Client update bridge unavailable: ${(error as Error).message}`;
+    }
+
     try {
       appVersion.value = await window.openchat.getAppVersion();
       runtime.value = await window.openchat.getRuntimeInfo();
@@ -731,6 +747,76 @@ export function useWorkspaceShell() {
 
   function markChannelsRead(channelIds: string[]): void {
     chat.markChannelsRead(channelIds);
+  }
+
+  async function triggerTaskbarUpdateAction(): Promise<void> {
+    try {
+      if (clientUpdate.status === "available") {
+        clientUpdate.openUpdateProgressModal();
+        await clientUpdate.downloadUpdate();
+        return;
+      }
+
+      if (clientUpdate.status === "downloaded") {
+        clientUpdate.openUpdateProgressModal();
+        return;
+      }
+
+      if (clientUpdate.status === "error") {
+        clientUpdate.openUpdateProgressModal();
+        return;
+      }
+
+      if (clientUpdate.status === "downloading") {
+        clientUpdate.openUpdateProgressModal();
+      }
+    } catch (error) {
+      startupError.value = `Update action failed: ${(error as Error).message}`;
+    }
+  }
+
+  async function checkForUpdatesAgain(): Promise<void> {
+    try {
+      await clientUpdate.checkForUpdates();
+    } catch (error) {
+      startupError.value = `Update check failed: ${(error as Error).message}`;
+    }
+  }
+
+  function openVersionInfoModal(): void {
+    clientUpdate.openVersionInfoModal();
+  }
+
+  function closeVersionInfoModal(): void {
+    clientUpdate.closeVersionInfoModal();
+  }
+
+  function closeUpdateProgressModal(): void {
+    clientUpdate.closeUpdateProgressModal();
+  }
+
+  async function retryUpdateDownload(): Promise<void> {
+    try {
+      clientUpdate.openUpdateProgressModal();
+      await clientUpdate.checkForUpdates();
+      if (clientUpdate.status === "available") {
+        await clientUpdate.downloadUpdate();
+      }
+    } catch (error) {
+      startupError.value = `Update retry failed: ${(error as Error).message}`;
+    }
+  }
+
+  async function installDownloadedUpdate(): Promise<void> {
+    try {
+      await clientUpdate.quitAndInstall();
+    } catch (error) {
+      startupError.value = `Install failed: ${(error as Error).message}`;
+    }
+  }
+
+  function dismissUpdaterNotice(): void {
+    clientUpdate.dismissUpdaterNotice();
   }
 
   function toIconText(value: string): string {
@@ -1029,11 +1115,101 @@ export function useWorkspaceShell() {
     return runtime.value ? `${runtime.value.platform} / ${runtime.value.arch}` : "runtime pending";
   });
 
+  const updateButtonLabel = computed(() => {
+    if (clientUpdate.status === "available") {
+      return clientUpdate.latestVersion
+        ? `Download update ${clientUpdate.latestVersion}`
+        : "Download available update";
+    }
+    if (clientUpdate.status === "downloading") {
+      return "Downloading update";
+    }
+    if (clientUpdate.status === "downloaded") {
+      return "Install downloaded update";
+    }
+    if (clientUpdate.status === "error") {
+      return "Retry update check";
+    }
+    return "Check for updates";
+  });
+
+  const updateButtonTitle = computed(() => {
+    if (clientUpdate.status === "available") {
+      return clientUpdate.latestVersion
+        ? `Update ${clientUpdate.latestVersion} is available`
+        : "An update is available";
+    }
+    if (clientUpdate.status === "downloading") {
+      if (clientUpdate.progressPercent === null) {
+        return "Downloading update...";
+      }
+      return `Downloading update... ${Math.round(clientUpdate.progressPercent)}%`;
+    }
+    if (clientUpdate.status === "downloaded") {
+      return "Update downloaded. Click to install.";
+    }
+    if (clientUpdate.status === "error") {
+      return clientUpdate.errorMessage ?? "Update failed. Click to retry.";
+    }
+    return "Check for updates";
+  });
+
+  const updateStatusLabel = computed(() => {
+    if (clientUpdate.status === "idle") return "Idle";
+    if (clientUpdate.status === "checking") return "Checking for updates";
+    if (clientUpdate.status === "available") return "Update available";
+    if (clientUpdate.status === "downloading") return "Downloading update";
+    if (clientUpdate.status === "downloaded") return "Ready to install";
+    return "Error";
+  });
+
+  const lastCheckedAtLabel = computed(() => {
+    if (!clientUpdate.lastCheckedAt) return "Not checked yet";
+    const parsed = new Date(clientUpdate.lastCheckedAt);
+    if (Number.isNaN(parsed.getTime())) return clientUpdate.lastCheckedAt;
+    return parsed.toLocaleString();
+  });
+
   const taskbarProps = computed(() => ({
     serverIconText: activeServer.value?.iconText ?? "OC",
     serverName: activeServer.value?.displayName ?? "OpenChat Client",
     clientBuildVersion: appVersion.value,
-    clientRuntimeLabel: runtimeLabel.value
+    clientRuntimeLabel: runtimeLabel.value,
+    showUpdateButton: clientUpdate.shouldShowTaskbarDownloadButton,
+    updateButtonLabel: updateButtonLabel.value,
+    updateButtonTitle: updateButtonTitle.value,
+    updateButtonTone: clientUpdate.status === "error" ? ("error" as const) : ("default" as const),
+    updateButtonDisabled: clientUpdate.status === "checking"
+  }));
+
+  const updateProgressModalStatus = computed<"downloading" | "downloaded" | "error">(() => {
+    if (clientUpdate.status === "downloaded") return "downloaded";
+    if (clientUpdate.status === "error") return "error";
+    return "downloading";
+  });
+
+  const updateProgressModalProps = computed(() => ({
+    isOpen: clientUpdate.isUpdateProgressModalOpen,
+    status: updateProgressModalStatus.value,
+    latestVersion: clientUpdate.latestVersion,
+    progressPercent: clientUpdate.progressPercent,
+    errorMessage: clientUpdate.errorMessage
+  }));
+
+  const versionInfoModalProps = computed(() => ({
+    isOpen: clientUpdate.isVersionInfoModalOpen && clientUpdate.status !== "downloading",
+    currentVersion: clientUpdate.currentVersion || appVersion.value,
+    runtimeLabel: runtimeLabel.value,
+    updateStatusLabel: updateStatusLabel.value,
+    latestVersion: clientUpdate.latestVersion,
+    lastCheckedAtLabel: lastCheckedAtLabel.value,
+    githubUrl: clientUpdate.projectLinks.githubUrl,
+    issuesUrl: clientUpdate.projectLinks.issuesUrl
+  }));
+
+  const updateNoticeBannerProps = computed(() => ({
+    isVisible: clientUpdate.shouldShowUpdaterNotice,
+    message: clientUpdate.updaterUnavailableReason ?? "Automatic updater is unavailable."
   }));
 
   const serverRailProps = computed(() => ({
@@ -1188,10 +1364,33 @@ export function useWorkspaceShell() {
     "update:displayName": setAddServerDisplayName
   };
 
+  const taskbarListeners = {
+    updateAction: triggerTaskbarUpdateAction,
+    showClientInfo: openVersionInfoModal
+  };
+
+  const versionInfoModalListeners = {
+    close: closeVersionInfoModal,
+    checkAgain: checkForUpdatesAgain
+  };
+
+  const updateProgressModalListeners = {
+    close: closeUpdateProgressModal,
+    retry: retryUpdateDownload,
+    install: installDownloadedUpdate
+  };
+
+  const updateNoticeBannerListeners = {
+    dismiss: dismissUpdaterNotice
+  };
+
   return {
     appShellClasses,
     layoutClasses,
     taskbarProps,
+    updateProgressModalProps,
+    versionInfoModalProps,
+    updateNoticeBannerProps,
     serverRailProps,
     channelPaneProps,
     workspaceToolbarProps,
@@ -1199,6 +1398,10 @@ export function useWorkspaceShell() {
     userDockProps,
     membersPaneProps,
     addServerDialogProps,
+    taskbarListeners,
+    versionInfoModalListeners,
+    updateProgressModalListeners,
+    updateNoticeBannerListeners,
     serverRailListeners,
     channelPaneListeners,
     userDockListeners,

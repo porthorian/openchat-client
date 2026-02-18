@@ -36,7 +36,7 @@ We need a client-side upgrade mechanism that:
 ### Primary Flow: Passive Check -> Available -> Download -> Install
 1. App launches.
 2. Main process schedules and performs an update check.
-3. If no update is found, no persistent taskbar indicator is shown.
+3. If no update is found, show the client version information in a popup model. This also should show the github, and where to post issues.
 4. If update is found:
    - `mdiDownload` button becomes visible in `AppTaskbar`.
    - tooltip/label indicates update availability and target version.

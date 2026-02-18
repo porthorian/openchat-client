@@ -86,17 +86,24 @@ button {
   display: block;
 }
 
+.workspace-home-root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
 .app-shell {
   height: 100%;
   padding: 0;
   display: grid;
-  grid-template-rows: 40px minmax(0, 1fr);
+  grid-template-rows: 40px auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
 .layout {
+  grid-row: 3;
   min-height: 0;
   min-width: 0;
   display: grid;
@@ -192,6 +199,34 @@ button {
   justify-self: end;
 }
 
+.update-notice-banner {
+  min-height: 30px;
+  border-bottom: 1px solid #4c3f24;
+  background: linear-gradient(180deg, #3f3118, #302510);
+  color: #f9e8ba;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.79rem;
+  letter-spacing: 0.02em;
+}
+
+.update-notice-close {
+  min-height: 24px;
+  border-radius: 6px;
+  border: 1px solid #6d5a32;
+  background: #4a3a1d;
+  color: #ffe6a8;
+  padding: 0 8px;
+  font-size: 0.74rem;
+}
+
+.update-notice-close:hover {
+  background: #584623;
+}
+
 .taskbar-center {
   display: flex;
   align-items: center;
@@ -263,6 +298,15 @@ button {
 
 .taskbar-btn.is-download {
   color: #6fd58a;
+}
+
+.taskbar-btn.is-download.is-error {
+  color: #ff98a4;
+}
+
+.taskbar-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .app-shell.is-macos {
@@ -2965,6 +3009,211 @@ button {
 .server-modal-divider {
   height: 1px;
   background: #33394a;
+}
+
+.update-progress-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: radial-gradient(circle at top, rgb(39 57 101 / 25%), rgb(5 7 12 / 95%));
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+
+.update-progress-modal {
+  width: min(440px, 100%);
+  border-radius: 14px;
+  border: 1px solid #3c4968;
+  background: linear-gradient(180deg, #1b2438, #161d2f);
+  box-shadow: 0 24px 52px rgb(0 0 0 / 54%);
+  padding: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.update-progress-modal h3 {
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+}
+
+.update-progress-modal p {
+  color: #d0d9ee;
+  font-size: 0.89rem;
+}
+
+.update-progress-track {
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: #0d1320;
+  border: 1px solid #2f3b58;
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #76d2ff, #5eb7ff);
+  transition: width 120ms linear;
+}
+
+.update-progress-fill.is-indeterminate {
+  width: 35%;
+  background: linear-gradient(90deg, #76d2ff, #8be2be);
+  animation: update-progress-indeterminate 1100ms ease-in-out infinite;
+}
+
+.update-progress-value {
+  color: #f1f7ff;
+  font-size: 0.92rem;
+}
+
+.update-progress-footnote {
+  color: #a7b3cc;
+  font-size: 0.79rem;
+}
+
+.update-progress-error {
+  border-radius: 8px;
+  border: 1px solid #7a3f45;
+  background: #4c262b;
+  color: #ffd4d8;
+  font-size: 0.83rem;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+}
+
+.update-progress-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.update-progress-btn {
+  min-height: 32px;
+  border-radius: 8px;
+  border: 1px solid #4a5679;
+  background: #2f3a56;
+  color: #eaf0ff;
+  padding: 0 10px;
+}
+
+.update-progress-btn.is-primary {
+  border-color: #6d83b8;
+  background: #465a87;
+}
+
+.version-info-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: rgb(8 11 18 / 66%);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.version-info-modal {
+  width: min(460px, 100%);
+  border: 1px solid #3a4154;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #202633, #1a1f2b);
+  box-shadow: 0 24px 46px rgb(0 0 0 / 48%);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.version-info-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.version-info-modal header h3 {
+  font-size: 1rem;
+}
+
+.version-info-close {
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid #434b62;
+  background: #2b3347;
+  color: #dde5f9;
+  padding: 0 10px;
+}
+
+.version-info-summary {
+  color: #cfd6ea;
+  font-size: 0.87rem;
+}
+
+.version-info-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.version-info-grid div {
+  display: grid;
+  gap: 2px;
+}
+
+.version-info-grid dt {
+  color: #99a6c3;
+  font-size: 0.77rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.version-info-grid dd {
+  color: #eff4ff;
+  font-size: 0.9rem;
+}
+
+.version-info-links {
+  display: grid;
+  gap: 6px;
+}
+
+.version-info-links a {
+  color: #8fceff;
+  text-decoration: none;
+  font-size: 0.86rem;
+}
+
+.version-info-links a:hover {
+  color: #a9dcff;
+  text-decoration: underline;
+}
+
+.version-info-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.version-info-btn {
+  min-height: 34px;
+  border-radius: 8px;
+  border: 1px solid #55648b;
+  background: #3a4767;
+  color: #edf2ff;
+  padding: 0 12px;
+}
+
+@keyframes update-progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  50% {
+    transform: translateX(35%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
 }
 
 .server-discovery-list {
