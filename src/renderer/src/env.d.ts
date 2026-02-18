@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { ClientUpdateSnapshot, DesktopCaptureSource, ProjectLinks, RuntimeInfo } from "@shared/ipc";
+import type { ClientUpdateSnapshot, DesktopCaptureSource, OpenGraphMetadata, ProjectLinks, RuntimeInfo } from "@shared/ipc";
 
 declare global {
   interface Window {
@@ -8,6 +8,9 @@ declare global {
       getAppVersion: () => Promise<string>;
       getRuntimeInfo: () => Promise<RuntimeInfo>;
       getProjectLinks: () => Promise<ProjectLinks>;
+      metadata: {
+        scrapeOpenGraph: (url: string) => Promise<OpenGraphMetadata | null>;
+      };
       rtc: {
         listDesktopCaptureSources: () => Promise<DesktopCaptureSource[]>;
       };

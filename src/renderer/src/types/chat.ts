@@ -26,6 +26,15 @@ export type ChatMessage = {
   authorUID: string;
   body: string;
   createdAt: string;
+  linkPreviews?: LinkPreview[];
+};
+
+export type LinkPreview = {
+  url: string;
+  title: string | null;
+  description: string | null;
+  siteName: string | null;
+  imageUrl: string | null;
 };
 
 export type ChannelPresenceMember = {

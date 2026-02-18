@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { IPCChannels, type ClientUpdateSnapshot, type DesktopCaptureSource, type ProjectLinks, type RuntimeInfo } from "../shared/ipc";
+import {
+  IPCChannels,
+  type ClientUpdateSnapshot,
+  type DesktopCaptureSource,
+  type OpenGraphMetadata,
+  type ProjectLinks,
+  type RuntimeInfo
+} from "../shared/ipc";
 
 type UpdateStatusListener = (snapshot: ClientUpdateSnapshot) => void;
 
@@ -15,6 +22,10 @@ const api = {
   getAppVersion: async (): Promise<string> => ipcRenderer.invoke(IPCChannels.AppVersion),
   getRuntimeInfo: async (): Promise<RuntimeInfo> => ipcRenderer.invoke(IPCChannels.RuntimeInfo),
   getProjectLinks: async (): Promise<ProjectLinks> => ipcRenderer.invoke(IPCChannels.ProjectLinks),
+  metadata: {
+    scrapeOpenGraph: async (url: string): Promise<OpenGraphMetadata | null> =>
+      ipcRenderer.invoke(IPCChannels.MetadataScrapeOpenGraph, url)
+  },
   rtc: {
     listDesktopCaptureSources: async (): Promise<DesktopCaptureSource[]> => ipcRenderer.invoke(IPCChannels.RTCListDesktopSources)
   },

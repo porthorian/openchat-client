@@ -2,6 +2,7 @@ export const IPCChannels = {
   AppVersion: "app:version",
   RuntimeInfo: "app:runtime-info",
   ProjectLinks: "app:project-links",
+  MetadataScrapeOpenGraph: "metadata:scrape-open-graph",
   RTCListDesktopSources: "rtc:list-desktop-sources",
   UpdateGetStatus: "app:update:get-status",
   UpdateCheckForUpdates: "app:update:check-for-updates",
@@ -30,6 +31,14 @@ export type RuntimeInfo = {
 export type ProjectLinks = {
   githubUrl: string;
   issuesUrl: string;
+};
+
+export type OpenGraphMetadata = {
+  url: string;
+  title: string | null;
+  description: string | null;
+  siteName: string | null;
+  imageUrl: string | null;
 };
 
 export type ClientUpdateStatus = "idle" | "checking" | "available" | "downloading" | "downloaded" | "error";

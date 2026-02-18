@@ -3068,10 +3068,73 @@ button {
   overflow-wrap: anywhere;
 }
 
+.message-link {
+  color: #5aa9ff;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.message-link:hover {
+  text-decoration: underline;
+}
+
 .message-time-inline {
   margin-left: 9px;
   color: #8d94a7;
   font-size: 0.69rem;
+}
+
+.message-link-preview-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 7px;
+  max-width: min(100%, 640px);
+}
+
+.message-link-preview-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #2f3446;
+  border-left: 4px solid #2798ff;
+  background: #1a1f2b;
+  color: inherit;
+  text-decoration: none;
+}
+
+.message-link-preview-card:hover {
+  background: #202737;
+  border-color: #3d4661;
+}
+
+.message-link-preview-site {
+  color: #c1c8da;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.message-link-preview-title {
+  color: #7ab8ff;
+  font-size: 1.06rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.message-link-preview-description {
+  color: #c8d0e4;
+  font-size: 0.97rem;
+  line-height: 1.35;
+}
+
+.message-link-preview-image {
+  width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  border: 1px solid #31374b;
+  object-fit: cover;
+  background: #10141c;
 }
 
 .typing-indicator {

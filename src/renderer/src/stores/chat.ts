@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import type { OpenGraphMetadata } from "@shared/ipc";
 import {
   createMessage,
   fetchMyProfile,
@@ -15,7 +16,8 @@ import {
   type RealtimeEnvelope
 } from "@renderer/services/chatClient";
 import type { AvatarMode } from "@renderer/types/models";
-import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, MemberItem } from "@renderer/types/chat";
+import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, LinkPreview, MemberItem } from "@renderer/types/chat";
+import { extractMessageURLs } from "@renderer/utils/linkify";
 
 type ServerRealtimeState = {
   connected: boolean;
@@ -69,6 +71,9 @@ const realtimeConnectParamsByServer = new Map<string, { serverId: string; backen
 const reconnectBackoffMS = [1000, 2000, 5000, 10000, 15000];
 const typingExpiryMS = 6000;
 const profileBatchLimit = 100;
+const maxLinkPreviewsPerMessage = 3;
+const linkPreviewCacheByURL = new Map<string, LinkPreview | null>();
+const linkPreviewInFlightByURL = new Map<string, Promise<LinkPreview | null>>();
 
 function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
   try {
@@ -82,6 +87,99 @@ function hasMessage(messages: ChatMessage[], messageID: string): boolean {
   return messages.some((item) => item.id === messageID);
 }
 
+function normalizeLinkPreview(input: unknown): LinkPreview | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const url = String(payload.url ?? "").trim();
+  if (!url) return null;
+  return {
+    url,
+    title: payload.title ? String(payload.title) : null,
+    description: payload.description ? String(payload.description) : null,
+    siteName: payload.site_name ? String(payload.site_name) : payload.siteName ? String(payload.siteName) : null,
+    imageUrl: payload.image_url ? String(payload.image_url) : payload.imageUrl ? String(payload.imageUrl) : null
+  };
+}
+
+function normalizeLinkPreviews(input: unknown): LinkPreview[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const previews = input
+    .map((item) => normalizeLinkPreview(item))
+    .filter((item): item is LinkPreview => item !== null);
+  return previews.length > 0 ? previews : undefined;
+}
+
+function normalizeOpenGraphMetadata(input: OpenGraphMetadata): LinkPreview | null {
+  const url = input.url.trim();
+  if (!url) return null;
+  const title = input.title?.trim() || null;
+  const description = input.description?.trim() || null;
+  const siteName = input.siteName?.trim() || null;
+  const imageUrl = input.imageUrl?.trim() || null;
+  if (!title && !description && !siteName && !imageUrl) return null;
+  return {
+    url,
+    title,
+    description,
+    siteName,
+    imageUrl
+  };
+}
+
+function isSameLinkPreview(left: LinkPreview, right: LinkPreview): boolean {
+  return (
+    left.url === right.url &&
+    left.title === right.title &&
+    left.description === right.description &&
+    left.siteName === right.siteName &&
+    left.imageUrl === right.imageUrl
+  );
+}
+
+function areLinkPreviewListsEqual(current: LinkPreview[] | undefined, next: LinkPreview[]): boolean {
+  const normalizedCurrent = current ?? [];
+  if (normalizedCurrent.length !== next.length) return false;
+  return normalizedCurrent.every((item, index) => isSameLinkPreview(item, next[index]));
+}
+
+async function fetchLinkPreviewForURL(url: string): Promise<LinkPreview | null> {
+  if (linkPreviewCacheByURL.has(url)) {
+    return linkPreviewCacheByURL.get(url) ?? null;
+  }
+
+  const existingRequest = linkPreviewInFlightByURL.get(url);
+  if (existingRequest) {
+    return existingRequest;
+  }
+
+  if (typeof window === "undefined") {
+    linkPreviewCacheByURL.set(url, null);
+    return null;
+  }
+
+  const bridge = window.openchat?.metadata?.scrapeOpenGraph;
+  if (!bridge) {
+    linkPreviewCacheByURL.set(url, null);
+    return null;
+  }
+
+  const request = bridge(url)
+    .then((payload) => {
+      const preview = payload ? normalizeOpenGraphMetadata(payload) : null;
+      linkPreviewCacheByURL.set(url, preview);
+      return preview;
+    })
+    .catch(() => {
+      linkPreviewCacheByURL.set(url, null);
+      return null;
+    })
+    .finally(() => {
+      linkPreviewInFlightByURL.delete(url);
+    });
+  linkPreviewInFlightByURL.set(url, request);
+  return request;
+}
+
 function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage | null {
   const messagePayload = payload.message as Record<string, unknown> | undefined;
   if (!messagePayload) return null;
@@ -93,7 +191,8 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
     channelId: channelID,
     authorUID: String(messagePayload.author_uid ?? "uid_unknown"),
     body: String(messagePayload.body ?? ""),
-    createdAt: String(messagePayload.created_at ?? new Date().toISOString())
+    createdAt: String(messagePayload.created_at ?? new Date().toISOString()),
+    linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews)
   };
 }
 
@@ -406,6 +505,7 @@ export const useChatStore = defineStore("chat", {
       try {
         const messages = await fetchMessages(params.backendUrl, params.channelId, 150);
         this.messagesByChannel[params.channelId] = messages;
+        void this.hydrateLinkPreviewsForMessages(params.channelId, messages);
         void this.ensureProfilesForUIDs({
           serverId: params.serverId,
           backendUrl: params.backendUrl,
@@ -430,9 +530,39 @@ export const useChatStore = defineStore("chat", {
         const existing = this.messagesByChannel[message.channelId] ?? [];
         if (!hasMessage(existing, message.id)) {
           this.messagesByChannel[message.channelId] = [...existing, message];
+          void this.hydrateLinkPreviewsForMessages(message.channelId, [message]);
         }
       } finally {
         this.sendingByChannel[params.channelId] = false;
+      }
+    },
+    setMessageLinkPreviews(channelId: string, messageId: string, previews: LinkPreview[]): void {
+      const messages = this.messagesByChannel[channelId];
+      if (!messages || messages.length === 0) return;
+      const messageIndex = messages.findIndex((message) => message.id === messageId);
+      if (messageIndex === -1) return;
+      const existingMessage = messages[messageIndex];
+      if (areLinkPreviewListsEqual(existingMessage.linkPreviews, previews)) return;
+      const nextMessage: ChatMessage = {
+        ...existingMessage,
+        linkPreviews: previews.length > 0 ? previews : undefined
+      };
+      const nextMessages = [...messages];
+      nextMessages[messageIndex] = nextMessage;
+      this.messagesByChannel[channelId] = nextMessages;
+    },
+    async hydrateLinkPreviewsForMessages(channelId: string, messages: ChatMessage[]): Promise<void> {
+      if (messages.length === 0) return;
+      for (const message of messages) {
+        if (message.linkPreviews && message.linkPreviews.length > 0) {
+          continue;
+        }
+        const urls = extractMessageURLs(message.body, maxLinkPreviewsPerMessage);
+        if (urls.length === 0) continue;
+        const previews = (await Promise.all(urls.map((url) => fetchLinkPreviewForURL(url)))).filter(
+          (preview): preview is LinkPreview => preview !== null
+        );
+        this.setMessageLinkPreviews(channelId, message.id, previews);
       }
     },
     ensureProfileSyncState(serverId: string): void {
@@ -708,6 +838,7 @@ export const useChatStore = defineStore("chat", {
         const existing = this.messagesByChannel[message.channelId] ?? [];
         if (hasMessage(existing, message.id)) return;
         this.messagesByChannel[message.channelId] = [...existing, message];
+        void this.hydrateLinkPreviewsForMessages(message.channelId, [message]);
         void this.ensureProfilesFromRealtime(serverId, [message.authorUID]);
         const subscribedChannel = this.subscribedChannelByServer[serverId];
         const channelIsActive = subscribedChannel === message.channelId;

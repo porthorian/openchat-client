@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import type { ChatMessage } from "@renderer/types/chat";
+import type { ChatMessage, LinkPreview } from "@renderer/types/chat";
+import { splitMessageTextSegments } from "@renderer/utils/linkify";
+import { computed } from "vue";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -10,6 +12,9 @@ const props = defineProps<{
   avatarTextColor: string;
   avatarImageDataUrl: string | null;
 }>();
+
+const messageTextSegments = computed(() => splitMessageTextSegments(props.message.body));
+const linkPreviews = computed(() => props.message.linkPreviews ?? []);
 
 function formatHeaderTimestamp(isoTimestamp: string): string {
   const date = new Date(isoTimestamp);
@@ -34,6 +39,18 @@ function formatFallbackTime(isoTimestamp: string): string {
     minute: "2-digit"
   });
 }
+
+function previewSiteLabel(preview: LinkPreview): string {
+  if (preview.siteName?.trim()) {
+    return preview.siteName.trim();
+  }
+  try {
+    const parsed = new URL(preview.url);
+    return parsed.hostname.replace(/^www\./i, "");
+  } catch (_error) {
+    return "Link preview";
+  }
+}
 </script>
 
 <template>
@@ -54,9 +71,41 @@ function formatFallbackTime(isoTimestamp: string): string {
         <time class="message-time">{{ formatHeaderTimestamp(props.message.createdAt) }}</time>
       </header>
       <p class="message-text">
-        {{ props.message.body }}
+        <template v-for="(segment, index) in messageTextSegments" :key="`${props.message.id}-segment-${index}`">
+          <a
+            v-if="segment.kind === 'link'"
+            class="message-link"
+            :href="segment.href"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {{ segment.label }}
+          </a>
+          <template v-else>{{ segment.value }}</template>
+        </template>
         <time v-if="isCompact" class="message-time-inline">{{ formatFallbackTime(props.message.createdAt) }}</time>
       </p>
+      <div v-if="linkPreviews.length > 0" class="message-link-preview-list">
+        <a
+          v-for="preview in linkPreviews"
+          :key="`${props.message.id}-preview-${preview.url}`"
+          class="message-link-preview-card"
+          :href="preview.url"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <p class="message-link-preview-site">{{ previewSiteLabel(preview) }}</p>
+          <p class="message-link-preview-title">{{ preview.title || preview.url }}</p>
+          <p v-if="preview.description" class="message-link-preview-description">{{ preview.description }}</p>
+          <img
+            v-if="preview.imageUrl"
+            class="message-link-preview-image"
+            :src="preview.imageUrl"
+            :alt="preview.title ? `${preview.title} preview image` : 'Link preview image'"
+            loading="lazy"
+          />
+        </a>
+      </div>
     </div>
   </article>
 </template>

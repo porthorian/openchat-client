@@ -1,4 +1,4 @@
-import type { ChannelGroup, ChatMessage, MemberItem } from "@renderer/types/chat";
+import type { ChannelGroup, ChatMessage, LinkPreview, MemberItem } from "@renderer/types/chat";
 
 export type RealtimeEnvelope = {
   type: string;
@@ -75,6 +75,28 @@ function normalizeProfile(payload: Record<string, unknown>): SyncedUserProfile {
   };
 }
 
+function normalizeLinkPreview(input: unknown): LinkPreview | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const url = String(payload.url ?? "").trim();
+  if (!url) return null;
+  return {
+    url,
+    title: payload.title ? String(payload.title) : null,
+    description: payload.description ? String(payload.description) : null,
+    siteName: payload.site_name ? String(payload.site_name) : payload.siteName ? String(payload.siteName) : null,
+    imageUrl: payload.image_url ? String(payload.image_url) : payload.imageUrl ? String(payload.imageUrl) : null
+  };
+}
+
+function normalizeLinkPreviews(input: unknown): LinkPreview[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const previews = input
+    .map((item) => normalizeLinkPreview(item))
+    .filter((item): item is LinkPreview => item !== null);
+  return previews.length > 0 ? previews : undefined;
+}
+
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const response = await fetch(dataUrl);
   if (!response.ok) {
@@ -116,6 +138,7 @@ export async function fetchMessages(backendUrl: string, channelId: string, limit
       author_uid: string;
       body: string;
       created_at: string;
+      link_previews?: unknown;
     }>;
   };
   return (payload.messages ?? []).map((message) => ({
@@ -123,7 +146,8 @@ export async function fetchMessages(backendUrl: string, channelId: string, limit
     channelId: message.channel_id,
     authorUID: message.author_uid,
     body: message.body,
-    createdAt: message.created_at
+    createdAt: message.created_at,
+    linkPreviews: normalizeLinkPreviews(message.link_previews)
   }));
 }
 
@@ -157,6 +181,7 @@ export async function createMessage(params: {
       author_uid: string;
       body: string;
       created_at: string;
+      link_previews?: unknown;
     };
   };
   return {
@@ -164,7 +189,8 @@ export async function createMessage(params: {
     channelId: payload.message.channel_id,
     authorUID: payload.message.author_uid,
     body: payload.message.body,
-    createdAt: payload.message.created_at
+    createdAt: payload.message.created_at,
+    linkPreviews: normalizeLinkPreviews(payload.message.link_previews)
   };
 }
 
