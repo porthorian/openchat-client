@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { ChatMessage } from "@renderer/types/chat";
+import type { MessageAttachment } from "@renderer/types/chat";
 import type { AvatarMode } from "@renderer/types/models";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChatComposer from "./ChatComposer.vue";
+import ChatImageLightbox from "./ChatImageLightbox.vue";
 import ChatMessageRow from "./ChatMessageRow.vue";
 
 type TimelineMessage = {
@@ -40,6 +42,7 @@ const emit = defineEmits<{
 
 const timelineRef = ref<HTMLElement | null>(null);
 const isTimelineScrolling = ref(false);
+const lightboxAttachment = ref<MessageAttachment | null>(null);
 const compactWindowMS = 5 * 60 * 1000;
 let scrollFrame = 0;
 let timelineScrollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -160,6 +163,14 @@ function onTimelineScroll(): void {
   markTimelineScrolling();
 }
 
+function openImageLightbox(attachment: MessageAttachment): void {
+  lightboxAttachment.value = attachment;
+}
+
+function closeImageLightbox(): void {
+  lightboxAttachment.value = null;
+}
+
 onMounted(() => {
   window.addEventListener("resize", queueScrollTimelineToBottom);
   void nextTick(() => {
@@ -191,6 +202,13 @@ watch(
   },
   { immediate: true }
 );
+
+watch(
+  () => props.channelId,
+  () => {
+    closeImageLightbox();
+  }
+);
 </script>
 
 <template>
@@ -214,6 +232,7 @@ watch(
         :avatar-color="entry.avatarColor"
         :avatar-text-color="entry.avatarTextColor"
         :avatar-image-data-url="entry.avatarImageDataUrl"
+        @open-image-lightbox="openImageLightbox"
       />
     </section>
 
@@ -234,5 +253,7 @@ watch(
       @send-message="emit('sendMessage', $event)"
       @typing-activity="emit('typingActivity', $event)"
     />
+
+    <ChatImageLightbox :open="lightboxAttachment !== null" :attachment="lightboxAttachment" @close="closeImageLightbox" />
   </main>
 </template>

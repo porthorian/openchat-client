@@ -12,6 +12,9 @@ const props = defineProps<{
   avatarTextColor: string;
   avatarImageDataUrl: string | null;
 }>();
+const emit = defineEmits<{
+  openImageLightbox: [attachment: MessageAttachment];
+}>();
 
 const messageTextSegments = computed(() => splitMessageTextSegments(props.message.body));
 const linkPreviews = computed(() => props.message.linkPreviews ?? []);
@@ -65,6 +68,10 @@ function attachmentAlt(attachment: MessageAttachment): string {
   }
   return "Attached image";
 }
+
+function onAttachmentImageClick(attachment: MessageAttachment): void {
+  emit("openImageLightbox", attachment);
+}
 </script>
 
 <template>
@@ -110,10 +117,11 @@ function attachmentAlt(attachment: MessageAttachment): string {
         >
           <img
             v-if="isImageAttachment(attachment)"
-            class="message-attachment-image"
+            class="message-attachment-image is-clickable"
             :src="attachment.url"
             :alt="attachmentAlt(attachment)"
             loading="lazy"
+            @click.prevent.stop="onAttachmentImageClick(attachment)"
           />
           <p class="message-attachment-name">{{ attachment.fileName }}</p>
         </a>
