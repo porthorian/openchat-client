@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, shell } from "electron";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { IPCChannels, type RuntimeInfo } from "../shared/ipc";
+import { IPCChannels, type DesktopCaptureSource, type RuntimeInfo } from "../shared/ipc";
 import { ClientUpdateService } from "./clientUpdateService";
 
 const isMac = process.platform === "darwin";
@@ -123,6 +123,27 @@ function registerIPCHandlers(updateService: ClientUpdateService): void {
     };
   });
   ipcMain.handle(IPCChannels.ProjectLinks, () => updateService.getProjectLinks());
+  ipcMain.handle(IPCChannels.RTCListDesktopSources, async (): Promise<DesktopCaptureSource[]> => {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: {
+        width: 480,
+        height: 270
+      },
+      fetchWindowIcons: true
+    });
+    return sources.map((source) => {
+      const isWindowSource = source.id.startsWith("window:");
+      return {
+        id: source.id,
+        name: source.name,
+        kind: isWindowSource ? "window" : "screen",
+        displayId: source.display_id || null,
+        thumbnailDataUrl: source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL(),
+        appIconDataUrl: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null
+      };
+    });
+  });
   ipcMain.handle(IPCChannels.UpdateGetStatus, () => updateService.getStatus());
   ipcMain.handle(IPCChannels.UpdateCheckForUpdates, () => updateService.checkForUpdates());
   ipcMain.handle(IPCChannels.UpdateDownload, () => updateService.downloadUpdate());

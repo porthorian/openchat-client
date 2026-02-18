@@ -8,15 +8,27 @@ const props = defineProps<{
   activeVoiceChannelName: string | null;
   callState: "idle" | "joining" | "active" | "reconnecting" | "error";
   callParticipantCount: number;
+  cameraEnabled: boolean;
+  screenShareEnabled: boolean;
+  cameraAvailable: boolean;
+  screenShareAvailable: boolean;
+  cameraErrorMessage?: string | null;
+  screenShareErrorMessage?: string | null;
   callErrorMessage?: string | null;
 }>();
 
 const emit = defineEmits<{
   leave: [];
+  toggleCamera: [];
+  toggleScreenShare: [];
 }>();
 
 const isVoiceConnected = computed(() => props.callState === "active" && Boolean(props.activeVoiceChannelName));
 const shouldShow = computed(() => props.callState !== "idle" || Boolean(props.activeVoiceChannelName));
+const canToggleMedia = computed(() => props.callState === "active");
+const statusErrorMessage = computed(() => {
+  return props.cameraErrorMessage ?? props.screenShareErrorMessage ?? props.callErrorMessage ?? null;
+});
 
 const voiceConnectedTitle = computed(() => {
   switch (props.callState) {
@@ -66,14 +78,28 @@ const voiceConnectedTitle = computed(() => {
     </header>
 
     <div class="voice-connected-actions">
-      <button type="button" class="voice-connected-action-btn" aria-label="Share screen">
+      <button
+        type="button"
+        class="voice-connected-action-btn"
+        :class="{ 'is-active': cameraEnabled }"
+        :disabled="!cameraAvailable || !canToggleMedia"
+        :aria-label="cameraEnabled ? 'Disable camera' : 'Enable camera'"
+        @click="emit('toggleCamera')"
+      >
         <AppIcon :path="mdiVideo" :size="16" />
       </button>
-      <button type="button" class="voice-connected-action-btn" aria-label="Share screen">
+      <button
+        type="button"
+        class="voice-connected-action-btn"
+        :class="{ 'is-active': screenShareEnabled }"
+        :disabled="!screenShareAvailable || !canToggleMedia"
+        :aria-label="screenShareEnabled ? 'Stop screen share' : 'Start screen share'"
+        @click="emit('toggleScreenShare')"
+      >
         <AppIcon :path="mdiMonitorShare" :size="16" />
       </button>
     </div>
 
-    <p v-if="callErrorMessage" class="voice-connected-error">{{ callErrorMessage }}</p>
+    <p v-if="statusErrorMessage" class="voice-connected-error">{{ statusErrorMessage }}</p>
   </section>
 </template>

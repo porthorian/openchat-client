@@ -28,6 +28,12 @@ const props = defineProps<{
   callState: "idle" | "joining" | "active" | "reconnecting" | "error";
   callParticipantCount: number;
   callErrorMessage?: string | null;
+  cameraEnabled: boolean;
+  screenShareEnabled: boolean;
+  canSendVideo: boolean;
+  canShareScreen: boolean;
+  cameraErrorMessage?: string | null;
+  screenShareErrorMessage?: string | null;
   localVoiceTransmitting: boolean;
   micMuted: boolean;
   deafened: boolean;
@@ -54,6 +60,8 @@ const emit = defineEmits<{
   toggleUidMode: [];
   toggleMic: [];
   toggleDeafen: [];
+  toggleCamera: [];
+  toggleScreenShare: [];
   leaveVoiceChannel: [];
   openInputOptions: [];
   selectInputDevice: [deviceId: string];
@@ -283,7 +291,15 @@ onBeforeUnmount(() => {
         :call-state="callState"
         :call-participant-count="callParticipantCount"
         :call-error-message="callErrorMessage"
+        :camera-enabled="cameraEnabled"
+        :screen-share-enabled="screenShareEnabled"
+        :camera-available="canSendVideo"
+        :screen-share-available="canShareScreen"
+        :camera-error-message="cameraErrorMessage"
+        :screen-share-error-message="screenShareErrorMessage"
         @leave="emit('leaveVoiceChannel')"
+        @toggle-camera="emit('toggleCamera')"
+        @toggle-screen-share="emit('toggleScreenShare')"
       />
 
       <div class="user-dock-main">

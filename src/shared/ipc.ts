@@ -2,12 +2,24 @@ export const IPCChannels = {
   AppVersion: "app:version",
   RuntimeInfo: "app:runtime-info",
   ProjectLinks: "app:project-links",
+  RTCListDesktopSources: "rtc:list-desktop-sources",
   UpdateGetStatus: "app:update:get-status",
   UpdateCheckForUpdates: "app:update:check-for-updates",
   UpdateDownload: "app:update:download",
   UpdateQuitAndInstall: "app:update:quit-and-install",
   UpdateStatusChanged: "app:update:status-changed"
 } as const;
+
+export type DesktopCaptureSourceKind = "screen" | "window";
+
+export type DesktopCaptureSource = {
+  id: string;
+  name: string;
+  kind: DesktopCaptureSourceKind;
+  displayId: string | null;
+  thumbnailDataUrl: string | null;
+  appIconDataUrl: string | null;
+};
 
 export type RuntimeInfo = {
   platform: NodeJS.Platform;

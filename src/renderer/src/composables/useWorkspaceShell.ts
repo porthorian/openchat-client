@@ -1,9 +1,10 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { RuntimeInfo } from "@shared/ipc";
+import type { DesktopCaptureSource, RuntimeInfo } from "@shared/ipc";
 import type { Channel, ChannelGroup } from "@renderer/types/chat";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
+import type { CallVideoStream } from "@renderer/stores/call";
 import {
   DEFAULT_BACKEND_URL,
   fetchServerDirectory,
@@ -61,6 +62,24 @@ type ServerJoinProbeSummary = {
   probedAt: string;
 };
 
+type ScreenSharePickerState = {
+  isOpen: boolean;
+  isLoading: boolean;
+  errorMessage: string | null;
+  sources: DesktopCaptureSource[];
+};
+
+type CallStageParticipantCard = {
+  participantId: string;
+  name: string;
+  isLocal: boolean;
+  isSpeaking: boolean;
+  avatarText: string;
+  avatarBackground: string;
+  avatarTextColor: string;
+  avatarImageDataUrl: string | null;
+};
+
 export function useWorkspaceShell() {
   const appUI = useAppUIStore();
   const call = useCallStore();
@@ -86,6 +105,12 @@ export function useWorkspaceShell() {
     selectedDiscoveredServerId: "",
     probeSummary: null,
     probedCapabilities: null
+  });
+  const screenSharePicker = ref<ScreenSharePickerState>({
+    isOpen: false,
+    isLoading: false,
+    errorMessage: null,
+    sources: []
   });
 
   const moodCatalog: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -294,6 +319,16 @@ export function useWorkspaceShell() {
     return call.sessionFor(appUI.activeServerId, activeVoiceChannelId.value);
   });
 
+  const selectedChannel = computed(() => findChannelByID(rawChannelGroups.value, appUI.activeChannelId));
+  const selectedVoiceChannelId = computed(() => (selectedChannel.value?.type === "voice" ? selectedChannel.value.id : null));
+  const selectedVoiceChannelName = computed(() => {
+    if (selectedChannel.value?.type !== "voice") return null;
+    return selectedChannel.value.name;
+  });
+  const isSelectedVoiceChannelActiveCall = computed(() => {
+    return Boolean(selectedVoiceChannelId.value && selectedVoiceChannelId.value === activeVoiceChannelId.value);
+  });
+
   const activeVoiceParticipants = computed<Record<string, VoiceParticipant[]>>(() => {
     const byChannel: Record<string, VoiceParticipant[]> = {};
     if (!activeVoiceChannelId.value) return byChannel;
@@ -323,6 +358,60 @@ export function useWorkspaceShell() {
     if (speakingIds.length === 0) return byChannel;
     byChannel[activeVoiceChannelId.value] = [...speakingIds];
     return byChannel;
+  });
+
+  const activeCallVideoStreams = computed<CallVideoStream[]>(() => {
+    if (!activeVoiceChannelId.value) return [];
+    return call.videoStreamsFor(appUI.activeServerId, activeVoiceChannelId.value);
+  });
+
+  const isCallStageVisible = computed(() => {
+    if (!selectedVoiceChannelId.value) return false;
+    return true;
+  });
+
+  const shouldShowCallStageVideo = computed(() => {
+    if (!isSelectedVoiceChannelActiveCall.value) return false;
+    const state = activeCallSession.value?.state ?? "idle";
+    return state === "active" || state === "joining" || state === "reconnecting";
+  });
+
+  const activeCallParticipantCards = computed<CallStageParticipantCard[]>(() => {
+    const participants = activeCallSession.value?.participants ?? [];
+    if (participants.length === 0) return [];
+    const localDisplayName = identity.profileDisplayName.trim() || "You";
+    const localAvatarPreset = avatarPresetById(identity.avatarPresetId);
+    const speakingSet = new Set(activeCallSession.value?.activeSpeakerParticipantIds ?? []);
+    return participants.map((participant) => {
+      const fallbackAvatar = avatarForUID(participant.userUID);
+      const participantName = participant.isLocal ? localDisplayName : displayNameForUID(participant.userUID);
+      return {
+        participantId: participant.participantId,
+        name: participantName,
+        isLocal: participant.isLocal,
+        isSpeaking: speakingSet.has(participant.participantId),
+        avatarText: participantName.slice(0, 1).toUpperCase() || fallbackAvatar.avatarText,
+        avatarBackground:
+          participant.isLocal && identity.avatarMode === "generated" ? localAvatarPreset.gradient : fallbackAvatar.avatarBackground,
+        avatarTextColor:
+          participant.isLocal && identity.avatarMode === "generated" ? localAvatarPreset.accent : fallbackAvatar.avatarTextColor,
+        avatarImageDataUrl:
+          participant.isLocal && identity.avatarMode === "uploaded" ? identity.avatarImageDataUrl : fallbackAvatar.avatarImageDataUrl
+      };
+    });
+  });
+
+  const callStageHelperMessage = computed(() => {
+    if (shouldShowCallStageVideo.value) {
+      return "No video streams yet.";
+    }
+    if (activeVoiceChannelName.value && selectedVoiceChannelName.value && activeVoiceChannelName.value !== selectedVoiceChannelName.value) {
+      return `You are connected in ${activeVoiceChannelName.value}. Select that channel to view live video.`;
+    }
+    if (selectedVoiceChannelName.value) {
+      return `Join ${selectedVoiceChannelName.value} to view live video and screen shares.`;
+    }
+    return "Select a voice channel.";
   });
 
   const localVoiceTransmitting = computed(() => {
@@ -554,6 +643,7 @@ export function useWorkspaceShell() {
   });
 
   onBeforeUnmount(() => {
+    closeScreenSharePicker();
     call.disconnectAll();
     chat.disconnectAllRealtime();
   });
@@ -585,6 +675,7 @@ export function useWorkspaceShell() {
     if (serverId === appUI.activeServerId) {
       return;
     }
+    closeScreenSharePicker();
     const currentActiveVoice = activeVoiceChannelId.value;
     if (currentActiveVoice) {
       call.leaveChannel(appUI.activeServerId, currentActiveVoice);
@@ -652,6 +743,13 @@ export function useWorkspaceShell() {
     const server = activeServer.value;
     const activeUser = activeSession.value?.userUID;
     if (!server || !activeUser) return;
+    if (appUI.activeChannelId && appUI.activeChannelId !== channelId) {
+      chat.unsubscribeFromChannel(appUI.activeServerId, appUI.activeChannelId);
+    }
+    appUI.setActiveChannel(channelId);
+    if (activeVoiceChannelId.value === channelId) {
+      return;
+    }
     void call.toggleVoiceChannel({
       serverId: appUI.activeServerId,
       channelId,
@@ -695,8 +793,72 @@ export function useWorkspaceShell() {
     call.toggleDeafen(appUI.activeServerId);
   }
 
+  function toggleCamera(): void {
+    void call.toggleCamera(appUI.activeServerId);
+  }
+
+  function closeScreenSharePicker(): void {
+    screenSharePicker.value = {
+      isOpen: false,
+      isLoading: false,
+      errorMessage: null,
+      sources: []
+    };
+  }
+
+  async function openScreenSharePicker(): Promise<void> {
+    const screenShareBridge = window.openchat.rtc?.listDesktopCaptureSources;
+    if (!screenShareBridge) {
+      void call.toggleScreenShare(appUI.activeServerId);
+      return;
+    }
+
+    screenSharePicker.value = {
+      isOpen: true,
+      isLoading: true,
+      errorMessage: null,
+      sources: []
+    };
+    try {
+      const sources = await screenShareBridge();
+      screenSharePicker.value = {
+        isOpen: true,
+        isLoading: false,
+        errorMessage: null,
+        sources
+      };
+    } catch (error) {
+      screenSharePicker.value = {
+        isOpen: true,
+        isLoading: false,
+        errorMessage: `Failed to list screen-share sources: ${(error as Error).message}`,
+        sources: []
+      };
+    }
+  }
+
+  async function toggleScreenShare(): Promise<void> {
+    const active = activeCallSession.value;
+    if (active?.screenShareEnabled) {
+      await call.toggleScreenShare(appUI.activeServerId);
+      closeScreenSharePicker();
+      return;
+    }
+    await openScreenSharePicker();
+  }
+
+  function selectScreenShareSource(sourceId: string): void {
+    const normalizedSourceID = sourceId.trim();
+    if (!normalizedSourceID) return;
+    closeScreenSharePicker();
+    void call.toggleScreenShare(appUI.activeServerId, {
+      sourceId: normalizedSourceID
+    });
+  }
+
   function leaveVoiceChannel(): void {
     if (!activeVoiceChannelId.value) return;
+    closeScreenSharePicker();
     call.leaveChannel(appUI.activeServerId, activeVoiceChannelId.value);
   }
 
@@ -1240,6 +1402,12 @@ export function useWorkspaceShell() {
     callState: activeCallSession.value?.state ?? "idle",
     callParticipantCount: activeCallSession.value?.participants.length ?? 0,
     callErrorMessage: activeCallSession.value?.errorMessage ?? null,
+    cameraEnabled: activeCallSession.value?.cameraEnabled ?? false,
+    screenShareEnabled: activeCallSession.value?.screenShareEnabled ?? false,
+    canSendVideo: activeCallSession.value?.canSendVideo ?? true,
+    canShareScreen: activeCallSession.value?.canShareScreen ?? true,
+    cameraErrorMessage: activeCallSession.value?.cameraErrorMessage ?? null,
+    screenShareErrorMessage: activeCallSession.value?.screenShareErrorMessage ?? null,
     localVoiceTransmitting: localVoiceTransmitting.value,
     micMuted: activeCallSession.value?.micMuted ?? activeServerAudioPrefs.value?.micMuted ?? false,
     deafened: activeCallSession.value?.deafened ?? activeServerAudioPrefs.value?.deafened ?? false,
@@ -1260,6 +1428,27 @@ export function useWorkspaceShell() {
     uidMode: identity.uidMode,
     disclosureMessage: identity.disclosureMessage,
     startupError: startupError.value
+  }));
+
+  const callStageProps = computed(() => ({
+    serverName: activeServer.value?.displayName ?? "Unknown Server",
+    selectedVoiceChannelName: selectedVoiceChannelName.value,
+    connectedVoiceChannelName: activeVoiceChannelName.value,
+    showLiveVideo: shouldShowCallStageVideo.value,
+    helperMessage: callStageHelperMessage.value,
+    callState: shouldShowCallStageVideo.value ? (activeCallSession.value?.state ?? "idle") : "idle",
+    callParticipantCount: shouldShowCallStageVideo.value ? (activeCallSession.value?.participants.length ?? 0) : 0,
+    activeSpeakerParticipantIds: shouldShowCallStageVideo.value ? (activeCallSession.value?.activeSpeakerParticipantIds ?? []) : [],
+    participants: shouldShowCallStageVideo.value ? activeCallParticipantCards.value : [],
+    videoStreams: shouldShowCallStageVideo.value ? activeCallVideoStreams.value : []
+  }));
+
+  const screenSharePickerProps = computed(() => ({
+    isOpen: screenSharePicker.value.isOpen,
+    isLoading: screenSharePicker.value.isLoading,
+    errorMessage: screenSharePicker.value.errorMessage,
+    targetChannelName: activeVoiceChannelName.value,
+    sources: screenSharePicker.value.sources
   }));
 
   const workspaceToolbarProps = computed(() => ({
@@ -1331,6 +1520,8 @@ export function useWorkspaceShell() {
     toggleUidMode: cycleUIDMode,
     toggleMic,
     toggleDeafen,
+    toggleCamera,
+    toggleScreenShare,
     leaveVoiceChannel,
     openInputOptions,
     selectInputDevice,
@@ -1364,6 +1555,11 @@ export function useWorkspaceShell() {
     "update:displayName": setAddServerDisplayName
   };
 
+  const screenSharePickerListeners = {
+    close: closeScreenSharePicker,
+    selectSource: selectScreenShareSource
+  };
+
   const taskbarListeners = {
     updateAction: triggerTaskbarUpdateAction,
     showClientInfo: openVersionInfoModal
@@ -1394,6 +1590,9 @@ export function useWorkspaceShell() {
     serverRailProps,
     channelPaneProps,
     workspaceToolbarProps,
+    callStageVisible: isCallStageVisible,
+    callStageProps,
+    screenSharePickerProps,
     chatPaneProps,
     userDockProps,
     membersPaneProps,
@@ -1408,6 +1607,7 @@ export function useWorkspaceShell() {
     workspaceToolbarListeners,
     chatPaneListeners,
     membersPaneListeners,
-    addServerDialogListeners
+    addServerDialogListeners,
+    screenSharePickerListeners
   };
 }

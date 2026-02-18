@@ -12,13 +12,34 @@ export type CallParticipant = {
   isLocal: boolean;
 };
 
+export type CallVideoStreamKind = "camera" | "screen";
+
+export type CallVideoStream = {
+  streamKey: string;
+  participantId: string;
+  userUID: string;
+  deviceID: string;
+  kind: CallVideoStreamKind;
+  mediaStream: MediaStream;
+  trackId: string;
+  startedAt: string;
+  isLocal: boolean;
+};
+
 export type ChannelCallSession = {
   state: CallConnectionState;
   participants: CallParticipant[];
   localParticipantId: string | null;
   activeSpeakerParticipantIds: string[];
+  videoStreams: CallVideoStream[];
   micMuted: boolean;
   deafened: boolean;
+  cameraEnabled: boolean;
+  screenShareEnabled: boolean;
+  canSendVideo: boolean;
+  canShareScreen: boolean;
+  cameraErrorMessage: string | null;
+  screenShareErrorMessage: string | null;
   errorMessage: string | null;
   joinedAt: string | null;
   lastEventAt: string | null;
@@ -57,10 +78,17 @@ type CallState = {
 
 const DEFAULT_OUTPUT_DEVICE_ID = "default";
 const DEFAULT_OUTPUT_DEVICE_LABEL = "System Default";
+const RTC_VIDEO_CAMERA_KIND = "video_camera";
+const RTC_VIDEO_SCREEN_KIND = "video_screen";
 const socketsByKey = new Map<string, WebSocket>();
 const intentionallyClosed = new Set<string>();
 const nextPlaybackTimeByStream = new Map<string, number>();
 const micUplinksByKey = new Map<string, MicUplink>();
+const peerConnectionsByKey = new Map<string, Map<string, PeerConnectionEntry>>();
+const iceServersByKey = new Map<string, RTCIceServer[]>();
+const videoHintByKey = new Map<string, Map<string, CallVideoStreamKind>>();
+const localCameraStreamsByKey = new Map<string, MediaStream>();
+const localScreenStreamsByKey = new Map<string, MediaStream>();
 const localJoinIdentityByKey = new Map<string, { userUID: string; deviceID: string }>();
 const speakingTimersByParticipant = new Map<string, ReturnType<typeof setTimeout>>();
 let playbackAudioContext: AudioContext | null = null;
@@ -87,6 +115,23 @@ type MicUplink = {
   chunkSeq: number;
 };
 
+type PeerConnectionEntry = {
+  connection: RTCPeerConnection;
+  participantId: string;
+  channelId: string;
+  polite: boolean;
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+};
+
+type ElectronDesktopVideoConstraints = MediaTrackConstraints & {
+  mandatory?: {
+    chromeMediaSource: "desktop";
+    chromeMediaSourceId: string;
+    maxFrameRate?: number;
+  };
+};
+
 function sessionKey(serverId: string, channelId: string): string {
   return `${serverId}:${channelId}`;
 }
@@ -97,8 +142,15 @@ function createEmptySession(): ChannelCallSession {
     participants: [],
     localParticipantId: null,
     activeSpeakerParticipantIds: [],
+    videoStreams: [],
     micMuted: false,
     deafened: false,
+    cameraEnabled: false,
+    screenShareEnabled: false,
+    canSendVideo: true,
+    canShareScreen: true,
+    cameraErrorMessage: null,
+    screenShareErrorMessage: null,
     errorMessage: null,
     joinedAt: null,
     lastEventAt: null
@@ -117,6 +169,51 @@ function toNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return fallback;
+}
+
+function toDescriptionType(value: unknown): RTCSdpType | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "offer" || normalized === "answer" || normalized === "pranswer" || normalized === "rollback") {
+    return normalized;
+  }
+  return null;
+}
+
+function toVideoKindFromSignal(streamKind: string): CallVideoStreamKind | null {
+  if (streamKind === RTC_VIDEO_CAMERA_KIND) return "camera";
+  if (streamKind === RTC_VIDEO_SCREEN_KIND) return "screen";
+  return null;
+}
+
+function toSignalStreamKind(kind: CallVideoStreamKind): string {
+  return kind === "screen" ? RTC_VIDEO_SCREEN_KIND : RTC_VIDEO_CAMERA_KIND;
+}
+
+function videoHintKey(participantId: string, trackId: string): string {
+  return `${participantId}:${trackId}`;
+}
+
+function inferVideoKindFromTrackLabel(label: string): CallVideoStreamKind {
+  const normalized = label.trim().toLowerCase();
+  if (
+    normalized.includes("screen") ||
+    normalized.includes("display") ||
+    normalized.includes("window") ||
+    normalized.includes("monitor")
+  ) {
+    return "screen";
+  }
+  return "camera";
+}
+
+function toRTCIceServers(iceServers: Array<{ urls: string[]; username?: string; credential?: string }>): RTCIceServer[] {
+  return iceServers
+    .filter((server) => Array.isArray(server.urls) && server.urls.length > 0)
+    .map((server) => ({
+      urls: server.urls,
+      ...(server.username ? { username: server.username } : {}),
+      ...(server.credential ? { credential: server.credential } : {})
+    }));
 }
 
 function supportsOutputSelection(): boolean {
@@ -427,6 +524,11 @@ export const useCallStore = defineStore("call", {
       (serverId: string, channelId: string): CallParticipant[] => {
         return state.sessionsByKey[sessionKey(serverId, channelId)]?.participants ?? [];
       },
+    videoStreamsFor:
+      (state) =>
+      (serverId: string, channelId: string): CallVideoStream[] => {
+        return state.sessionsByKey[sessionKey(serverId, channelId)]?.videoStreams ?? [];
+      },
     activeChannelFor: (state) => (serverId: string): string | null => {
       return state.activeVoiceChannelByServer[serverId] ?? null;
     },
@@ -435,6 +537,12 @@ export const useCallStore = defineStore("call", {
     },
     deafenedForServer: (state) => (serverId: string): boolean => {
       return state.audioPrefsByServer[serverId]?.deafened ?? false;
+    },
+    cameraEnabledFor: (state) => (serverId: string, channelId: string): boolean => {
+      return state.sessionsByKey[sessionKey(serverId, channelId)]?.cameraEnabled ?? false;
+    },
+    screenShareEnabledFor: (state) => (serverId: string, channelId: string): boolean => {
+      return state.sessionsByKey[sessionKey(serverId, channelId)]?.screenShareEnabled ?? false;
     }
   },
   actions: {
@@ -453,6 +561,658 @@ export const useCallStore = defineStore("call", {
         this.sessionsByKey[key] = createEmptySession();
       }
       return key;
+    },
+    peerConnectionsForSession(key: string): Map<string, PeerConnectionEntry> {
+      const existing = peerConnectionsByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, PeerConnectionEntry>();
+      peerConnectionsByKey.set(key, created);
+      return created;
+    },
+    videoHintsForSession(key: string): Map<string, CallVideoStreamKind> {
+      const existing = videoHintByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, CallVideoStreamKind>();
+      videoHintByKey.set(key, created);
+      return created;
+    },
+    updateVideoHint(serverId: string, channelId: string, participantId: string, trackId: string, kind: CallVideoStreamKind): void {
+      if (!participantId || !trackId) return;
+      const key = sessionKey(serverId, channelId);
+      this.videoHintsForSession(key).set(videoHintKey(participantId, trackId), kind);
+    },
+    deleteVideoHint(serverId: string, channelId: string, participantId: string, trackId: string): void {
+      if (!participantId || !trackId) return;
+      const key = sessionKey(serverId, channelId);
+      const hintMap = videoHintByKey.get(key);
+      if (!hintMap) return;
+      hintMap.delete(videoHintKey(participantId, trackId));
+      if (hintMap.size === 0) {
+        videoHintByKey.delete(key);
+      }
+    },
+    deleteVideoHintsForParticipant(serverId: string, channelId: string, participantId: string): void {
+      if (!participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const hintMap = videoHintByKey.get(key);
+      if (!hintMap) return;
+      const prefix = `${participantId}:`;
+      for (const hintKey of hintMap.keys()) {
+        if (hintKey.startsWith(prefix)) {
+          hintMap.delete(hintKey);
+        }
+      }
+      if (hintMap.size === 0) {
+        videoHintByKey.delete(key);
+      }
+    },
+    upsertVideoStream(params: {
+      serverId: string;
+      channelId: string;
+      participantId: string;
+      userUID: string;
+      deviceID: string;
+      kind: CallVideoStreamKind;
+      mediaStream: MediaStream;
+      trackId: string;
+      isLocal: boolean;
+    }): void {
+      const key = this.ensureSession(params.serverId, params.channelId);
+      const session = this.sessionsByKey[key];
+      const streamKey = `${params.participantId}:${params.trackId}`;
+      const index = session.videoStreams.findIndex((entry) => entry.streamKey === streamKey);
+      const next: CallVideoStream = {
+        streamKey,
+        participantId: params.participantId,
+        userUID: params.userUID,
+        deviceID: params.deviceID,
+        kind: params.kind,
+        mediaStream: params.mediaStream,
+        trackId: params.trackId,
+        startedAt: new Date().toISOString(),
+        isLocal: params.isLocal
+      };
+      if (index >= 0) {
+        session.videoStreams.splice(index, 1, next);
+        return;
+      }
+      session.videoStreams.push(next);
+    },
+    removeVideoStream(serverId: string, channelId: string, streamKeyToRemove: string): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      session.videoStreams = session.videoStreams.filter((entry) => entry.streamKey !== streamKeyToRemove);
+    },
+    removeVideoStreamsForParticipant(
+      serverId: string,
+      channelId: string,
+      participantId: string,
+      kind?: CallVideoStreamKind
+    ): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      session.videoStreams = session.videoStreams.filter((entry) => {
+        if (entry.participantId !== participantId) return true;
+        if (!kind) return false;
+        return entry.kind !== kind;
+      });
+    },
+    sendVideoStateSignal(params: {
+      serverId: string;
+      channelId: string;
+      kind: CallVideoStreamKind;
+      action: "start" | "stop";
+      trackId: string;
+      streamId: string;
+    }): void {
+      const key = sessionKey(params.serverId, params.channelId);
+      const socket = socketsByKey.get(key);
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      sendSignal(socket, {
+        type: "rtc.media.state",
+        request_id: `video_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        channel_id: params.channelId,
+        payload: {
+          stream_id: params.streamId,
+          track_id: params.trackId,
+          stream_kind: toSignalStreamKind(params.kind),
+          action: params.action
+        }
+      });
+    },
+    stopLocalVideoKind(serverId: string, channelId: string, kind: CallVideoStreamKind, options?: { notify?: boolean }): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+
+      const streamMap = kind === "screen" ? localScreenStreamsByKey : localCameraStreamsByKey;
+      const stream = streamMap.get(key);
+      if (!stream) {
+        if (kind === "screen") {
+          session.screenShareEnabled = false;
+          session.screenShareErrorMessage = null;
+        } else {
+          session.cameraEnabled = false;
+          session.cameraErrorMessage = null;
+        }
+        return;
+      }
+
+      const track = stream.getVideoTracks()[0];
+      if (track && options?.notify !== false) {
+        this.sendVideoStateSignal({
+          serverId,
+          channelId,
+          kind,
+          action: "stop",
+          trackId: track.id,
+          streamId: stream.id
+        });
+      }
+
+      stream.getTracks().forEach((item) => {
+        item.onended = null;
+        item.stop();
+      });
+      streamMap.delete(key);
+
+      const localParticipantID = session.localParticipantId ?? "";
+      if (localParticipantID) {
+        this.removeVideoStreamsForParticipant(serverId, channelId, localParticipantID, kind);
+      } else {
+        session.videoStreams = session.videoStreams.filter((entry) => !(entry.isLocal && entry.kind === kind));
+      }
+
+      if (kind === "screen") {
+        session.screenShareEnabled = false;
+        session.screenShareErrorMessage = null;
+      } else {
+        session.cameraEnabled = false;
+        session.cameraErrorMessage = null;
+      }
+    },
+    stopAllLocalVideo(serverId: string, channelId: string, options?: { notify?: boolean }): void {
+      this.stopLocalVideoKind(serverId, channelId, "camera", options);
+      this.stopLocalVideoKind(serverId, channelId, "screen", options);
+    },
+    async syncPeerVideoTracks(serverId: string, channelId: string, participantId: string): Promise<void> {
+      const key = sessionKey(serverId, channelId);
+      const peers = peerConnectionsByKey.get(key);
+      const peer = peers?.get(participantId);
+      if (!peer) return;
+      const session = this.sessionsByKey[key];
+      if (!session || peer.connection.signalingState === "closed") return;
+
+      peer.connection
+        .getSenders()
+        .filter((sender) => sender.track?.kind === "video")
+        .forEach((sender) => {
+          try {
+            peer.connection.removeTrack(sender);
+          } catch (_error) {
+            // No-op
+          }
+        });
+
+      const cameraStream = localCameraStreamsByKey.get(key);
+      const cameraTrack = cameraStream?.getVideoTracks()[0];
+      if (cameraTrack && session.cameraEnabled) {
+        peer.connection.addTrack(cameraTrack, cameraStream);
+      }
+
+      const screenStream = localScreenStreamsByKey.get(key);
+      const screenTrack = screenStream?.getVideoTracks()[0];
+      if (screenTrack && session.screenShareEnabled) {
+        peer.connection.addTrack(screenTrack, screenStream);
+      }
+    },
+    async syncAllPeerVideoTracks(serverId: string, channelId: string): Promise<void> {
+      const key = sessionKey(serverId, channelId);
+      const peers = peerConnectionsByKey.get(key);
+      if (!peers || peers.size === 0) return;
+      await Promise.all(
+        Array.from(peers.values()).map(async (peer) => {
+          await this.syncPeerVideoTracks(serverId, channelId, peer.participantId);
+        })
+      );
+    },
+    async createAndSendOffer(serverId: string, channelId: string, participantId: string): Promise<void> {
+      const key = sessionKey(serverId, channelId);
+      const peers = peerConnectionsByKey.get(key);
+      const peer = peers?.get(participantId);
+      if (!peer) return;
+      const session = this.sessionsByKey[key];
+      if (!session || session.state !== "active") return;
+      const socket = socketsByKey.get(key);
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      if (peer.connection.signalingState === "closed") return;
+
+      try {
+        peer.makingOffer = true;
+        await peer.connection.setLocalDescription();
+        const localDescription = peer.connection.localDescription;
+        if (!localDescription || localDescription.type !== "offer") return;
+        sendSignal(socket, {
+          type: "rtc.offer.publish",
+          request_id: `offer_${Date.now()}_${participantId}`,
+          channel_id: channelId,
+          payload: {
+            target_participant_id: participantId,
+            description_type: localDescription.type,
+            sdp: localDescription.sdp
+          }
+        });
+      } catch (error) {
+        session.errorMessage = `Offer negotiation failed: ${(error as Error).message}`;
+      } finally {
+        peer.makingOffer = false;
+      }
+    },
+    ensurePeerConnection(serverId: string, channelId: string, participantId: string): PeerConnectionEntry | null {
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session || !participantId || session.localParticipantId === participantId) return null;
+
+      const peers = this.peerConnectionsForSession(key);
+      const existing = peers.get(participantId);
+      if (existing) return existing;
+
+      const localParticipantID = session.localParticipantId ?? "";
+      const polite = localParticipantID ? localParticipantID.localeCompare(participantId) > 0 : true;
+      const connection = new RTCPeerConnection({
+        iceServers: iceServersByKey.get(key) ?? []
+      });
+      const entry: PeerConnectionEntry = {
+        connection,
+        participantId,
+        channelId,
+        polite,
+        makingOffer: false,
+        ignoreOffer: false
+      };
+      peers.set(participantId, entry);
+
+      connection.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        const socket = socketsByKey.get(key);
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSignal(socket, {
+          type: "rtc.ice.candidate",
+          request_id: `ice_${Date.now()}_${participantId}`,
+          channel_id: channelId,
+          payload: {
+            target_participant_id: participantId,
+            candidate: event.candidate.toJSON()
+          }
+        });
+      };
+
+      connection.onnegotiationneeded = () => {
+        void this.createAndSendOffer(serverId, channelId, participantId);
+      };
+
+      connection.ontrack = (event) => {
+        if (event.track.kind !== "video") return;
+        const mediaStream = event.streams[0] ?? new MediaStream([event.track]);
+        this.handleRemoteVideoTrack({
+          serverId,
+          channelId,
+          participantId,
+          mediaStream,
+          track: event.track
+        });
+      };
+
+      connection.onconnectionstatechange = () => {
+        if (connection.connectionState !== "failed" && connection.connectionState !== "closed") return;
+        this.removeVideoStreamsForParticipant(serverId, channelId, participantId);
+      };
+
+      void this.syncPeerVideoTracks(serverId, channelId, participantId);
+      return entry;
+    },
+    closePeerConnection(serverId: string, channelId: string, participantId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const peers = peerConnectionsByKey.get(key);
+      const peer = peers?.get(participantId);
+      if (!peer) return;
+      peer.connection.onicecandidate = null;
+      peer.connection.onnegotiationneeded = null;
+      peer.connection.ontrack = null;
+      peer.connection.onconnectionstatechange = null;
+      if (peer.connection.signalingState !== "closed") {
+        peer.connection.close();
+      }
+      peers?.delete(participantId);
+      if (peers && peers.size === 0) {
+        peerConnectionsByKey.delete(key);
+      }
+      this.deleteVideoHintsForParticipant(serverId, channelId, participantId);
+    },
+    closePeerConnectionsForSession(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const peers = peerConnectionsByKey.get(key);
+      if (peers) {
+        for (const participantId of peers.keys()) {
+          this.closePeerConnection(serverId, channelId, participantId);
+        }
+      }
+      peerConnectionsByKey.delete(key);
+      iceServersByKey.delete(key);
+      videoHintByKey.delete(key);
+    },
+    connectParticipantMesh(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session || !session.localParticipantId) return;
+      const activeParticipantIDs = new Set(
+        session.participants.filter((participant) => participant.participantId !== session.localParticipantId).map((participant) => participant.participantId)
+      );
+
+      const peers = this.peerConnectionsForSession(key);
+      for (const participantId of peers.keys()) {
+        if (activeParticipantIDs.has(participantId)) continue;
+        this.closePeerConnection(serverId, channelId, participantId);
+      }
+
+      session.participants.forEach((participant) => {
+        if (participant.participantId === session.localParticipantId) return;
+        if (!participant.participantId) return;
+        this.ensurePeerConnection(serverId, channelId, participant.participantId);
+      });
+    },
+    handleRemoteVideoTrack(params: {
+      serverId: string;
+      channelId: string;
+      participantId: string;
+      mediaStream: MediaStream;
+      track: MediaStreamTrack;
+    }): void {
+      const key = this.ensureSession(params.serverId, params.channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      const participant = session.participants.find((item) => item.participantId === params.participantId);
+      const hintMap = this.videoHintsForSession(key);
+      const hint = hintMap.get(videoHintKey(params.participantId, params.track.id));
+      const kind = hint ?? inferVideoKindFromTrackLabel(params.track.label);
+
+      this.upsertVideoStream({
+        serverId: params.serverId,
+        channelId: params.channelId,
+        participantId: params.participantId,
+        userUID: participant?.userUID ?? "uid_unknown",
+        deviceID: participant?.deviceID ?? "device_unknown",
+        kind,
+        mediaStream: params.mediaStream,
+        trackId: params.track.id,
+        isLocal: session.localParticipantId === params.participantId
+      });
+
+      params.track.onended = () => {
+        this.removeVideoStream(params.serverId, params.channelId, `${params.participantId}:${params.track.id}`);
+        this.deleteVideoHint(params.serverId, params.channelId, params.participantId, params.track.id);
+      };
+    },
+    async handleOfferSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
+      const fromParticipantID = String(payload.from_participant_id ?? "").trim();
+      const sdp = String(payload.sdp ?? "");
+      const descriptionType = toDescriptionType(payload.description_type ?? "offer");
+      if (!fromParticipantID || !sdp || descriptionType !== "offer") return;
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+
+      const peer = this.ensurePeerConnection(serverId, channelId, fromParticipantID);
+      if (!peer) return;
+      const socket = socketsByKey.get(key);
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+      const offerDescription: RTCSessionDescriptionInit = { type: "offer", sdp };
+      const offerCollision = peer.makingOffer || peer.connection.signalingState !== "stable";
+      peer.ignoreOffer = !peer.polite && offerCollision;
+      if (peer.ignoreOffer) return;
+
+      try {
+        if (offerCollision) {
+          await Promise.all([
+            peer.connection.setLocalDescription({ type: "rollback" }),
+            peer.connection.setRemoteDescription(offerDescription)
+          ]);
+        } else {
+          await peer.connection.setRemoteDescription(offerDescription);
+        }
+        await this.syncPeerVideoTracks(serverId, channelId, fromParticipantID);
+        await peer.connection.setLocalDescription();
+        const localDescription = peer.connection.localDescription;
+        if (!localDescription || localDescription.type !== "answer") return;
+
+        sendSignal(socket, {
+          type: "rtc.answer.publish",
+          request_id: `answer_${Date.now()}_${fromParticipantID}`,
+          channel_id: channelId,
+          payload: {
+            target_participant_id: fromParticipantID,
+            description_type: localDescription.type,
+            sdp: localDescription.sdp
+          }
+        });
+      } catch (error) {
+        session.errorMessage = `Offer handling failed: ${(error as Error).message}`;
+      }
+    },
+    async handleAnswerSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
+      const fromParticipantID = String(payload.from_participant_id ?? "").trim();
+      const sdp = String(payload.sdp ?? "");
+      const descriptionType = toDescriptionType(payload.description_type ?? "answer");
+      if (!fromParticipantID || !sdp || descriptionType !== "answer") return;
+      const key = sessionKey(serverId, channelId);
+      const peer = peerConnectionsByKey.get(key)?.get(fromParticipantID);
+      if (!peer || peer.ignoreOffer) return;
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      try {
+        await peer.connection.setRemoteDescription({
+          type: "answer",
+          sdp
+        });
+      } catch (error) {
+        session.errorMessage = `Answer handling failed: ${(error as Error).message}`;
+      }
+    },
+    async handleIceCandidateSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
+      const fromParticipantID = String(payload.from_participant_id ?? "").trim();
+      if (!fromParticipantID) return;
+      const key = sessionKey(serverId, channelId);
+      const peer = this.ensurePeerConnection(serverId, channelId, fromParticipantID);
+      if (!peer || peer.ignoreOffer) return;
+
+      const candidatePayload = payload.candidate;
+      if (!candidatePayload || typeof candidatePayload !== "object") {
+        return;
+      }
+
+      try {
+        await peer.connection.addIceCandidate(candidatePayload as RTCIceCandidateInit);
+      } catch (_error) {
+        // Ignore transient candidate races while SDP syncs.
+      }
+    },
+    async enableCamera(serverId: string): Promise<void> {
+      const channelId = this.activeVoiceChannelByServer[serverId];
+      if (!channelId) return;
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session.localParticipantId) {
+        session.cameraErrorMessage = "Camera can be enabled after the call is connected.";
+        return;
+      }
+      if (!session.canSendVideo) {
+        session.cameraErrorMessage = "This server does not allow camera video for this channel.";
+        return;
+      }
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        session.cameraErrorMessage = "Camera capture is not supported in this runtime.";
+        return;
+      }
+
+      try {
+        this.stopLocalVideoKind(serverId, channelId, "camera", { notify: false });
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 24, max: 30 }
+          }
+        });
+        const track = mediaStream.getVideoTracks()[0];
+        if (!track) {
+          throw new Error("No camera track available.");
+        }
+
+        const localParticipant = session.participants.find((item) => item.participantId === session.localParticipantId);
+        localCameraStreamsByKey.set(key, mediaStream);
+        session.cameraEnabled = true;
+        session.cameraErrorMessage = null;
+        this.upsertVideoStream({
+          serverId,
+          channelId,
+          participantId: session.localParticipantId,
+          userUID: localParticipant?.userUID ?? "uid_unknown",
+          deviceID: localParticipant?.deviceID ?? "device_unknown",
+          kind: "camera",
+          mediaStream,
+          trackId: track.id,
+          isLocal: true
+        });
+        this.sendVideoStateSignal({
+          serverId,
+          channelId,
+          kind: "camera",
+          action: "start",
+          trackId: track.id,
+          streamId: mediaStream.id
+        });
+        track.onended = () => {
+          this.stopLocalVideoKind(serverId, channelId, "camera");
+          void this.syncAllPeerVideoTracks(serverId, channelId);
+        };
+        await this.syncAllPeerVideoTracks(serverId, channelId);
+      } catch (error) {
+        session.cameraEnabled = false;
+        session.cameraErrorMessage = `Camera unavailable: ${(error as Error).message}`;
+      }
+    },
+    async enableScreenShare(serverId: string, options?: { sourceId?: string }): Promise<void> {
+      const channelId = this.activeVoiceChannelByServer[serverId];
+      if (!channelId) return;
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session.localParticipantId) {
+        session.screenShareErrorMessage = "Screen share can be enabled after the call is connected.";
+        return;
+      }
+      if (!session.canShareScreen) {
+        session.screenShareErrorMessage = "This server does not allow screen sharing for this channel.";
+        return;
+      }
+      if (
+        typeof navigator === "undefined" ||
+        (!navigator.mediaDevices?.getDisplayMedia && !navigator.mediaDevices?.getUserMedia)
+      ) {
+        session.screenShareErrorMessage = "Screen sharing is not supported in this runtime.";
+        return;
+      }
+
+      try {
+        this.stopLocalVideoKind(serverId, channelId, "screen", { notify: false });
+        let mediaStream: MediaStream;
+        const sourceId = options?.sourceId?.trim();
+        if (sourceId) {
+          const desktopConstraints: MediaStreamConstraints = {
+            audio: false,
+            video: {
+              mandatory: {
+                chromeMediaSource: "desktop",
+                chromeMediaSourceId: sourceId,
+                maxFrameRate: 30
+              }
+            } as ElectronDesktopVideoConstraints
+          };
+          mediaStream = await navigator.mediaDevices.getUserMedia(desktopConstraints);
+        } else {
+          mediaStream = await navigator.mediaDevices.getDisplayMedia({
+            audio: false,
+            video: {
+              frameRate: { ideal: 20, max: 30 }
+            }
+          });
+        }
+        const track = mediaStream.getVideoTracks()[0];
+        if (!track) {
+          throw new Error("No screen-share track available.");
+        }
+
+        const localParticipant = session.participants.find((item) => item.participantId === session.localParticipantId);
+        localScreenStreamsByKey.set(key, mediaStream);
+        session.screenShareEnabled = true;
+        session.screenShareErrorMessage = null;
+        this.upsertVideoStream({
+          serverId,
+          channelId,
+          participantId: session.localParticipantId,
+          userUID: localParticipant?.userUID ?? "uid_unknown",
+          deviceID: localParticipant?.deviceID ?? "device_unknown",
+          kind: "screen",
+          mediaStream,
+          trackId: track.id,
+          isLocal: true
+        });
+        this.sendVideoStateSignal({
+          serverId,
+          channelId,
+          kind: "screen",
+          action: "start",
+          trackId: track.id,
+          streamId: mediaStream.id
+        });
+        track.onended = () => {
+          this.stopLocalVideoKind(serverId, channelId, "screen");
+          void this.syncAllPeerVideoTracks(serverId, channelId);
+        };
+        await this.syncAllPeerVideoTracks(serverId, channelId);
+      } catch (error) {
+        session.screenShareEnabled = false;
+        session.screenShareErrorMessage = `Screen share unavailable: ${(error as Error).message}`;
+      }
+    },
+    async toggleCamera(serverId: string): Promise<void> {
+      const channelId = this.activeVoiceChannelByServer[serverId];
+      if (!channelId) return;
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      if (session.cameraEnabled) {
+        this.stopLocalVideoKind(serverId, channelId, "camera");
+        await this.syncAllPeerVideoTracks(serverId, channelId);
+        return;
+      }
+      await this.enableCamera(serverId);
+    },
+    async toggleScreenShare(serverId: string, options?: { sourceId?: string }): Promise<void> {
+      const channelId = this.activeVoiceChannelByServer[serverId];
+      if (!channelId) return;
+      const key = this.ensureSession(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      if (session.screenShareEnabled) {
+        this.stopLocalVideoKind(serverId, channelId, "screen");
+        await this.syncAllPeerVideoTracks(serverId, channelId);
+        return;
+      }
+      await this.enableScreenShare(serverId, options);
     },
     markParticipantSpeaking(serverId: string, channelId: string, participantId: string): void {
       if (!participantId) return;
@@ -758,11 +1518,20 @@ export const useCallStore = defineStore("call", {
       const session = this.sessionsByKey[key];
       session.micMuted = audioPrefs.micMuted;
       session.deafened = audioPrefs.deafened;
+      this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
+      this.closePeerConnectionsForSession(params.serverId, params.channelId);
       this.stopMicUplink(params.serverId, params.channelId);
       session.state = "joining";
       session.errorMessage = null;
       session.participants = [];
       session.localParticipantId = null;
+      session.videoStreams = [];
+      session.cameraEnabled = false;
+      session.screenShareEnabled = false;
+      session.cameraErrorMessage = null;
+      session.screenShareErrorMessage = null;
+      session.canSendVideo = true;
+      session.canShareScreen = true;
       this.clearSpeakingForSession(params.serverId, params.channelId);
       session.joinedAt = null;
       session.lastEventAt = new Date().toISOString();
@@ -785,6 +1554,9 @@ export const useCallStore = defineStore("call", {
           deviceID: params.deviceID,
           serverID: params.serverId
         });
+        iceServersByKey.set(key, toRTCIceServers(joinTicket.ice_servers));
+        session.canSendVideo = Boolean(joinTicket.permissions.video);
+        session.canShareScreen = Boolean(joinTicket.permissions.screenshare);
 
         intentionallyClosed.delete(key);
         const socket = new WebSocket(joinTicket.signaling_url);
@@ -814,6 +1586,8 @@ export const useCallStore = defineStore("call", {
 
         socket.addEventListener("close", () => {
           this.stopMicUplink(params.serverId, params.channelId);
+          this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
+          this.closePeerConnectionsForSession(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
           localJoinIdentityByKey.delete(key);
           if (!localSession) return;
@@ -823,6 +1597,9 @@ export const useCallStore = defineStore("call", {
             localSession.state = "idle";
             localSession.participants = [];
             localSession.localParticipantId = null;
+            localSession.videoStreams = [];
+            localSession.cameraEnabled = false;
+            localSession.screenShareEnabled = false;
             this.clearSpeakingForSession(params.serverId, params.channelId);
             localSession.errorMessage = null;
             return;
@@ -831,23 +1608,36 @@ export const useCallStore = defineStore("call", {
           localSession.errorMessage = "Call signaling disconnected.";
           localSession.participants = [];
           localSession.localParticipantId = null;
+          localSession.videoStreams = [];
+          localSession.cameraEnabled = false;
+          localSession.screenShareEnabled = false;
           this.clearSpeakingForSession(params.serverId, params.channelId);
           this.activeVoiceChannelByServer[params.serverId] = null;
         });
 
         socket.addEventListener("error", () => {
           this.stopMicUplink(params.serverId, params.channelId);
+          this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
+          this.closePeerConnectionsForSession(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
           localJoinIdentityByKey.delete(key);
           if (!localSession) return;
           localSession.state = "error";
           localSession.errorMessage = "Call signaling transport failed.";
+          localSession.videoStreams = [];
+          localSession.cameraEnabled = false;
+          localSession.screenShareEnabled = false;
           this.clearSpeakingForSession(params.serverId, params.channelId);
           localSession.lastEventAt = new Date().toISOString();
         });
       } catch (error) {
         session.state = "error";
         session.errorMessage = (error as Error).message;
+        session.videoStreams = [];
+        session.cameraEnabled = false;
+        session.screenShareEnabled = false;
+        this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
+        this.closePeerConnectionsForSession(params.serverId, params.channelId);
         this.activeVoiceChannelByServer[params.serverId] = null;
         localJoinIdentityByKey.delete(key);
       }
@@ -900,8 +1690,11 @@ export const useCallStore = defineStore("call", {
           session.participants = participants;
           session.localParticipantId = localParticipantID || null;
           session.activeSpeakerParticipantIds = [];
+          session.videoStreams = session.videoStreams.filter((entry) => entry.isLocal);
           setPlaybackMuted(session.deafened);
           session.joinedAt = new Date().toISOString();
+          this.connectParticipantMesh(params.serverId, params.channelId);
+          void this.syncAllPeerVideoTracks(params.serverId, params.channelId);
           void this.startMicUplink(params.serverId, params.channelId);
           return;
         }
@@ -912,6 +1705,7 @@ export const useCallStore = defineStore("call", {
           if (!session.participants.some((item) => item.participantId === participant.participantId)) {
             session.participants.push(participant);
           }
+          this.connectParticipantMesh(params.serverId, params.channelId);
           return;
         }
         case "rtc.participant.left": {
@@ -919,6 +1713,8 @@ export const useCallStore = defineStore("call", {
           if (!participantPayload) return;
           const leavingParticipantID = String(participantPayload.participant_id ?? "");
           session.participants = session.participants.filter((item) => item.participantId !== leavingParticipantID);
+          this.closePeerConnection(params.serverId, params.channelId, leavingParticipantID);
+          this.removeVideoStreamsForParticipant(params.serverId, params.channelId, leavingParticipantID);
           this.clearParticipantSpeaking(params.serverId, params.channelId, leavingParticipantID);
           return;
         }
@@ -929,9 +1725,35 @@ export const useCallStore = defineStore("call", {
         }
         case "rtc.media.state": {
           const streamKind = String(payload.stream_kind ?? "");
-          const chunkB64 = String(payload.chunk_b64 ?? "");
           const participantID = String(payload.participant_id ?? "");
-          if (streamKind !== "audio_pcm_s16le_48k_mono" || !chunkB64 || !participantID) {
+          if (!participantID) return;
+
+          const streamKindVideo = toVideoKindFromSignal(streamKind);
+          if (streamKindVideo) {
+            if (session.localParticipantId && participantID === session.localParticipantId) {
+              return;
+            }
+
+            const action = String(payload.action ?? "start").trim().toLowerCase();
+            const trackID = String(payload.track_id ?? "");
+            if (action === "stop") {
+              if (trackID) {
+                this.removeVideoStream(params.serverId, params.channelId, `${participantID}:${trackID}`);
+                this.deleteVideoHint(params.serverId, params.channelId, participantID, trackID);
+              } else {
+                this.removeVideoStreamsForParticipant(params.serverId, params.channelId, participantID, streamKindVideo);
+              }
+              return;
+            }
+
+            if (trackID) {
+              this.updateVideoHint(params.serverId, params.channelId, participantID, trackID, streamKindVideo);
+            }
+            return;
+          }
+
+          const chunkB64 = String(payload.chunk_b64 ?? "");
+          if (streamKind !== "audio_pcm_s16le_48k_mono" || !chunkB64) {
             return;
           }
           const chunkBytes = decodeBase64Chunk(chunkB64);
@@ -954,6 +1776,18 @@ export const useCallStore = defineStore("call", {
             sampleRate,
             channels
           });
+          return;
+        }
+        case "rtc.offer.publish": {
+          void this.handleOfferSignal(params.serverId, params.channelId, payload);
+          return;
+        }
+        case "rtc.answer.publish": {
+          void this.handleAnswerSignal(params.serverId, params.channelId, payload);
+          return;
+        }
+        case "rtc.ice.candidate": {
+          void this.handleIceCandidateSignal(params.serverId, params.channelId, payload);
           return;
         }
         case "rtc.kicked": {
@@ -1040,6 +1874,8 @@ export const useCallStore = defineStore("call", {
     leaveChannel(serverId: string, channelId: string, options?: { reason?: string }): void {
       const key = sessionKey(serverId, channelId);
       this.stopMicUplink(serverId, channelId);
+      this.stopAllLocalVideo(serverId, channelId);
+      this.closePeerConnectionsForSession(serverId, channelId);
       localJoinIdentityByKey.delete(key);
       this.clearSpeakingForSession(serverId, channelId);
       const socket = socketsByKey.get(key);
@@ -1060,6 +1896,11 @@ export const useCallStore = defineStore("call", {
         session.participants = [];
         session.localParticipantId = null;
         session.activeSpeakerParticipantIds = [];
+        session.videoStreams = [];
+        session.cameraEnabled = false;
+        session.screenShareEnabled = false;
+        session.cameraErrorMessage = null;
+        session.screenShareErrorMessage = null;
         session.errorMessage = options?.reason ?? null;
         session.lastEventAt = new Date().toISOString();
       }
@@ -1079,6 +1920,8 @@ export const useCallStore = defineStore("call", {
         if (!key.startsWith(keyPrefix)) return;
         const channelId = key.slice(keyPrefix.length);
         this.stopMicUplink(serverId, channelId);
+        this.stopAllLocalVideo(serverId, channelId, { notify: false });
+        this.closePeerConnectionsForSession(serverId, channelId);
         localJoinIdentityByKey.delete(key);
         this.clearSpeakingForSession(serverId, channelId);
         const socket = socketsByKey.get(key);
@@ -1101,6 +1944,15 @@ export const useCallStore = defineStore("call", {
           this.leaveChannel(serverId, channelId);
         }
       });
+      for (const key of Object.keys(this.sessionsByKey)) {
+        const separator = key.indexOf(":");
+        if (separator <= 0) continue;
+        const serverId = key.slice(0, separator);
+        const channelId = key.slice(separator + 1);
+        if (!serverId || !channelId) continue;
+        this.stopAllLocalVideo(serverId, channelId, { notify: false });
+        this.closePeerConnectionsForSession(serverId, channelId);
+      }
       speakingTimersByParticipant.forEach((timer) => {
         clearTimeout(timer);
       });

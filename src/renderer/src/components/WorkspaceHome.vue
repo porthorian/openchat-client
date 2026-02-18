@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import AddServerDialog from "./AddServerDialog.vue";
 import AppTaskbar from "./AppTaskbar.vue";
+import CallStage from "./CallStage.vue";
 import ChannelPane from "./ChannelPane.vue";
 import ChannelPaneUserDock from "./ChannelPaneUserDock.vue";
 import ChatPane from "./ChatPane.vue";
 import ClientUpdateProgressModal from "./ClientUpdateProgressModal.vue";
 import ClientVersionInfoModal from "./ClientVersionInfoModal.vue";
 import MembersPane from "./MembersPane.vue";
+import ScreenShareSourcePickerModal from "./ScreenShareSourcePickerModal.vue";
 import ServerRail from "./ServerRail.vue";
 import WorkspaceToolbar from "./WorkspaceToolbar.vue";
 import { useWorkspaceShell } from "@renderer/composables/useWorkspaceShell";
@@ -30,7 +32,12 @@ const shell = useWorkspaceShell();
           <ChannelPaneUserDock v-bind="shell.userDockProps.value" v-on="shell.userDockListeners" />
         </div>
         <WorkspaceToolbar v-bind="shell.workspaceToolbarProps.value" v-on="shell.workspaceToolbarListeners" />
-        <ChatPane class="chat-pane-slot" v-bind="shell.chatPaneProps.value" v-on="shell.chatPaneListeners" />
+        <CallStage
+          v-if="shell.callStageVisible.value"
+          class="chat-pane-slot"
+          v-bind="shell.callStageProps.value"
+        />
+        <ChatPane v-else class="chat-pane-slot" v-bind="shell.chatPaneProps.value" v-on="shell.chatPaneListeners" />
         <MembersPane class="members-pane-slot" v-bind="shell.membersPaneProps.value" v-on="shell.membersPaneListeners" />
       </section>
 
@@ -39,5 +46,6 @@ const shell = useWorkspaceShell();
 
     <ClientUpdateProgressModal v-bind="shell.updateProgressModalProps.value" v-on="shell.updateProgressModalListeners" />
     <ClientVersionInfoModal v-bind="shell.versionInfoModalProps.value" v-on="shell.versionInfoModalListeners" />
+    <ScreenShareSourcePickerModal v-bind="shell.screenSharePickerProps.value" v-on="shell.screenSharePickerListeners" />
   </div>
 </template>

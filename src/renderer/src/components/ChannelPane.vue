@@ -421,7 +421,7 @@ onBeforeUnmount(() => {
               type="button"
               class="channel-row"
               :class="{
-                'is-active': channel.type === 'text' && channel.id === activeChannelId,
+                'is-active': channel.id === activeChannelId,
                 'is-voice': channel.type === 'voice',
                 'is-connected': channel.type === 'voice' && channel.id === activeVoiceChannelId
               }"
