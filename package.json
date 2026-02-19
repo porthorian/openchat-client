@@ -1,7 +1,7 @@
 {
   "name": "openchat-client",
   "author": "Porthorian",
-  "version": "develop",
+  "version": "0.0.4",
   "description": "OpenChat desktop client",
   "main": "./out/main/index.js",
   "type": "module",
@@ -12,9 +12,12 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
-    "pack": "yarn build && yarn dlx electron-builder@24.13.3 --dir --publish never",
-    "dist": "yarn build && yarn dlx electron-builder@24.13.3 --publish never"
+    "typecheck:app": "vue-tsc --noEmit -p tsconfig.json",
+    "typecheck:build": "tsc --noEmit -p tsconfig.build-scripts.json",
+    "typecheck": "yarn run typecheck:app && yarn run typecheck:build",
+    "stamp_build": "node build/stamp-build.js",
+    "dist": "node build/run-builder-with-stamped-package.js dist",
+    "pack": "node build/run-builder-with-stamped-package.js pack"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",

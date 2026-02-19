@@ -28,7 +28,6 @@ jobs:
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
       WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-      CSC_NAME: ${{ secrets.CSC_NAME }}
 
     steps:
       - name: Checkout
@@ -50,24 +49,7 @@ jobs:
         run: corepack yarn install --immutable
       
       - name: Stamp package version (CI only)
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-          const packageJsonPath = "package.json";
-          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-
-          const tagName = String(process.env.GITHUB_REF_NAME || "").trim();
-          const tagMatch = tagName.match(/^v(\d+\.\d+\.\d+)$/);
-          const packageVersion = String(packageJson.version || "").trim();
-          const packageMatch = packageVersion.match(/^(\d+\.\d+\.\d+)$/);
-          const fallbackPatch = Number(process.env.GITHUB_RUN_NUMBER || "0");
-
-          const stampedVersion = tagMatch?.[1] ?? packageMatch?.[1] ?? `0.0.${fallbackPatch}`;
-          packageJson.version = stampedVersion;
-          fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-          console.log(`Stamped package.json version: ${stampedVersion}`);
-          NODE
+        run: corepack yarn stamp_build
 
       - name: Import Apple code signing certificate
         if: matrix.os == 'macos-latest' && env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_CERT_PASSWORD != ''
@@ -115,7 +97,6 @@ jobs:
         env:
           DEBUG: "electron-builder,electron-osx-sign*,electron-notarize*,@electron/osx-sign*,@electron/notarize*"
           CSC_IDENTITY_AUTO_DISCOVERY: "true"
-          CSC_NAME: ${{ env.CSC_NAME }}
           APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
