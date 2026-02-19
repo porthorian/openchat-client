@@ -51,8 +51,26 @@ jobs:
       - name: Stamp package version (CI only)
         run: corepack yarn stamp_build
 
+      - name: Require macOS signing and notarization secrets
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+
+          [[ -n "${MACOS_CERT_P12_BASE64:-}" ]] || missing+=("MACOS_CERT_P12_BASE64")
+          [[ -n "${MACOS_CERT_PASSWORD:-}" ]] || missing+=("MACOS_CERT_PASSWORD")
+          [[ -n "${APPLE_API_KEY_P8:-}" ]] || missing+=("APPLE_API_KEY_P8")
+          [[ -n "${APPLE_API_KEY_ID:-}" ]] || missing+=("APPLE_API_KEY_ID")
+          [[ -n "${APPLE_API_ISSUER:-}" ]] || missing+=("APPLE_API_ISSUER")
+
+          if ((${#missing[@]})); then
+            echo "::error::Missing required macOS secrets: ${missing[*]}"
+            exit 1
+          fi
+
       - name: Import Apple code signing certificate
-        if: matrix.os == 'macos-latest' && env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_CERT_PASSWORD != ''
+        if: matrix.os == 'macos-latest'
         uses: apple-actions/import-codesign-certs@v6
         with:
           p12-file-base64: ${{ env.MACOS_CERT_P12_BASE64 }}
@@ -69,7 +87,7 @@ jobs:
           )
 
       - name: Prepare Apple notarization API key
-        if: matrix.os == 'macos-latest' && env.APPLE_API_KEY_P8 != '' && env.APPLE_API_KEY_ID != ''
+        if: matrix.os == 'macos-latest'
         shell: bash
         run: |
           key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}.p8"
@@ -77,7 +95,7 @@ jobs:
           echo "APPLE_API_KEY=${key_path}" >> "${GITHUB_ENV}"
       
       - name: Debug mac signing/notary preflight
-        if: matrix.os == 'macos-latest' && env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_CERT_PASSWORD != '' && env.APPLE_API_KEY_P8 != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != ''
+        if: matrix.os == 'macos-latest'
         shell: bash
         run: |
           set -euo pipefail
@@ -91,20 +109,44 @@ jobs:
 
 
       - name: Build installers (macOS signed + notarized)
-        if: matrix.os == 'macos-latest' && env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_CERT_PASSWORD != '' && env.APPLE_API_KEY_P8 != '' && env.APPLE_API_KEY_ID != '' && env.APPLE_API_ISSUER != ''
+        if: matrix.os == 'macos-latest'
         run: corepack yarn dist
         env:
           DEBUG: "electron-builder,electron-osx-sign*,electron-notarize*,@electron/osx-sign*,@electron/notarize*"
           CSC_IDENTITY_AUTO_DISCOVERY: "true"
-          APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ env.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
 
-      - name: Build installers (macOS unsigned fallback)
-        if: matrix.os == 'macos-latest' && (env.MACOS_CERT_P12_BASE64 == '' || env.MACOS_CERT_PASSWORD == '' || env.APPLE_API_KEY_P8 == '' || env.APPLE_API_KEY_ID == '' || env.APPLE_API_ISSUER == '')
-        run: corepack yarn dist
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Verify macOS artifacts
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          app_paths=(release/mac*/OpenChat.app)
+          if [ ${#app_paths[@]} -eq 0 ]; then
+            echo "::error::No macOS app bundles found under release/mac*/OpenChat.app"
+            exit 1
+          fi
+
+          for app in "${app_paths[@]}"; do
+            echo "Verifying code signature: ${app}"
+            codesign --verify --deep --strict --verbose=2 "${app}"
+            echo "Validating notarization staple: ${app}"
+            xcrun stapler validate "${app}"
+          done
+
+          dmg_paths=(release/*.dmg)
+          if [ ${#dmg_paths[@]} -eq 0 ]; then
+            echo "::error::No DMG artifacts found under release/*.dmg"
+            exit 1
+          fi
+
+          for dmg in "${dmg_paths[@]}"; do
+            echo "Validating notarization staple: ${dmg}"
+            xcrun stapler validate "${dmg}"
+          done
 
       - name: Build installers (Windows signed)
         if: matrix.os == 'windows-latest' && env.WINDOWS_CERT_PFX_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != ''
@@ -126,11 +168,6 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Warn about unsigned macOS build
-        if: matrix.os == 'macos-latest' && (env.MACOS_CERT_P12_BASE64 == '' || env.MACOS_CERT_PASSWORD == '' || env.APPLE_API_KEY_P8 == '' || env.APPLE_API_KEY_ID == '' || env.APPLE_API_ISSUER == '')
-        run: |
-          echo "::warning::macOS artifact was built unsigned/unnotarized. Gatekeeper may show 'damaged' for downloaded apps."
-
       - name: Warn about unsigned Windows build
         if: matrix.os == 'windows-latest' && (env.WINDOWS_CERT_PFX_BASE64 == '' || env.WINDOWS_CERT_PASSWORD == '')
         run: |
@@ -147,6 +184,7 @@ jobs:
             release/*.deb
             release/latest*.yml
             release/*.blockmap
+            release/*.zip
           if-no-files-found: error
 
   publish:
@@ -173,3 +211,4 @@ jobs:
             release-assets/**/*.deb
             release-assets/**/latest*.yml
             release-assets/**/*.blockmap
+            release-assets/**/*.zip
