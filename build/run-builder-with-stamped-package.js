@@ -1,7 +1,7 @@
 // @ts-check
 
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -24,15 +24,49 @@ function resolveMode(rawMode) {
 }
 
 /**
+ * @typedef {{
+ *   command: string;
+ *   args: string[];
+ *   displayCommand: string;
+ * }} YarnCommand
+ */
+
+/**
+ * @param {string[]} args
+ * @returns {YarnCommand}
+ */
+function resolveYarnCommand(args) {
+  const userAgent = String(process.env.npm_config_user_agent ?? "").trim().toLowerCase();
+  const npmExecPath = String(process.env.npm_execpath ?? "").trim();
+  const isYarnRuntime = userAgent.startsWith("yarn/");
+
+  // Running the active Yarn CLI via node avoids Windows `.cmd` spawn edge cases.
+  if (isYarnRuntime && npmExecPath && existsSync(npmExecPath)) {
+    return {
+      command: process.execPath,
+      args: [npmExecPath, ...args],
+      displayCommand: `node ${path.basename(npmExecPath)} ${args.join(" ")}`
+    };
+  }
+
+  const yarnExecutable = process.platform === "win32" ? "yarn.cmd" : "yarn";
+  return {
+    command: yarnExecutable,
+    args,
+    displayCommand: `${yarnExecutable} ${args.join(" ")}`
+  };
+}
+
+/**
  * @param {string[]} args
  * @param {NodeJS.ProcessEnv} [extraEnv]
  * @returns {Promise<void>}
  */
 function runYarn(args, extraEnv) {
-  const yarnExecutable = process.platform === "win32" ? "yarn.cmd" : "yarn";
+  const yarnCommand = resolveYarnCommand(args);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(yarnExecutable, args, {
+    const child = spawn(yarnCommand.command, yarnCommand.args, {
       stdio: "inherit",
       env: {
         ...process.env,
@@ -51,7 +85,7 @@ function runYarn(args, extraEnv) {
       }
 
       reject(
-        new Error(`Command failed (exit ${code ?? "unknown"}): ${yarnExecutable} ${args.join(" ")}`)
+        new Error(`Command failed (exit ${code ?? "unknown"}): ${yarnCommand.displayCommand}`)
       );
     });
   });
