@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-02-19
+
+### Changed
+- macOS packaging now emits both `x64` and `arm64` artifacts for `dmg` and `zip` targets.
+- Desktop release workflow now treats macOS signing and notarization secrets as required and fails fast when missing.
+- Desktop release workflow now validates macOS app signatures and stapled notarization tickets before artifacts are uploaded.
+- Release artifact upload/publish now includes macOS `.zip` files alongside existing installers and metadata.
+
+### Fixed
+- Removed the invalid `com.apple.developer.usernotifications.communication` entitlement from macOS signing config.
+- Removed a workflow-level `APPLE_API_KEY` override that could interfere with notarization environment wiring.
+
 ## [0.0.4] - 2026-02-19
 
 ### Added
@@ -67,7 +79,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - CI workflow and lockfile maintenance fixes leading into the first `v*` tagged release.
 
-[Unreleased]: https://github.com/porthorian/openchat-client/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/porthorian/openchat-client/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/porthorian/openchat-client/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/porthorian/openchat-client/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/porthorian/openchat-client/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/porthorian/openchat-client/compare/v0.0.1...v0.0.2
