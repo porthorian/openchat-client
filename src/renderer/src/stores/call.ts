@@ -99,6 +99,16 @@ let playbackMuted = false;
 let playbackVolume = 0.5;
 const speakingIndicatorHoldMS = 450;
 const speakingActivityThreshold = 0.018;
+const rtcLogPrefix = "[openchat:rtc]";
+const rtcDebugEnabled = (() => {
+  if (typeof window === "undefined") return false;
+  if (import.meta.env.DEV) return true;
+  try {
+    return window.localStorage.getItem("openchat:rtc-debug") === "1";
+  } catch (_error) {
+    return false;
+  }
+})();
 
 type AudioElementWithSink = HTMLAudioElement & {
   setSinkId?: (deviceId: string) => Promise<void>;
@@ -122,6 +132,9 @@ type PeerConnectionEntry = {
   polite: boolean;
   makingOffer: boolean;
   ignoreOffer: boolean;
+  isSettingRemoteAnswerPending: boolean;
+  pendingNegotiation: boolean;
+  pendingNegotiationReason: string | null;
 };
 
 type ElectronDesktopVideoConstraints = MediaTrackConstraints & {
@@ -131,6 +144,11 @@ type ElectronDesktopVideoConstraints = MediaTrackConstraints & {
     maxFrameRate?: number;
   };
 };
+
+function rtcLog(event: string, payload: Record<string, unknown>): void {
+  if (!rtcDebugEnabled || typeof console === "undefined") return;
+  console.debug(rtcLogPrefix, event, payload);
+}
 
 function sessionKey(serverId: string, channelId: string): string {
   return `${serverId}:${channelId}`;
@@ -621,6 +639,9 @@ export const useCallStore = defineStore("call", {
       const session = this.sessionsByKey[key];
       const streamKey = `${params.participantId}:${params.trackId}`;
       const index = session.videoStreams.findIndex((entry) => entry.streamKey === streamKey);
+      const sameKindIndex = session.videoStreams.findIndex(
+        (entry) => entry.participantId === params.participantId && entry.kind === params.kind
+      );
       const next: CallVideoStream = {
         streamKey,
         participantId: params.participantId,
@@ -634,6 +655,10 @@ export const useCallStore = defineStore("call", {
       };
       if (index >= 0) {
         session.videoStreams.splice(index, 1, next);
+        return;
+      }
+      if (sameKindIndex >= 0) {
+        session.videoStreams.splice(sameKindIndex, 1, next);
         return;
       }
       session.videoStreams.push(next);
@@ -745,28 +770,64 @@ export const useCallStore = defineStore("call", {
       const session = this.sessionsByKey[key];
       if (!session || peer.connection.signalingState === "closed") return;
 
-      peer.connection
-        .getSenders()
-        .filter((sender) => sender.track?.kind === "video")
-        .forEach((sender) => {
-          try {
-            peer.connection.removeTrack(sender);
-          } catch (_error) {
-            // No-op
-          }
-        });
-
+      const desiredVideoTracks: Array<{ kind: CallVideoStreamKind; track: MediaStreamTrack; stream: MediaStream }> = [];
       const cameraStream = localCameraStreamsByKey.get(key);
       const cameraTrack = cameraStream?.getVideoTracks()[0];
       if (cameraTrack && session.cameraEnabled) {
-        peer.connection.addTrack(cameraTrack, cameraStream);
+        desiredVideoTracks.push({
+          kind: "camera",
+          track: cameraTrack,
+          stream: cameraStream
+        });
       }
 
       const screenStream = localScreenStreamsByKey.get(key);
       const screenTrack = screenStream?.getVideoTracks()[0];
       if (screenTrack && session.screenShareEnabled) {
-        peer.connection.addTrack(screenTrack, screenStream);
+        desiredVideoTracks.push({
+          kind: "screen",
+          track: screenTrack,
+          stream: screenStream
+        });
       }
+
+      const pendingTrackIDs = new Set(desiredVideoTracks.map((entry) => entry.track.id));
+      peer.connection
+        .getSenders()
+        .filter((sender) => sender.track?.kind === "video")
+        .forEach((sender) => {
+          const senderTrack = sender.track;
+          if (!senderTrack) return;
+          if (pendingTrackIDs.has(senderTrack.id)) {
+            pendingTrackIDs.delete(senderTrack.id);
+            return;
+          }
+          try {
+            peer.connection.removeTrack(sender);
+            rtcLog("video.sender.remove", {
+              serverId,
+              channelId,
+              participantId,
+              signalingState: peer.connection.signalingState,
+              trackId: senderTrack.id
+            });
+          } catch (_error) {
+            // No-op
+          }
+        });
+
+      desiredVideoTracks.forEach((entry) => {
+        if (!pendingTrackIDs.has(entry.track.id)) return;
+        peer.connection.addTrack(entry.track, entry.stream);
+        rtcLog("video.sender.add", {
+          serverId,
+          channelId,
+          participantId,
+          signalingState: peer.connection.signalingState,
+          kind: entry.kind,
+          trackId: entry.track.id
+        });
+      });
     },
     async syncAllPeerVideoTracks(serverId: string, channelId: string): Promise<void> {
       const key = sessionKey(serverId, channelId);
@@ -778,7 +839,12 @@ export const useCallStore = defineStore("call", {
         })
       );
     },
-    async createAndSendOffer(serverId: string, channelId: string, participantId: string): Promise<void> {
+    async createAndSendOffer(
+      serverId: string,
+      channelId: string,
+      participantId: string,
+      reason = "unspecified"
+    ): Promise<void> {
       const key = sessionKey(serverId, channelId);
       const peers = peerConnectionsByKey.get(key);
       const peer = peers?.get(participantId);
@@ -788,12 +854,45 @@ export const useCallStore = defineStore("call", {
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (peer.connection.signalingState === "closed") return;
+      if (peer.makingOffer || peer.connection.signalingState !== "stable" || peer.isSettingRemoteAnswerPending) {
+        peer.pendingNegotiation = true;
+        peer.pendingNegotiationReason = reason;
+        rtcLog("offer.defer", {
+          serverId,
+          channelId,
+          participantId,
+          reason,
+          signalingState: peer.connection.signalingState,
+          makingOffer: peer.makingOffer,
+          isSettingRemoteAnswerPending: peer.isSettingRemoteAnswerPending
+        });
+        return;
+      }
 
       try {
+        peer.pendingNegotiation = false;
+        peer.pendingNegotiationReason = null;
         peer.makingOffer = true;
+        rtcLog("offer.start", {
+          serverId,
+          channelId,
+          participantId,
+          reason,
+          signalingState: peer.connection.signalingState
+        });
         await peer.connection.setLocalDescription();
         const localDescription = peer.connection.localDescription;
-        if (!localDescription || localDescription.type !== "offer") return;
+        if (!localDescription || localDescription.type !== "offer") {
+          rtcLog("offer.skip", {
+            serverId,
+            channelId,
+            participantId,
+            reason,
+            signalingState: peer.connection.signalingState,
+            localDescriptionType: localDescription?.type ?? null
+          });
+          return;
+        }
         sendSignal(socket, {
           type: "rtc.offer.publish",
           request_id: `offer_${Date.now()}_${participantId}`,
@@ -804,10 +903,38 @@ export const useCallStore = defineStore("call", {
             sdp: localDescription.sdp
           }
         });
+        rtcLog("offer.sent", {
+          serverId,
+          channelId,
+          participantId,
+          reason,
+          signalingState: peer.connection.signalingState
+        });
       } catch (error) {
         session.errorMessage = `Offer negotiation failed: ${(error as Error).message}`;
+        rtcLog("offer.error", {
+          serverId,
+          channelId,
+          participantId,
+          reason,
+          signalingState: peer.connection.signalingState,
+          message: (error as Error).message
+        });
       } finally {
         peer.makingOffer = false;
+        const shouldFlushPending =
+          peer.pendingNegotiation &&
+          !peer.makingOffer &&
+          !peer.isSettingRemoteAnswerPending &&
+          peer.connection.signalingState === "stable";
+        if (shouldFlushPending) {
+          const pendingReason = peer.pendingNegotiationReason ?? "pending";
+          peer.pendingNegotiation = false;
+          peer.pendingNegotiationReason = null;
+          void Promise.resolve().then(() =>
+            this.createAndSendOffer(serverId, channelId, participantId, `flush:${pendingReason}`)
+          );
+        }
       }
     },
     ensurePeerConnection(serverId: string, channelId: string, participantId: string): PeerConnectionEntry | null {
@@ -830,9 +957,18 @@ export const useCallStore = defineStore("call", {
         channelId,
         polite,
         makingOffer: false,
-        ignoreOffer: false
+        ignoreOffer: false,
+        isSettingRemoteAnswerPending: false,
+        pendingNegotiation: false,
+        pendingNegotiationReason: null
       };
       peers.set(participantId, entry);
+      rtcLog("peer.create", {
+        serverId,
+        channelId,
+        participantId,
+        polite
+      });
 
       connection.onicecandidate = (event) => {
         if (!event.candidate) return;
@@ -850,12 +986,29 @@ export const useCallStore = defineStore("call", {
       };
 
       connection.onnegotiationneeded = () => {
-        void this.createAndSendOffer(serverId, channelId, participantId);
+        rtcLog("negotiation.needed", {
+          serverId,
+          channelId,
+          participantId,
+          signalingState: connection.signalingState
+        });
+        void this.createAndSendOffer(serverId, channelId, participantId, "onnegotiationneeded");
       };
 
       connection.ontrack = (event) => {
         if (event.track.kind !== "video") return;
         const mediaStream = event.streams[0] ?? new MediaStream([event.track]);
+        rtcLog("track.received", {
+          serverId,
+          channelId,
+          participantId,
+          streamId: mediaStream.id,
+          trackId: event.track.id,
+          trackLabel: event.track.label,
+          muted: event.track.muted,
+          readyState: event.track.readyState,
+          mid: event.transceiver?.mid ?? null
+        });
         this.handleRemoteVideoTrack({
           serverId,
           channelId,
@@ -865,7 +1018,57 @@ export const useCallStore = defineStore("call", {
         });
       };
 
+      connection.onsignalingstatechange = () => {
+        rtcLog("signaling.state", {
+          serverId,
+          channelId,
+          participantId,
+          signalingState: connection.signalingState,
+          pendingNegotiation: entry.pendingNegotiation
+        });
+        if (connection.signalingState !== "stable" || !entry.pendingNegotiation) return;
+        const pendingReason = entry.pendingNegotiationReason ?? "signaling-stable";
+        entry.pendingNegotiation = false;
+        entry.pendingNegotiationReason = null;
+        void this.createAndSendOffer(serverId, channelId, participantId, `stable:${pendingReason}`);
+      };
+
+      connection.oniceconnectionstatechange = () => {
+        rtcLog("ice.state", {
+          serverId,
+          channelId,
+          participantId,
+          iceConnectionState: connection.iceConnectionState
+        });
+      };
+
+      connection.onicecandidateerror = (event: Event) => {
+        const iceEvent = event as Event & {
+          errorCode?: number;
+          errorText?: string;
+          address?: string;
+          port?: number;
+          url?: string;
+        };
+        rtcLog("ice.candidate.error", {
+          serverId,
+          channelId,
+          participantId,
+          errorCode: iceEvent.errorCode ?? null,
+          errorText: iceEvent.errorText ?? null,
+          address: iceEvent.address ?? null,
+          port: iceEvent.port ?? null,
+          url: iceEvent.url ?? null
+        });
+      };
+
       connection.onconnectionstatechange = () => {
+        rtcLog("connection.state", {
+          serverId,
+          channelId,
+          participantId,
+          connectionState: connection.connectionState
+        });
         if (connection.connectionState !== "failed" && connection.connectionState !== "closed") return;
         this.removeVideoStreamsForParticipant(serverId, channelId, participantId);
       };
@@ -881,6 +1084,9 @@ export const useCallStore = defineStore("call", {
       peer.connection.onicecandidate = null;
       peer.connection.onnegotiationneeded = null;
       peer.connection.ontrack = null;
+      peer.connection.onsignalingstatechange = null;
+      peer.connection.oniceconnectionstatechange = null;
+      peer.connection.onicecandidateerror = null;
       peer.connection.onconnectionstatechange = null;
       if (peer.connection.signalingState !== "closed") {
         peer.connection.close();
@@ -937,6 +1143,19 @@ export const useCallStore = defineStore("call", {
       const hintMap = this.videoHintsForSession(key);
       const hint = hintMap.get(videoHintKey(params.participantId, params.track.id));
       const kind = hint ?? inferVideoKindFromTrackLabel(params.track.label);
+      rtcLog("video.track.apply", {
+        serverId: params.serverId,
+        channelId: params.channelId,
+        participantId: params.participantId,
+        streamId: params.mediaStream.id,
+        trackId: params.track.id,
+        inferredKind: kind,
+        hintKind: hint ?? null,
+        hintSource: hint ? "signal" : "track_label",
+        trackLabel: params.track.label,
+        muted: params.track.muted,
+        readyState: params.track.readyState
+      });
 
       this.upsertVideoStream({
         serverId: params.serverId,
@@ -951,6 +1170,13 @@ export const useCallStore = defineStore("call", {
       });
 
       params.track.onended = () => {
+        rtcLog("video.track.ended", {
+          serverId: params.serverId,
+          channelId: params.channelId,
+          participantId: params.participantId,
+          trackId: params.track.id,
+          kind
+        });
         this.removeVideoStream(params.serverId, params.channelId, `${params.participantId}:${params.track.id}`);
         this.deleteVideoHint(params.serverId, params.channelId, params.participantId, params.track.id);
       };
@@ -972,17 +1198,53 @@ export const useCallStore = defineStore("call", {
       const offerDescription: RTCSessionDescriptionInit = { type: "offer", sdp };
       const offerCollision = peer.makingOffer || peer.connection.signalingState !== "stable";
       peer.ignoreOffer = !peer.polite && offerCollision;
-      if (peer.ignoreOffer) return;
+      rtcLog("offer.received", {
+        serverId,
+        channelId,
+        participantId: fromParticipantID,
+        signalingState: peer.connection.signalingState,
+        makingOffer: peer.makingOffer,
+        polite: peer.polite,
+        isSettingRemoteAnswerPending: peer.isSettingRemoteAnswerPending,
+        offerCollision,
+        ignoreOffer: peer.ignoreOffer
+      });
+      if (peer.ignoreOffer) {
+        rtcLog("offer.ignored", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          reason: "impolite_offer_collision",
+          signalingState: peer.connection.signalingState
+        });
+        return;
+      }
 
       try {
         if (offerCollision) {
-          await Promise.all([
-            peer.connection.setLocalDescription({ type: "rollback" }),
-            peer.connection.setRemoteDescription(offerDescription)
-          ]);
+          rtcLog("offer.rollback", {
+            serverId,
+            channelId,
+            participantId: fromParticipantID,
+            signalingState: peer.connection.signalingState
+          });
+          if (peer.connection.signalingState !== "stable") {
+            await Promise.all([
+              peer.connection.setLocalDescription({ type: "rollback" }),
+              peer.connection.setRemoteDescription(offerDescription)
+            ]);
+          } else {
+            await peer.connection.setRemoteDescription(offerDescription);
+          }
         } else {
           await peer.connection.setRemoteDescription(offerDescription);
         }
+        rtcLog("offer.applied", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState
+        });
         await this.syncPeerVideoTracks(serverId, channelId, fromParticipantID);
         await peer.connection.setLocalDescription();
         const localDescription = peer.connection.localDescription;
@@ -998,8 +1260,22 @@ export const useCallStore = defineStore("call", {
             sdp: localDescription.sdp
           }
         });
+        peer.ignoreOffer = false;
+        rtcLog("answer.sent", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState
+        });
       } catch (error) {
         session.errorMessage = `Offer handling failed: ${(error as Error).message}`;
+        rtcLog("offer.error", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState,
+          message: (error as Error).message
+        });
       }
     },
     async handleAnswerSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
@@ -1009,16 +1285,47 @@ export const useCallStore = defineStore("call", {
       if (!fromParticipantID || !sdp || descriptionType !== "answer") return;
       const key = sessionKey(serverId, channelId);
       const peer = peerConnectionsByKey.get(key)?.get(fromParticipantID);
-      if (!peer || peer.ignoreOffer) return;
+      if (!peer) return;
       const session = this.sessionsByKey[key];
       if (!session) return;
+      rtcLog("answer.received", {
+        serverId,
+        channelId,
+        participantId: fromParticipantID,
+        signalingState: peer.connection.signalingState,
+        ignoreOffer: peer.ignoreOffer
+      });
+      peer.isSettingRemoteAnswerPending = true;
       try {
         await peer.connection.setRemoteDescription({
           type: "answer",
           sdp
         });
+        peer.ignoreOffer = false;
+        rtcLog("answer.applied", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState
+        });
       } catch (error) {
         session.errorMessage = `Answer handling failed: ${(error as Error).message}`;
+        rtcLog("answer.error", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState,
+          message: (error as Error).message
+        });
+      } finally {
+        peer.isSettingRemoteAnswerPending = false;
+        const shouldFlushPending = peer.pendingNegotiation && !peer.makingOffer && peer.connection.signalingState === "stable";
+        if (shouldFlushPending) {
+          const pendingReason = peer.pendingNegotiationReason ?? "post-answer";
+          peer.pendingNegotiation = false;
+          peer.pendingNegotiationReason = null;
+          void this.createAndSendOffer(serverId, channelId, fromParticipantID, `answer:${pendingReason}`);
+        }
       }
     },
     async handleIceCandidateSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
@@ -1026,7 +1333,16 @@ export const useCallStore = defineStore("call", {
       if (!fromParticipantID) return;
       const key = sessionKey(serverId, channelId);
       const peer = this.ensurePeerConnection(serverId, channelId, fromParticipantID);
-      if (!peer || peer.ignoreOffer) return;
+      if (!peer) return;
+      if (peer.ignoreOffer) {
+        rtcLog("ice.remote.ignore", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState
+        });
+        return;
+      }
 
       const candidatePayload = payload.candidate;
       if (!candidatePayload || typeof candidatePayload !== "object") {
@@ -1034,8 +1350,24 @@ export const useCallStore = defineStore("call", {
       }
 
       try {
-        await peer.connection.addIceCandidate(candidatePayload as RTCIceCandidateInit);
-      } catch (_error) {
+        const candidate = candidatePayload as RTCIceCandidateInit;
+        await peer.connection.addIceCandidate(candidate);
+        rtcLog("ice.remote.add", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState,
+          sdpMid: candidate.sdpMid ?? null,
+          sdpMLineIndex: candidate.sdpMLineIndex ?? null
+        });
+      } catch (error) {
+        rtcLog("ice.remote.error", {
+          serverId,
+          channelId,
+          participantId: fromParticipantID,
+          signalingState: peer.connection.signalingState,
+          message: (error as Error).message
+        });
         // Ignore transient candidate races while SDP syncs.
       }
     },
