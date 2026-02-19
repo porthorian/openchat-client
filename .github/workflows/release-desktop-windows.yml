@@ -1,0 +1,94 @@
+name: Release Desktop (Windows)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (windows)
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "23.9.0"
+          cache: "yarn"
+
+      - name: Enable Corepack + Yarn 4
+        run: |
+          corepack enable
+          corepack prepare yarn@4.12.0 --activate
+          corepack yarn --version
+
+      - name: Install dependencies
+        run: corepack yarn install --immutable
+
+      - name: Stamp package version (CI only)
+        run: corepack yarn stamp_build
+
+      - name: Prepare Windows code signing certificate
+        if: env.WINDOWS_CERT_PFX_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != ''
+        shell: pwsh
+        run: |
+          $certPath = "${{ runner.temp }}\\windows-signing.pfx"
+          [System.IO.File]::WriteAllBytes(
+            $certPath,
+            [System.Convert]::FromBase64String("${{ env.WINDOWS_CERT_PFX_BASE64 }}")
+          )
+
+      - name: Build installers (Windows signed)
+        if: env.WINDOWS_CERT_PFX_BASE64 != '' && env.WINDOWS_CERT_PASSWORD != ''
+        run: corepack yarn dist
+        env:
+          CSC_LINK: "${{ runner.temp }}\\windows-signing.pfx"
+          CSC_KEY_PASSWORD: ${{ env.WINDOWS_CERT_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Build installers (Windows unsigned fallback)
+        if: env.WINDOWS_CERT_PFX_BASE64 == '' || env.WINDOWS_CERT_PASSWORD == ''
+        run: corepack yarn dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Warn about unsigned Windows build
+        if: env.WINDOWS_CERT_PFX_BASE64 == '' || env.WINDOWS_CERT_PASSWORD == ''
+        run: |
+          echo "::warning::Windows artifact was built unsigned. SmartScreen and publisher verification warnings are expected."
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: desktop-windows
+          path: release/**
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release (windows)
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: desktop-windows
+          path: release-assets
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            release-assets/**/*
+          fail_on_unmatched_files: true
