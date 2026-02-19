@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { mdiChevronRight, mdiMessage, mdiPlus } from "@mdi/js";
+import { mdiChevronRight, mdiPlus } from "@mdi/js";
 import type { ServerProfile } from "@renderer/types/models";
 import AppIcon from "./AppIcon.vue";
+import openchatLogo from "../../../../logo_white.png";
 
 const props = defineProps<{
   servers: ServerProfile[];
@@ -111,8 +112,8 @@ onBeforeUnmount(() => {
 
 <template>
   <aside class="server-rail">
-    <button type="button" class="server-dot app-home is-active">
-      <AppIcon :path="mdiMessage" :size="20" />
+    <button type="button" class="server-dot app-home is-active" aria-label="OpenChat home">
+      <img :src="openchatLogo" class="app-home-logo" alt="" />
     </button>
     <div class="server-divider"></div>
     <button
