@@ -26,8 +26,8 @@ function resolveMode(rawMode) {
 /**
  * @typedef {{
  *   command: string;
- *   args: string[];
- *   displayCommand: string;
+  *   args: string[];
+  *   displayCommand: string;
  * }} YarnCommand
  */
 
@@ -39,14 +39,38 @@ function resolveYarnCommand(args) {
   const userAgent = String(process.env.npm_config_user_agent ?? "").trim().toLowerCase();
   const npmExecPath = String(process.env.npm_execpath ?? "").trim();
   const isYarnRuntime = userAgent.startsWith("yarn/");
+  const npmExecExtension = path.extname(npmExecPath).toLowerCase();
+
+  const canExecuteWithNode =
+    npmExecExtension === ".js" || npmExecExtension === ".cjs" || npmExecExtension === ".mjs";
 
   // Running the active Yarn CLI via node avoids Windows `.cmd` spawn edge cases.
-  if (isYarnRuntime && npmExecPath && existsSync(npmExecPath)) {
+  if (isYarnRuntime && npmExecPath && existsSync(npmExecPath) && canExecuteWithNode) {
     return {
       command: process.execPath,
       args: [npmExecPath, ...args],
       displayCommand: `node ${path.basename(npmExecPath)} ${args.join(" ")}`
     };
+  }
+
+  // On Windows in Corepack contexts, npm_execpath can be a shell shim (not JS).
+  // Resolve the real corepack yarn.js from the shim to execute it via Node.
+  if (isYarnRuntime && process.platform === "win32" && npmExecPath && existsSync(npmExecPath)) {
+    try {
+      const shimContent = readFileSync(npmExecPath, "utf8");
+      const corepackEntryMatch = shimContent.match(/['"]([^'"]*corepack[\\/]+dist[\\/]+yarn\.js)['"]/i);
+      const corepackYarnPath = String(corepackEntryMatch?.[1] ?? "").trim();
+
+      if (corepackYarnPath && existsSync(corepackYarnPath)) {
+        return {
+          command: process.execPath,
+          args: [corepackYarnPath, ...args],
+          displayCommand: `node ${path.basename(corepackYarnPath)} ${args.join(" ")}`
+        };
+      }
+    } catch {
+      // Ignore shim parse errors and fall back to normal resolution.
+    }
   }
 
   const yarnExecutable = process.platform === "win32" ? "yarn.cmd" : "yarn";
