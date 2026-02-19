@@ -550,6 +550,8 @@ export const useChatStore = defineStore("chat", {
       attachments?: File[];
       userUID: string;
       deviceID: string;
+      maxMessageBytes?: number | null;
+      maxUploadBytes?: number | null;
     }): Promise<void> {
       this.sendingByChannel[params.channelId] = true;
       try {

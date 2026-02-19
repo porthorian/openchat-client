@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   mdiDeleteOutline,
   mdiEmoticonHappyOutline,
@@ -21,6 +21,8 @@ const props = defineProps<{
   isSendingMessage: boolean;
   attachmentsEnabled: boolean;
   maxUploadBytes: number | null;
+  maxMessageBytes: number | null;
+  sendErrorMessage: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -39,6 +41,7 @@ const typingActive = ref(false);
 const lastTypingSentAt = ref(0);
 const attachmentCounter = ref(0);
 const replaceTargetAttachmentId = ref<string | null>(null);
+const awaitingSendResult = ref(false);
 const isComposerEmpty = computed(() => {
   return draftMessage.value.trim().length === 0 && pendingAttachments.value.length === 0;
 });
@@ -145,6 +148,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function utf8ByteLength(input: string): number {
+  return new TextEncoder().encode(input).length;
+}
+
 function openFilePicker(replaceAttachmentId: string | null): void {
   if (props.isSendingMessage || !props.attachmentsEnabled) return;
   replaceTargetAttachmentId.value = replaceAttachmentId;
@@ -224,14 +231,31 @@ function submitMessage(): void {
   if (props.isSendingMessage) return;
   if (body.length === 0 && pendingAttachments.value.length === 0) return;
 
+  const maxMessageBytes = props.maxMessageBytes;
+  if (typeof maxMessageBytes === "number" && maxMessageBytes > 0) {
+    const bodyBytes = utf8ByteLength(body);
+    if (bodyBytes > maxMessageBytes) {
+      uploadError.value = `Message is too large. Max ${formatBytes(maxMessageBytes)}.`;
+      return;
+    }
+  }
+
+  const maxUploadBytes = props.maxUploadBytes;
+  if (typeof maxUploadBytes === "number" && maxUploadBytes > 0) {
+    const totalAttachmentBytes = pendingAttachments.value.reduce((total, attachment) => total + attachment.file.size, 0);
+    if (totalAttachmentBytes > maxUploadBytes) {
+      uploadError.value = `Attachments are too large together. Max ${formatBytes(maxUploadBytes)} total.`;
+      return;
+    }
+  }
+
+  uploadError.value = null;
+  awaitingSendResult.value = true;
   emit("sendMessage", {
     body,
     attachments: pendingAttachments.value.map((attachment) => attachment.file)
   });
   emitTypingActivity(false);
-  draftMessage.value = "";
-  uploadError.value = null;
-  clearPendingAttachments();
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -283,8 +307,25 @@ watch(
   () => props.channelId,
   () => {
     emitTypingActivity(false);
+    awaitingSendResult.value = false;
     uploadError.value = null;
     clearPendingAttachments();
+  }
+);
+
+watch(
+  () => props.isSendingMessage,
+  (isSending, wasSending) => {
+    if (isSending || !wasSending || !awaitingSendResult.value) return;
+    void nextTick(() => {
+      if (props.isSendingMessage || !awaitingSendResult.value) return;
+      awaitingSendResult.value = false;
+      if (props.sendErrorMessage) {
+        return;
+      }
+      draftMessage.value = "";
+      clearPendingAttachments();
+    });
   }
 );
 </script>
@@ -324,6 +365,7 @@ watch(
       </article>
     </div>
     <p v-if="uploadError" class="composer-upload-error">{{ uploadError }}</p>
+    <p v-if="sendErrorMessage" class="composer-upload-error">{{ sendErrorMessage }}</p>
 
     <div class="composer">
       <button type="button" class="composer-icon" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">

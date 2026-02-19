@@ -122,6 +122,20 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
   return attachments.length > 0 ? attachments : undefined;
 }
 
+function hasLimit(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function utf8ByteLength(input: string): number {
+  return new TextEncoder().encode(input).length;
+}
+
 async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
   const response = await fetch(dataUrl);
   if (!response.ok) {
@@ -185,38 +199,67 @@ export async function createMessage(params: {
   attachments?: File[];
   userUID: string;
   deviceID: string;
+  maxMessageBytes?: number | null;
+  maxUploadBytes?: number | null;
 }): Promise<ChatMessage> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/messages`;
   const files = params.attachments ?? [];
   const headers = authHeaders(params.userUID, params.deviceID);
 
+  const bodyBytes = utf8ByteLength(params.body);
+  if (hasLimit(params.maxMessageBytes) && bodyBytes > params.maxMessageBytes) {
+    throw new Error(`Message is too large. Max ${formatBytes(params.maxMessageBytes)}.`);
+  }
+
+  const uploadLimit = hasLimit(params.maxUploadBytes) ? params.maxUploadBytes : null;
+  if (typeof uploadLimit === "number" && files.length > 0) {
+    if (files.some((file) => file.size > uploadLimit)) {
+      throw new Error(`Image is too large. Max ${formatBytes(uploadLimit)}.`);
+    }
+    const totalUploadBytes = files.reduce((total, file) => total + file.size, 0);
+    if (totalUploadBytes > uploadLimit) {
+      throw new Error(`Attachments are too large together. Max ${formatBytes(uploadLimit)} total.`);
+    }
+  }
+
   let response: Response;
-  if (files.length === 0) {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        ...headers,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        body: params.body
-      })
-    });
-  } else {
-    const formData = new FormData();
-    formData.set("body", params.body);
-    files.forEach((file, index) => {
-      const fallbackName = `image-${index + 1}.png`;
-      formData.append("files", file, file.name || fallbackName);
-    });
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: formData
-    });
+  try {
+    if (files.length === 0) {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          body: params.body
+        })
+      });
+    } else {
+      const formData = new FormData();
+      formData.set("body", params.body);
+      files.forEach((file, index) => {
+        const fallbackName = `image-${index + 1}.png`;
+        formData.append("files", file, file.name || fallbackName);
+      });
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: formData
+      });
+    }
+  } catch (error) {
+    const failure = error as Error;
+    if (files.length > 0) {
+      throw new Error("Upload failed before the server responded. Reduce text or attachments and try again.");
+    }
+    throw new Error(`Failed to send message: ${failure.message}`);
   }
 
   if (!response.ok) {
+    if (response.status === 413) {
+      throw new Error("Message payload is too large for this server. Reduce text or attachments and try again.");
+    }
     const text = await response.text();
     throw new Error(`Failed to send message (${response.status}): ${text}`);
   }

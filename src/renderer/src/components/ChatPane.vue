@@ -26,6 +26,8 @@ const props = defineProps<{
   isSendingMessage: boolean;
   attachmentsEnabled: boolean;
   maxUploadBytes: number | null;
+  maxMessageBytes: number | null;
+  sendErrorMessage: string | null;
   typingUsers: string[];
   currentUserUID: string;
   localProfileDisplayName: string;
@@ -250,6 +252,8 @@ watch(
       :is-sending-message="isSendingMessage"
       :attachments-enabled="attachmentsEnabled"
       :max-upload-bytes="maxUploadBytes"
+      :max-message-bytes="maxMessageBytes"
+      :send-error-message="sendErrorMessage"
       @send-message="emit('sendMessage', $event)"
       @typing-activity="emit('typingActivity', $event)"
     />

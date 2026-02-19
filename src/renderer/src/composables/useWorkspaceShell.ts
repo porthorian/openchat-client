@@ -94,6 +94,7 @@ export function useWorkspaceShell() {
   const appVersion = ref<string>("0.0.0");
   const isHydrating = ref(false);
   const startupError = ref<string | null>(null);
+  const messageSendError = ref<string | null>(null);
   const isAddServerDialogOpen = ref(false);
   const addServerForm = ref<AddServerFormState>({
     backendUrl: DEFAULT_BACKEND_URL,
@@ -671,6 +672,13 @@ export function useWorkspaceShell() {
     { immediate: true }
   );
 
+  watch(
+    () => `${appUI.activeServerId}:${appUI.activeChannelId}`,
+    () => {
+      messageSendError.value = null;
+    }
+  );
+
   async function selectServer(serverId: string): Promise<void> {
     if (serverId === appUI.activeServerId) {
       return;
@@ -890,15 +898,26 @@ export function useWorkspaceShell() {
     const server = activeServer.value;
     const currentUID = activeSession.value?.userUID;
     if (!server || !currentUID || !appUI.activeChannelId) return;
-    await chat.sendMessage({
-      backendUrl: server.backendUrl,
-      channelId: appUI.activeChannelId,
-      body: payload.body,
-      attachments: payload.attachments,
-      userUID: currentUID,
-      deviceID: localDeviceID.value
-    });
-    chat.markChannelRead(appUI.activeChannelId);
+    messageSendError.value = null;
+    try {
+      await chat.sendMessage({
+        backendUrl: server.backendUrl,
+        channelId: appUI.activeChannelId,
+        body: payload.body,
+        attachments: payload.attachments,
+        userUID: currentUID,
+        deviceID: localDeviceID.value,
+        maxMessageBytes: server.capabilities?.limits.maxMessageBytes ?? null,
+        maxUploadBytes: server.capabilities?.limits.maxUploadBytes ?? null
+      });
+      chat.markChannelRead(appUI.activeChannelId);
+    } catch (error) {
+      if (error instanceof Error) {
+        messageSendError.value = error.message;
+        return;
+      }
+      messageSendError.value = "Failed to send message.";
+    }
   }
 
   function setTypingActivity(isTyping: boolean): void {
@@ -1467,6 +1486,8 @@ export function useWorkspaceShell() {
     isLoadingMessages: isLoadingMessages.value,
     isSendingMessage: isSendingMessage.value,
     attachmentsEnabled: activeServer.value?.capabilities?.features.attachments ?? true,
+    sendErrorMessage: messageSendError.value,
+    maxMessageBytes: activeServer.value?.capabilities?.limits.maxMessageBytes ?? null,
     maxUploadBytes: activeServer.value?.capabilities?.limits.maxUploadBytes ?? 10 * 1024 * 1024,
     typingUsers: activeTypingUsers.value,
     currentUserUID: activeSession.value?.userUID ?? "",
