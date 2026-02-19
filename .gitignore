@@ -11,3 +11,5 @@ coverage/
 
 .yarn
 release
+.env
+.env.development

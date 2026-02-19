@@ -101,8 +101,16 @@ const speakingIndicatorHoldMS = 450;
 const speakingActivityThreshold = 0.018;
 const rtcLogPrefix = "[openchat:rtc]";
 const rtcDebugEnabled = (() => {
+  const envValue = String(import.meta.env.VITE_OPENCHAT_RTC_DEBUG ?? "")
+    .trim()
+    .toLowerCase();
+  if (envValue === "1" || envValue === "true" || envValue === "yes" || envValue === "on") {
+    return true;
+  }
+  if (envValue === "0" || envValue === "false" || envValue === "no" || envValue === "off") {
+    return false;
+  }
   if (typeof window === "undefined") return false;
-  if (import.meta.env.DEV) return true;
   try {
     return window.localStorage.getItem("openchat:rtc-debug") === "1";
   } catch (_error) {

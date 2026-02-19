@@ -2,6 +2,11 @@
 
 import type { ClientUpdateSnapshot, DesktopCaptureSource, OpenGraphMetadata, ProjectLinks, RuntimeInfo } from "@shared/ipc";
 
+interface ImportMetaEnv {
+  readonly VITE_OPENCHAT_BACKEND_URL?: string;
+  readonly VITE_OPENCHAT_RTC_DEBUG?: string;
+}
+
 declare global {
   interface Window {
     openchat: {
