@@ -1,5 +1,5 @@
-import { splitMessageTextSegments } from "@renderer/utils/linkify";
-import { replaceEmojiShortcodes } from "@renderer/utils/emoji";
+import { replaceEmojiShortcodes } from "./emoji.ts";
+import { splitMessageTextSegments } from "./linkify.ts";
 
 type MarkdownMarks = {
   bold: boolean;
