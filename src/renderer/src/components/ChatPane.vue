@@ -28,6 +28,24 @@ type TimelineMessage = {
   avatarColor: string;
   avatarTextColor: string;
   avatarImageDataUrl: string | null;
+  replyPreview: ResolvedReplyPreview | null;
+};
+
+type ComposerReplyTarget = {
+  messageId: string;
+  authorName: string;
+};
+
+type ResolvedReplyPreview = {
+  messageId: string;
+  authorName: string;
+  authorMention: string;
+  previewText: string;
+  isUnavailable: boolean;
+  avatarText: string;
+  avatarColor: string;
+  avatarTextColor: string;
+  avatarImageDataUrl: string | null;
 };
 
 type MessageContextMenuState = {
@@ -71,7 +89,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  sendMessage: [payload: { body: string; attachments: File[] }];
+  sendMessage: [payload: { body: string; attachments: File[]; replyToMessageId?: string | null }];
   typingActivity: [isTyping: boolean];
   markMessageUnread: [payload: { channelId: string; messageId: string }];
   deleteMessage: [payload: { channelId: string; messageId: string }];
@@ -85,6 +103,7 @@ const nearBottomThresholdPx = 120;
 const reactionMenuId = "message-reaction-menu";
 const composerPrefillText = ref<string | null>(null);
 const composerPrefillNonce = ref(0);
+const composerReplyTarget = ref<ComposerReplyTarget | null>(null);
 const pendingSendAutoScroll = ref(false);
 const shouldStickToBottom = ref(true);
 const messageContextMenu = ref<MessageContextMenuState>({
@@ -126,25 +145,133 @@ const sortedMessages = computed(() => {
   });
 });
 
+function normalizeReplyPreviewText(input: string): string {
+  const cleaned = input
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(" ");
+  if (!cleaned) return "";
+  return cleaned.length > 140 ? `${cleaned.slice(0, 139)}…` : cleaned;
+}
+
+function resolveAuthorNameByUID(authorUID: string, localUserUID: string, localDisplayName: string): string {
+  const normalizedUID = authorUID.trim();
+  const isLocalAuthor = Boolean(localUserUID && normalizedUID === localUserUID);
+  if (isLocalAuthor) return localDisplayName;
+  const remoteProfile = props.remoteProfilesByUID[normalizedUID];
+  const remoteDisplayName = remoteProfile?.displayName?.trim() ?? "";
+  return remoteDisplayName || normalizedUID || "Unknown user";
+}
+
+function resolveMessageAuthorName(message: ChatMessage, localUserUID: string, localDisplayName: string): string {
+  return resolveAuthorNameByUID(message.authorUID, localUserUID, localDisplayName);
+}
+
+function toReplyMention(value: string): string {
+  return value.trim().replace(/^@+/, "").replace(/\s+/g, "_") || "unknown";
+}
+
+function resolveReplyAvatarPresentation(
+  authorUID: string,
+  authorName: string,
+  localUserUID: string,
+  localAvatarPreset: ReturnType<typeof avatarPresetById>
+): {
+  avatarText: string;
+  avatarColor: string;
+  avatarTextColor: string;
+  avatarImageDataUrl: string | null;
+} {
+  const normalizedUID = authorUID.trim();
+  const isLocalAuthor = Boolean(localUserUID && normalizedUID === localUserUID);
+  const remoteProfile = normalizedUID ? props.remoteProfilesByUID[normalizedUID] : null;
+  const remoteAvatarPreset = remoteProfile?.avatarPresetId ? avatarPresetById(remoteProfile.avatarPresetId) : null;
+  return {
+    avatarText: authorName.slice(0, 1).toUpperCase() || toAvatarText(normalizedUID || authorName),
+    avatarColor:
+      isLocalAuthor && props.localProfileAvatarMode === "generated"
+        ? localAvatarPreset.gradient
+        : remoteProfile?.avatarMode === "generated" && remoteAvatarPreset
+          ? remoteAvatarPreset.gradient
+          : toAvatarColor(normalizedUID || authorName),
+    avatarTextColor:
+      isLocalAuthor && props.localProfileAvatarMode === "generated"
+        ? localAvatarPreset.accent
+        : remoteProfile?.avatarMode === "generated" && remoteAvatarPreset
+          ? remoteAvatarPreset.accent
+          : "#ffffff",
+    avatarImageDataUrl:
+      isLocalAuthor && props.localProfileAvatarMode === "uploaded"
+        ? props.localProfileAvatarImageDataUrl
+        : remoteProfile?.avatarMode === "uploaded"
+          ? remoteProfile.avatarUrl
+          : null
+  };
+}
+
+function resolveReplyPreview(
+  message: ChatMessage,
+  messagesById: Map<string, ChatMessage>,
+  localUserUID: string,
+  localDisplayName: string,
+  localAvatarPreset: ReturnType<typeof avatarPresetById>
+): ResolvedReplyPreview | null {
+  const reference = message.replyTo;
+  if (!reference?.messageId) return null;
+
+  const referencedMessage = messagesById.get(reference.messageId) ?? null;
+  const referencedAuthorName = referencedMessage
+    ? resolveMessageAuthorName(referencedMessage, localUserUID, localDisplayName)
+    : "";
+  const authorName =
+    reference.authorDisplayName?.trim() ||
+    (reference.authorUID ? resolveAuthorNameByUID(reference.authorUID, localUserUID, localDisplayName) : "") ||
+    referencedAuthorName ||
+    "Unknown user";
+  const authorUID = reference.authorUID?.trim() || referencedMessage?.authorUID?.trim() || "";
+  const avatar = resolveReplyAvatarPresentation(authorUID, authorName, localUserUID, localAvatarPreset);
+  const previewText =
+    normalizeReplyPreviewText(reference.previewText ?? "") ||
+    (referencedMessage ? normalizeReplyPreviewText(referencedMessage.body) : "") ||
+    (reference.isUnavailable ? "Original message unavailable" : "Original message");
+  return {
+    messageId: reference.messageId,
+    authorName,
+    authorMention: toReplyMention(authorUID || authorName),
+    previewText,
+    isUnavailable: reference.isUnavailable || (!referencedMessage && !reference.previewText),
+    avatarText: avatar.avatarText,
+    avatarColor: avatar.avatarColor,
+    avatarTextColor: avatar.avatarTextColor,
+    avatarImageDataUrl: avatar.avatarImageDataUrl
+  };
+}
+
 const timelineMessages = computed<TimelineMessage[]>(() => {
   const localUserUID = props.currentUserUID.trim();
   const localDisplayName = props.localProfileDisplayName.trim() || "You";
   const localAvatarPreset = avatarPresetById(props.localProfileAvatarPresetId);
-  return sortedMessages.value.map((message, index, allMessages) => {
+  const sorted = sortedMessages.value;
+  const messagesById = new Map(sorted.map((message) => [message.id, message]));
+  return sorted.map((message, index, allMessages) => {
     const previous = allMessages[index - 1];
     const messageAt = new Date(message.createdAt).getTime();
     const previousAt = previous ? new Date(previous.createdAt).getTime() : 0;
     const isLocalAuthor = Boolean(localUserUID && message.authorUID === localUserUID);
     const remoteProfile = isLocalAuthor ? null : props.remoteProfilesByUID[message.authorUID];
     const remoteAvatarPreset = remoteProfile?.avatarPresetId ? avatarPresetById(remoteProfile.avatarPresetId) : null;
-    const remoteDisplayName = remoteProfile?.displayName?.trim() ?? "";
-    const authorName = isLocalAuthor ? localDisplayName : remoteDisplayName || message.authorUID;
-    const isCompact = Boolean(
-      previous &&
-        previous.authorUID === message.authorUID &&
-        messageAt - previousAt <= compactWindowMS &&
-        new Date(previous.createdAt).toDateString() === new Date(message.createdAt).toDateString()
-    );
+    const authorName = resolveMessageAuthorName(message, localUserUID, localDisplayName);
+    const hasReplyReference = Boolean(message.replyTo?.messageId);
+    const isCompact =
+      !hasReplyReference &&
+      Boolean(
+        previous &&
+          previous.authorUID === message.authorUID &&
+          messageAt - previousAt <= compactWindowMS &&
+          new Date(previous.createdAt).toDateString() === new Date(message.createdAt).toDateString()
+      );
     return {
       message,
       isCompact,
@@ -168,7 +295,8 @@ const timelineMessages = computed<TimelineMessage[]>(() => {
           ? props.localProfileAvatarImageDataUrl
           : remoteProfile?.avatarMode === "uploaded"
             ? remoteProfile.avatarUrl
-            : null
+            : null,
+      replyPreview: resolveReplyPreview(message, messagesById, localUserUID, localDisplayName, localAvatarPreset)
     };
   });
 });
@@ -281,10 +409,15 @@ function handleComposerHeightDelta(delta: number): void {
   timeline.scrollTop += delta;
 }
 
-function handleComposerSendMessage(payload: { body: string; attachments: File[] }): void {
+function handleComposerSendMessage(payload: { body: string; attachments: File[]; replyToMessageId?: string | null }): void {
+  const replyToMessageId = payload.replyToMessageId?.trim() || composerReplyTarget.value?.messageId?.trim() || null;
   pendingSendAutoScroll.value = true;
   shouldStickToBottom.value = true;
-  emit("sendMessage", payload);
+  emit("sendMessage", {
+    body: payload.body,
+    attachments: payload.attachments,
+    replyToMessageId
+  });
 }
 
 function clearTimelineScrollTimer(): void {
@@ -419,6 +552,17 @@ function queueComposerPrefill(text: string): void {
   composerPrefillNonce.value += 1;
 }
 
+function clearComposerReplyTarget(): void {
+  composerReplyTarget.value = null;
+}
+
+function buildComposerReplyTarget(entry: TimelineMessage): ComposerReplyTarget {
+  return {
+    messageId: entry.message.id,
+    authorName: entry.authorName
+  };
+}
+
 function clearReactionMenuCloseTimer(): void {
   if (reactionMenuCloseTimer === null) return;
   clearTimeout(reactionMenuCloseTimer);
@@ -505,27 +649,6 @@ function openFullReactionPicker(): void {
   closeMessageContextMenu();
 }
 
-function buildReplyPrefill(entry: TimelineMessage): string {
-  const mention = `@${entry.message.authorUID}`;
-  const trimmedBody = entry.message.body.trim();
-  if (!trimmedBody) {
-    return `${mention} `;
-  }
-  const normalizedBody = trimmedBody.replace(/\r/g, "");
-  const lines = normalizedBody
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 4);
-  const collapsed = lines.join("\n");
-  const preview = collapsed.length > 220 ? `${collapsed.slice(0, 219)}…` : collapsed;
-  const quote = preview
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
-  return `${mention}\n${quote}`;
-}
-
 async function tryCopyText(value: string): Promise<boolean> {
   const text = value.trim();
   if (!text) return false;
@@ -567,8 +690,7 @@ async function runContextAction(action: MessageContextAction): Promise<void> {
 
   if (action === "reply") {
     if (!canReplyForEntry(entry)) return;
-    queueComposerPrefill(buildReplyPrefill(entry));
-    setActionNotice("Reply draft added to composer.");
+    composerReplyTarget.value = buildComposerReplyTarget(entry);
     closeMessageContextMenu();
     return;
   }
@@ -704,6 +826,7 @@ watch(
   () => {
     pendingSendAutoScroll.value = false;
     shouldStickToBottom.value = true;
+    clearComposerReplyTarget();
     closeImageLightbox();
     closeMessageContextMenu();
     actionNotice.value = "";
@@ -745,6 +868,7 @@ watch(
         :avatar-color="entry.avatarColor"
         :avatar-text-color="entry.avatarTextColor"
         :avatar-image-data-url="entry.avatarImageDataUrl"
+        :reply-preview="entry.replyPreview"
         @open-image-lightbox="openImageLightbox"
         @open-context-menu="openMessageContextMenu($event, entry)"
       />
@@ -891,9 +1015,11 @@ watch(
       :send-error-message="sendErrorMessage"
       :prefill-text="composerPrefillText"
       :prefill-nonce="composerPrefillNonce"
+      :reply-target="composerReplyTarget"
       @send-message="handleComposerSendMessage"
       @typing-activity="emit('typingActivity', $event)"
       @composer-height-delta="handleComposerHeightDelta"
+      @clear-reply-target="clearComposerReplyTarget"
     />
 
     <ChatImageLightbox :open="lightboxAttachment !== null" :attachment="lightboxAttachment" @close="closeImageLightbox" />

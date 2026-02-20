@@ -4,7 +4,8 @@ import type {
   LinkPreview,
   MemberItem,
   MessageActionPermissions,
-  MessageAttachment
+  MessageAttachment,
+  MessageReplyReference
 } from "@renderer/types/chat";
 
 export type RealtimeEnvelope = {
@@ -129,6 +130,26 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
   return attachments.length > 0 ? attachments : undefined;
 }
 
+function readUnknown(source: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (!(key in source)) continue;
+    return source[key];
+  }
+  return undefined;
+}
+
+function readOptionalString(source: Record<string, unknown>, keys: string[]): string | null {
+  const value = readUnknown(source, keys);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
+}
+
 function readOptionalBoolean(source: Record<string, unknown>, keys: string[]): boolean | undefined {
   for (const key of keys) {
     if (!(key in source)) continue;
@@ -185,6 +206,101 @@ function normalizeMessageBodyText(input: unknown): string {
   }
 }
 
+function normalizeReplyPreviewText(input: unknown): string | null {
+  const raw = normalizeMessageBodyText(input).replace(/\r/g, "");
+  const collapsed = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(" ");
+  if (!collapsed) return null;
+  return collapsed.length > 220 ? `${collapsed.slice(0, 219)}…` : collapsed;
+}
+
+function normalizeMessageReplyReference(input: unknown): MessageReplyReference | undefined {
+  if (typeof input === "string" || typeof input === "number" || typeof input === "bigint") {
+    const messageId = String(input).trim();
+    if (!messageId) return undefined;
+    return {
+      messageId,
+      authorUID: null,
+      authorDisplayName: null,
+      previewText: null,
+      isUnavailable: false
+    };
+  }
+  if (typeof input !== "object" || input === null) return undefined;
+
+  const payload = input as Record<string, unknown>;
+  const referencedPayloadRaw =
+    readUnknown(payload, [
+      "referenced_message",
+      "referencedMessage",
+      "in_reply_to",
+      "inReplyTo",
+      "reply_to_message",
+      "replyToMessage",
+      "original_message",
+      "originalMessage",
+      "message",
+      "target_message",
+      "targetMessage"
+    ]) ?? null;
+  const referencedPayload =
+    typeof referencedPayloadRaw === "object" && referencedPayloadRaw !== null
+      ? (referencedPayloadRaw as Record<string, unknown>)
+      : null;
+
+  const messageId =
+    readOptionalString(payload, [
+      "message_id",
+      "messageId",
+      "reply_to_message_id",
+      "replyToMessageId",
+      "in_reply_to_message_id",
+      "inReplyToMessageId",
+      "referenced_message_id",
+      "referencedMessageId",
+      "parent_message_id",
+      "parentMessageId",
+      "id"
+    ]) ??
+    (referencedPayload ? readOptionalString(referencedPayload, ["id", "message_id", "messageId"]) : null);
+  if (!messageId) return undefined;
+
+  const previewSource =
+    readUnknown(payload, ["preview_text", "previewText", "excerpt", "snippet", "summary", "preview", "body", "text", "value"]) ??
+    (referencedPayload
+      ? readUnknown(referencedPayload, ["preview_text", "previewText", "excerpt", "snippet", "summary", "preview", "body", "text", "value"])
+      : undefined);
+  const unavailableFromReferenced =
+    referencedPayload?.deleted === true ||
+    referencedPayload?.is_deleted === true ||
+    typeof referencedPayload?.deleted_at === "string" ||
+    typeof referencedPayload?.deletedAt === "string";
+
+  return {
+    messageId,
+    authorUID:
+      readOptionalString(payload, ["author_uid", "authorUID", "user_uid", "userUID", "uid"]) ??
+      (referencedPayload ? readOptionalString(referencedPayload, ["author_uid", "authorUID", "user_uid", "userUID"]) : null),
+    authorDisplayName:
+      readOptionalString(payload, ["author_display_name", "authorDisplayName", "display_name", "displayName", "author_name", "authorName"]) ??
+      (referencedPayload
+        ? readOptionalString(
+            referencedPayload,
+            ["author_display_name", "authorDisplayName", "display_name", "displayName", "author_name", "authorName"]
+          )
+        : null),
+    previewText: normalizeReplyPreviewText(previewSource),
+    isUnavailable:
+      Boolean(payload.is_unavailable ?? payload.unavailable ?? payload.is_deleted ?? payload.deleted) ||
+      typeof payload.deleted_at === "string" ||
+      typeof payload.deletedAt === "string" ||
+      unavailableFromReferenced
+  };
+}
+
 function normalizeMessagePayload(input: unknown): ChatMessage | null {
   if (typeof input !== "object" || input === null) return null;
   const payload = input as Record<string, unknown>;
@@ -195,12 +311,36 @@ function normalizeMessagePayload(input: unknown): ChatMessage | null {
   const actionPermissions = normalizeMessageActionPermissions(actionPermissionPayload);
   const permalinkRaw = payload.permalink ?? payload.message_link ?? payload.messageLink;
   const permalink = typeof permalinkRaw === "string" ? permalinkRaw.trim() : "";
+  const replyReferencePayload =
+    payload.reply_to ??
+    payload.replyTo ??
+    payload.in_reply_to ??
+    payload.inReplyTo ??
+    payload.reply ??
+    payload.reply_to_message ??
+    payload.replyToMessage ??
+    payload.message_reference ??
+    payload.messageReference ??
+    payload.referenced_message ??
+    payload.referencedMessage ??
+    payload.reply_reference ??
+    payload.replyReference ??
+    payload.reply_to_message_id ??
+    payload.replyToMessageId ??
+    payload.in_reply_to_message_id ??
+    payload.inReplyToMessageId ??
+    payload.referenced_message_id ??
+    payload.referencedMessageId ??
+    payload.parent_message_id ??
+    payload.parentMessageId;
+  const replyTo = normalizeMessageReplyReference(replyReferencePayload);
   return {
     id,
     channelId,
     authorUID: String(payload.author_uid ?? payload.authorUID ?? "uid_unknown"),
     body: normalizeMessageBodyText(payload.body),
     createdAt: String(payload.created_at ?? payload.createdAt ?? new Date().toISOString()),
+    replyTo: replyTo ?? null,
     linkPreviews: normalizeLinkPreviews(payload.link_previews ?? payload.linkPreviews),
     attachments: normalizeMessageAttachments(payload.attachments),
     permalink: permalink || null,
@@ -269,6 +409,7 @@ export async function createMessage(params: {
   channelId: string;
   body: string;
   attachments?: File[];
+  replyToMessageId?: string | null;
   userUID: string;
   deviceID: string;
   maxMessageBytes?: number | null;
@@ -276,6 +417,7 @@ export async function createMessage(params: {
 }): Promise<ChatMessage> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/messages`;
   const files = params.attachments ?? [];
+  const replyToMessageId = params.replyToMessageId?.trim() ?? "";
   const headers = authHeaders(params.userUID, params.deviceID);
 
   const bodyBytes = utf8ByteLength(params.body);
@@ -304,12 +446,16 @@ export async function createMessage(params: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          body: params.body
+          body: params.body,
+          reply_to_message_id: replyToMessageId || undefined
         })
       });
     } else {
       const formData = new FormData();
       formData.set("body", params.body);
+      if (replyToMessageId) {
+        formData.set("reply_to_message_id", replyToMessageId);
+      }
       files.forEach((file, index) => {
         const fallbackName = `image-${index + 1}.png`;
         formData.append("files", file, file.name || fallbackName);

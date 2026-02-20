@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  mdiClose,
   mdiDeleteOutline,
   mdiEmoticonHappyOutline,
   mdiEyeOutline,
@@ -17,6 +18,11 @@ type PendingAttachment = {
   previewUrl: string;
 };
 
+type ComposerReplyTarget = {
+  messageId: string;
+  authorName: string;
+};
+
 const props = defineProps<{
   channelId: string;
   isSendingMessage: boolean;
@@ -26,12 +32,14 @@ const props = defineProps<{
   sendErrorMessage: string | null;
   prefillText?: string | null;
   prefillNonce?: number;
+  replyTarget?: ComposerReplyTarget | null;
 }>();
 
 const emit = defineEmits<{
-  sendMessage: [payload: { body: string; attachments: File[] }];
+  sendMessage: [payload: { body: string; attachments: File[]; replyToMessageId: string | null }];
   typingActivity: [isTyping: boolean];
   composerHeightDelta: [delta: number];
+  clearReplyTarget: [];
 }>();
 
 const draftMessage = ref("");
@@ -48,13 +56,16 @@ const lastTypingSentAt = ref(0);
 const attachmentCounter = ref(0);
 const replaceTargetAttachmentId = ref<string | null>(null);
 const awaitingSendResult = ref(false);
+const submittedReplyMessageId = ref<string | null>(null);
 const emojiPickerOpen = ref(false);
+const replyMentionEnabled = ref(true);
 const emojiOptions = composerEmojiOptions;
 let composerShellHeight = 0;
 let composerShellResizeObserver: ResizeObserver | null = null;
 const isComposerEmpty = computed(() => {
   return draftMessage.value.trim().length === 0 && pendingAttachments.value.length === 0;
 });
+const activeReplyTarget = computed(() => props.replyTarget ?? null);
 
 function emitTypingActivity(isTyping: boolean, forceHeartbeat = false): void {
   if (!forceHeartbeat && typingActive.value === isTyping) {
@@ -238,6 +249,7 @@ function handlePaste(event: ClipboardEvent): void {
 
 function submitMessage(): void {
   const body = draftMessage.value.trim();
+  const replyToMessageId = activeReplyTarget.value?.messageId?.trim() ?? "";
   if (props.isSendingMessage) return;
   if (body.length === 0 && pendingAttachments.value.length === 0) return;
 
@@ -262,11 +274,27 @@ function submitMessage(): void {
   uploadError.value = null;
   emojiPickerOpen.value = false;
   awaitingSendResult.value = true;
+  submittedReplyMessageId.value = replyToMessageId || null;
   emit("sendMessage", {
     body,
-    attachments: pendingAttachments.value.map((attachment) => attachment.file)
+    attachments: pendingAttachments.value.map((attachment) => attachment.file),
+    replyToMessageId: replyToMessageId || null
   });
   emitTypingActivity(false);
+}
+
+function clearReplyTarget(): void {
+  if (props.isSendingMessage || !activeReplyTarget.value) return;
+  submittedReplyMessageId.value = null;
+  emit("clearReplyTarget");
+  void nextTick(() => {
+    composerInputRef.value?.focus();
+  });
+}
+
+function toggleReplyMention(): void {
+  if (props.isSendingMessage || !activeReplyTarget.value) return;
+  replyMentionEnabled.value = !replyMentionEnabled.value;
 }
 
 function insertTextAtSelection(inputText: string): void {
@@ -466,6 +494,8 @@ watch(
   () => {
     emitTypingActivity(false);
     awaitingSendResult.value = false;
+    submittedReplyMessageId.value = null;
+    replyMentionEnabled.value = true;
     uploadError.value = null;
     emojiPickerOpen.value = false;
     clearPendingAttachments();
@@ -494,6 +524,29 @@ watch(
       }
       draftMessage.value = "";
       clearPendingAttachments();
+      if (submittedReplyMessageId.value) {
+        submittedReplyMessageId.value = null;
+        emit("clearReplyTarget");
+      }
+    });
+  }
+);
+
+watch(
+  () => props.replyTarget?.messageId ?? "",
+  (messageId, previousMessageId) => {
+    if (!messageId) {
+      replyMentionEnabled.value = true;
+      return;
+    }
+    if (messageId === previousMessageId) return;
+    replyMentionEnabled.value = true;
+    void nextTick(() => {
+      const input = composerInputRef.value;
+      if (!input) return;
+      input.focus();
+      const cursor = draftMessage.value.length;
+      input.setSelectionRange(cursor, cursor);
     });
   }
 );
@@ -536,66 +589,93 @@ watch(
     <p v-if="uploadError" class="composer-upload-error">{{ uploadError }}</p>
     <p v-if="sendErrorMessage" class="composer-upload-error">{{ sendErrorMessage }}</p>
 
-    <div class="composer">
-      <button type="button" class="composer-icon" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
-        <AppIcon :path="mdiPlusCircleOutline" :size="18" />
-      </button>
-      <textarea
-        ref="composerInputRef"
-        v-model="draftMessage"
-        rows="1"
-        :placeholder="`Message #${channelId}`"
-        aria-label="Message composer"
-        :disabled="isSendingMessage"
-        @blur="emitTypingActivity(false)"
-        @focus="syncTypingActivity"
-        @input="handleComposerInput"
-        @paste="handlePaste"
-        @keydown="handleComposerKeydown"
-      />
-      <div class="composer-actions">
-        <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isComposerEmpty" @click="submitMessage">
-          {{ isSendingMessage ? "Sending..." : "Send" }}
-        </button>
-        <button type="button" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
-          <AppIcon :path="mdiImageOutline" :size="18" />
-        </button>
-        <button
-          type="button"
-          class="composer-emoji-toggle"
-          :disabled="isSendingMessage"
-          :aria-expanded="emojiPickerOpen ? 'true' : 'false'"
-          aria-haspopup="dialog"
-          aria-label="Insert emoji"
-          @click.stop="toggleEmojiPicker"
-        >
-          <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
-        </button>
-      </div>
-      <section v-if="emojiPickerOpen" class="composer-emoji-picker" role="dialog" aria-label="Emoji picker">
-        <p class="composer-emoji-picker-title">Emoji</p>
-        <div class="composer-emoji-grid">
+    <div class="composer-frame" :class="{ 'has-reply-target': activeReplyTarget }">
+      <div v-if="activeReplyTarget" class="composer-reply-banner">
+        <p class="composer-reply-copy">Replying to <strong>{{ activeReplyTarget.authorName }}</strong></p>
+        <div class="composer-reply-actions">
           <button
-            v-for="option in emojiOptions"
-            :key="option.shortcode"
             type="button"
-            class="composer-emoji-option"
-            :title="`${option.label} (${option.shortcode})`"
-            @click="pickEmoji(option)"
+            class="composer-reply-mention-toggle"
+            :class="{ 'is-disabled': !replyMentionEnabled }"
+            :data-tooltip="
+              replyMentionEnabled
+                ? 'Click to disable pinging the original author.'
+                : 'Click to enable pinging the original author.'
+            "
+            :aria-pressed="replyMentionEnabled ? 'true' : 'false'"
+            :disabled="isSendingMessage"
+            @click="toggleReplyMention"
           >
-            {{ option.emoji }}
+            <span class="composer-reply-mention-symbol">@</span>
+            <span>{{ replyMentionEnabled ? "ON" : "OFF" }}</span>
+          </button>
+          <span class="composer-reply-actions-divider" aria-hidden="true" />
+          <button type="button" class="composer-reply-dismiss" :disabled="isSendingMessage" aria-label="Cancel reply" @click="clearReplyTarget">
+            <AppIcon :path="mdiClose" :size="14" />
           </button>
         </div>
-      </section>
-      <input
-        ref="fileInputRef"
-        class="composer-file-input"
-        type="file"
-        accept="image/png,image/jpeg,image/gif"
-        :multiple="replaceTargetAttachmentId === null"
-        :disabled="isSendingMessage || !attachmentsEnabled"
-        @change="handleFileInputChange"
-      />
+      </div>
+      <div class="composer" :class="{ 'is-under-reply': activeReplyTarget }">
+        <button type="button" class="composer-icon" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
+          <AppIcon :path="mdiPlusCircleOutline" :size="18" />
+        </button>
+        <textarea
+          ref="composerInputRef"
+          v-model="draftMessage"
+          rows="1"
+          :placeholder="`Message #${channelId}`"
+          aria-label="Message composer"
+          :disabled="isSendingMessage"
+          @blur="emitTypingActivity(false)"
+          @focus="syncTypingActivity"
+          @input="handleComposerInput"
+          @paste="handlePaste"
+          @keydown="handleComposerKeydown"
+        />
+        <div class="composer-actions">
+          <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isComposerEmpty" @click="submitMessage">
+            {{ isSendingMessage ? "Sending..." : "Send" }}
+          </button>
+          <button type="button" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
+            <AppIcon :path="mdiImageOutline" :size="18" />
+          </button>
+          <button
+            type="button"
+            class="composer-emoji-toggle"
+            :disabled="isSendingMessage"
+            :aria-expanded="emojiPickerOpen ? 'true' : 'false'"
+            aria-haspopup="dialog"
+            aria-label="Insert emoji"
+            @click.stop="toggleEmojiPicker"
+          >
+            <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
+          </button>
+        </div>
+        <section v-if="emojiPickerOpen" class="composer-emoji-picker" role="dialog" aria-label="Emoji picker">
+          <p class="composer-emoji-picker-title">Emoji</p>
+          <div class="composer-emoji-grid">
+            <button
+              v-for="option in emojiOptions"
+              :key="option.shortcode"
+              type="button"
+              class="composer-emoji-option"
+              :title="`${option.label} (${option.shortcode})`"
+              @click="pickEmoji(option)"
+            >
+              {{ option.emoji }}
+            </button>
+          </div>
+        </section>
+        <input
+          ref="fileInputRef"
+          class="composer-file-input"
+          type="file"
+          accept="image/png,image/jpeg,image/gif"
+          :multiple="replaceTargetAttachmentId === null"
+          :disabled="isSendingMessage || !attachmentsEnabled"
+          @change="handleFileInputChange"
+        />
+      </div>
     </div>
   </footer>
 </template>

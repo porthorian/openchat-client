@@ -15,6 +15,17 @@ const props = defineProps<{
   avatarColor: string;
   avatarTextColor: string;
   avatarImageDataUrl: string | null;
+  replyPreview?: {
+    messageId: string;
+    authorName: string;
+    authorMention: string;
+    previewText: string;
+    isUnavailable: boolean;
+    avatarText: string;
+    avatarColor: string;
+    avatarTextColor: string;
+    avatarImageDataUrl: string | null;
+  } | null;
 }>();
 const emit = defineEmits<{
   openImageLightbox: [attachment: MessageAttachment];
@@ -120,6 +131,24 @@ function listItemStyle(depth: number): Record<string, string> {
     </div>
     <div v-else class="message-avatar-spacer" aria-hidden="true" />
     <div class="message-content">
+      <div
+        v-if="props.replyPreview"
+        class="message-reply-preview"
+        :class="{ 'is-unavailable': props.replyPreview.isUnavailable }"
+        :title="props.replyPreview.previewText"
+      >
+        <span class="message-reply-thread" aria-hidden="true" />
+        <span
+          class="message-reply-avatar"
+          :style="{ '--avatar-bg': props.replyPreview.avatarColor, color: props.replyPreview.avatarTextColor }"
+          aria-hidden="true"
+        >
+          <img v-if="props.replyPreview.avatarImageDataUrl" class="message-reply-avatar-image" :src="props.replyPreview.avatarImageDataUrl" alt="" />
+          <template v-else>{{ props.replyPreview.avatarText }}</template>
+        </span>
+        <span class="message-reply-author">@{{ props.replyPreview.authorMention }}</span>
+        <span class="message-reply-text">{{ props.replyPreview.previewText }}</span>
+      </div>
       <header v-if="!isCompact" class="message-meta">
         <strong class="message-author">{{ authorName }}</strong>
         <time class="message-time">{{ formatHeaderTimestamp(props.message.createdAt) }}</time>

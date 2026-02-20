@@ -894,10 +894,11 @@ export function useWorkspaceShell() {
     call.setOutputVolume(volume);
   }
 
-  async function sendMessage(payload: { body: string; attachments: File[] }): Promise<void> {
+  async function sendMessage(payload: { body: string; attachments: File[]; replyToMessageId?: string | null }): Promise<void> {
     const server = activeServer.value;
     const currentUID = activeSession.value?.userUID;
     if (!server || !currentUID || !appUI.activeChannelId) return;
+    const replyToMessageId = payload.replyToMessageId?.trim() || null;
     messageSendError.value = null;
     try {
       await chat.sendMessage({
@@ -905,6 +906,7 @@ export function useWorkspaceShell() {
         channelId: appUI.activeChannelId,
         body: payload.body,
         attachments: payload.attachments,
+        replyToMessageId,
         userUID: currentUID,
         deviceID: localDeviceID.value,
         maxMessageBytes: server.capabilities?.limits.maxMessageBytes ?? null,

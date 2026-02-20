@@ -25,7 +25,8 @@ import type {
   LinkPreview,
   MemberItem,
   MessageActionPermissions,
-  MessageAttachment
+  MessageAttachment,
+  MessageReplyReference
 } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
 
@@ -52,6 +53,13 @@ type LocalProfileSyncInput = {
   avatarMode: AvatarMode;
   avatarPresetId: string;
   avatarImageDataUrl: string | null;
+};
+
+type PendingLocalReplyHint = {
+  authorUID: string;
+  replyToMessageId: string;
+  body: string;
+  enqueuedAt: number;
 };
 
 type ChatStoreState = {
@@ -84,6 +92,9 @@ const profileBatchLimit = 100;
 const maxLinkPreviewsPerMessage = 3;
 const linkPreviewCacheByURL = new Map<string, LinkPreview | null>();
 const linkPreviewInFlightByURL = new Map<string, Promise<LinkPreview | null>>();
+const pendingLocalReplyHintsByChannel = new Map<string, PendingLocalReplyHint[]>();
+const pendingLocalReplyHintMaxAgeMS = 2 * 60 * 1000;
+const pendingLocalReplyHintMaxPerChannel = 40;
 
 function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
   try {
@@ -95,6 +106,105 @@ function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
 
 function hasMessage(messages: ChatMessage[], messageID: string): boolean {
   return messages.some((item) => item.id === messageID);
+}
+
+function hasReplyReference(replyTo: ChatMessage["replyTo"] | null | undefined): boolean {
+  return Boolean(replyTo?.messageId && replyTo.messageId.trim().length > 0);
+}
+
+function normalizeComparableMessageBody(body: string): string {
+  return body.replace(/\r/g, "").trim();
+}
+
+function prunePendingLocalReplyHints(channelId: string, now = Date.now()): void {
+  const existing = pendingLocalReplyHintsByChannel.get(channelId);
+  if (!existing || existing.length === 0) return;
+  const next = existing.filter((item) => now - item.enqueuedAt <= pendingLocalReplyHintMaxAgeMS);
+  if (next.length === 0) {
+    pendingLocalReplyHintsByChannel.delete(channelId);
+    return;
+  }
+  pendingLocalReplyHintsByChannel.set(channelId, next.slice(-pendingLocalReplyHintMaxPerChannel));
+}
+
+function enqueuePendingLocalReplyHint(params: {
+  channelId: string;
+  authorUID: string;
+  replyToMessageId: string;
+  body: string;
+}): void {
+  const channelId = params.channelId.trim();
+  const authorUID = params.authorUID.trim();
+  const replyToMessageId = params.replyToMessageId.trim();
+  if (!channelId || !authorUID || !replyToMessageId) return;
+  prunePendingLocalReplyHints(channelId);
+  const existing = pendingLocalReplyHintsByChannel.get(channelId) ?? [];
+  const next = [
+    ...existing,
+    {
+      authorUID,
+      replyToMessageId,
+      body: normalizeComparableMessageBody(params.body),
+      enqueuedAt: Date.now()
+    }
+  ];
+  pendingLocalReplyHintsByChannel.set(channelId, next.slice(-pendingLocalReplyHintMaxPerChannel));
+}
+
+function takePendingLocalReplyHint(channelId: string, authorUID: string, body: string): PendingLocalReplyHint | null {
+  const normalizedChannelID = channelId.trim();
+  const normalizedAuthorUID = authorUID.trim();
+  if (!normalizedChannelID || !normalizedAuthorUID) return null;
+  prunePendingLocalReplyHints(normalizedChannelID);
+  const existing = pendingLocalReplyHintsByChannel.get(normalizedChannelID);
+  if (!existing || existing.length === 0) return null;
+
+  const normalizedBody = normalizeComparableMessageBody(body);
+  let index = existing.findIndex((item) => item.authorUID === normalizedAuthorUID && item.body === normalizedBody);
+  if (index === -1 && normalizedBody.length === 0) {
+    index = existing.findIndex((item) => item.authorUID === normalizedAuthorUID);
+  }
+  if (index === -1) return null;
+
+  const [hint] = existing.splice(index, 1);
+  if (existing.length === 0) {
+    pendingLocalReplyHintsByChannel.delete(normalizedChannelID);
+  } else {
+    pendingLocalReplyHintsByChannel.set(normalizedChannelID, existing);
+  }
+  return hint;
+}
+
+function withPendingLocalReplyHint(message: ChatMessage, channelMessages: ChatMessage[]): ChatMessage {
+  if (hasReplyReference(message.replyTo)) return message;
+  const hint = takePendingLocalReplyHint(message.channelId, message.authorUID, message.body);
+  if (!hint) return message;
+
+  const fallbackReference = channelMessages.find((item) => item.id === hint.replyToMessageId);
+  const replyTo: MessageReplyReference = {
+    messageId: hint.replyToMessageId,
+    authorUID: fallbackReference?.authorUID ?? null,
+    authorDisplayName: null,
+    previewText: fallbackReference ? normalizeReplyPreviewText(fallbackReference.body) : null,
+    isUnavailable: !fallbackReference
+  };
+  return {
+    ...message,
+    replyTo
+  };
+}
+
+function mergeChannelMessage(existing: ChatMessage, incoming: ChatMessage): ChatMessage {
+  return {
+    ...existing,
+    ...incoming,
+    replyTo: hasReplyReference(incoming.replyTo) ? incoming.replyTo : existing.replyTo ?? null,
+    linkPreviews:
+      incoming.linkPreviews && incoming.linkPreviews.length > 0 ? incoming.linkPreviews : existing.linkPreviews,
+    attachments: incoming.attachments && incoming.attachments.length > 0 ? incoming.attachments : existing.attachments,
+    actionPermissions: incoming.actionPermissions ?? existing.actionPermissions,
+    permalink: incoming.permalink ?? existing.permalink ?? null
+  };
 }
 
 function normalizeLinkPreview(input: unknown): LinkPreview | null {
@@ -142,6 +252,26 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
     .map((item) => normalizeMessageAttachment(item))
     .filter((item): item is MessageAttachment => item !== null);
   return attachments.length > 0 ? attachments : undefined;
+}
+
+function readUnknown(source: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (!(key in source)) continue;
+    return source[key];
+  }
+  return undefined;
+}
+
+function readOptionalString(source: Record<string, unknown>, keys: string[]): string | null {
+  const value = readUnknown(source, keys);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+  return null;
 }
 
 function readOptionalBoolean(source: Record<string, unknown>, keys: string[]): boolean | undefined {
@@ -217,6 +347,101 @@ function normalizeMessageBodyText(input: unknown): string {
   }
 }
 
+function normalizeReplyPreviewText(input: unknown): string | null {
+  const raw = normalizeMessageBodyText(input).replace(/\r/g, "");
+  const collapsed = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(" ");
+  if (!collapsed) return null;
+  return collapsed.length > 220 ? `${collapsed.slice(0, 219)}…` : collapsed;
+}
+
+function normalizeMessageReplyReference(input: unknown): MessageReplyReference | undefined {
+  if (typeof input === "string" || typeof input === "number" || typeof input === "bigint") {
+    const messageId = String(input).trim();
+    if (!messageId) return undefined;
+    return {
+      messageId,
+      authorUID: null,
+      authorDisplayName: null,
+      previewText: null,
+      isUnavailable: false
+    };
+  }
+  if (typeof input !== "object" || input === null) return undefined;
+
+  const payload = input as Record<string, unknown>;
+  const referencedPayloadRaw =
+    readUnknown(payload, [
+      "referenced_message",
+      "referencedMessage",
+      "in_reply_to",
+      "inReplyTo",
+      "reply_to_message",
+      "replyToMessage",
+      "original_message",
+      "originalMessage",
+      "message",
+      "target_message",
+      "targetMessage"
+    ]) ?? null;
+  const referencedPayload =
+    typeof referencedPayloadRaw === "object" && referencedPayloadRaw !== null
+      ? (referencedPayloadRaw as Record<string, unknown>)
+      : null;
+
+  const messageId =
+    readOptionalString(payload, [
+      "message_id",
+      "messageId",
+      "reply_to_message_id",
+      "replyToMessageId",
+      "in_reply_to_message_id",
+      "inReplyToMessageId",
+      "referenced_message_id",
+      "referencedMessageId",
+      "parent_message_id",
+      "parentMessageId",
+      "id"
+    ]) ??
+    (referencedPayload ? readOptionalString(referencedPayload, ["id", "message_id", "messageId"]) : null);
+  if (!messageId) return undefined;
+
+  const previewSource =
+    readUnknown(payload, ["preview_text", "previewText", "excerpt", "snippet", "summary", "preview", "body", "text", "value"]) ??
+    (referencedPayload
+      ? readUnknown(referencedPayload, ["preview_text", "previewText", "excerpt", "snippet", "summary", "preview", "body", "text", "value"])
+      : undefined);
+  const unavailableFromReferenced =
+    referencedPayload?.deleted === true ||
+    referencedPayload?.is_deleted === true ||
+    typeof referencedPayload?.deleted_at === "string" ||
+    typeof referencedPayload?.deletedAt === "string";
+
+  return {
+    messageId,
+    authorUID:
+      readOptionalString(payload, ["author_uid", "authorUID", "user_uid", "userUID", "uid"]) ??
+      (referencedPayload ? readOptionalString(referencedPayload, ["author_uid", "authorUID", "user_uid", "userUID"]) : null),
+    authorDisplayName:
+      readOptionalString(payload, ["author_display_name", "authorDisplayName", "display_name", "displayName", "author_name", "authorName"]) ??
+      (referencedPayload
+        ? readOptionalString(
+            referencedPayload,
+            ["author_display_name", "authorDisplayName", "display_name", "displayName", "author_name", "authorName"]
+          )
+        : null),
+    previewText: normalizeReplyPreviewText(previewSource),
+    isUnavailable:
+      Boolean(payload.is_unavailable ?? payload.unavailable ?? payload.is_deleted ?? payload.deleted) ||
+      typeof payload.deleted_at === "string" ||
+      typeof payload.deletedAt === "string" ||
+      unavailableFromReferenced
+  };
+}
+
 function isSameLinkPreview(left: LinkPreview, right: LinkPreview): boolean {
   return (
     left.url === right.url &&
@@ -281,12 +506,36 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
   const actionPermissions = normalizeMessageActionPermissions(actionPermissionPayload);
   const permalinkRaw = messagePayload.permalink ?? messagePayload.message_link ?? messagePayload.messageLink;
   const permalink = typeof permalinkRaw === "string" ? permalinkRaw.trim() : "";
+  const replyReferencePayload =
+    messagePayload.reply_to ??
+    messagePayload.replyTo ??
+    messagePayload.in_reply_to ??
+    messagePayload.inReplyTo ??
+    messagePayload.reply ??
+    messagePayload.reply_to_message ??
+    messagePayload.replyToMessage ??
+    messagePayload.message_reference ??
+    messagePayload.messageReference ??
+    messagePayload.referenced_message ??
+    messagePayload.referencedMessage ??
+    messagePayload.reply_reference ??
+    messagePayload.replyReference ??
+    messagePayload.reply_to_message_id ??
+    messagePayload.replyToMessageId ??
+    messagePayload.in_reply_to_message_id ??
+    messagePayload.inReplyToMessageId ??
+    messagePayload.referenced_message_id ??
+    messagePayload.referencedMessageId ??
+    messagePayload.parent_message_id ??
+    messagePayload.parentMessageId;
+  const replyTo = normalizeMessageReplyReference(replyReferencePayload);
   return {
     id,
     channelId: channelID,
     authorUID: String(messagePayload.author_uid ?? "uid_unknown"),
     body: normalizeMessageBodyText(messagePayload.body),
     createdAt: String(messagePayload.created_at ?? new Date().toISOString()),
+    replyTo: replyTo ?? null,
     linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews),
     attachments: normalizeMessageAttachments(messagePayload.attachments),
     permalink: permalink || null,
@@ -609,7 +858,12 @@ export const useChatStore = defineStore("chat", {
           backendUrl: params.backendUrl,
           userUID: params.userUID,
           deviceID: params.deviceID,
-          targetUserUIDs: messages.map((message) => message.authorUID)
+          targetUserUIDs: messages.flatMap((message) => {
+            if (message.replyTo?.authorUID) {
+              return [message.authorUID, message.replyTo.authorUID];
+            }
+            return [message.authorUID];
+          })
         });
       } finally {
         this.loadingMessagesByChannel[params.channelId] = false;
@@ -620,18 +874,50 @@ export const useChatStore = defineStore("chat", {
       channelId: string;
       body: string;
       attachments?: File[];
+      replyToMessageId?: string | null;
       userUID: string;
       deviceID: string;
       maxMessageBytes?: number | null;
       maxUploadBytes?: number | null;
     }): Promise<void> {
       this.sendingByChannel[params.channelId] = true;
+      const replyToMessageId = params.replyToMessageId?.trim() ?? "";
+      if (replyToMessageId) {
+        enqueuePendingLocalReplyHint({
+          channelId: params.channelId,
+          authorUID: params.userUID,
+          replyToMessageId,
+          body: params.body
+        });
+      }
       try {
-        const message = await createMessage(params);
-        const existing = this.messagesByChannel[message.channelId] ?? [];
-        if (!hasMessage(existing, message.id)) {
-          this.messagesByChannel[message.channelId] = [...existing, message];
+        const createdMessage = await createMessage(params);
+        const existing = this.messagesByChannel[createdMessage.channelId] ?? [];
+        const fallbackReplyMessageId = replyToMessageId;
+        const fallbackReference = fallbackReplyMessageId ? existing.find((item) => item.id === fallbackReplyMessageId) : null;
+        const messageWithFallback: ChatMessage =
+          createdMessage.replyTo || !fallbackReplyMessageId
+            ? createdMessage
+            : {
+                ...createdMessage,
+                replyTo: {
+                  messageId: fallbackReplyMessageId,
+                  authorUID: fallbackReference?.authorUID ?? null,
+                  authorDisplayName: null,
+                  previewText: fallbackReference ? normalizeReplyPreviewText(fallbackReference.body) : null,
+                  isUnavailable: !fallbackReference
+                }
+              };
+        const message = withPendingLocalReplyHint(messageWithFallback, existing);
+        const existingForChannel = this.messagesByChannel[message.channelId] ?? [];
+        const existingIndex = existingForChannel.findIndex((item) => item.id === message.id);
+        if (existingIndex === -1) {
+          this.messagesByChannel[message.channelId] = [...existingForChannel, message];
           void this.hydrateLinkPreviewsForMessages(message.channelId, [message]);
+        } else {
+          const nextMessages = [...existingForChannel];
+          nextMessages[existingIndex] = mergeChannelMessage(existingForChannel[existingIndex], message);
+          this.messagesByChannel[message.channelId] = nextMessages;
         }
       } finally {
         this.sendingByChannel[params.channelId] = false;
@@ -915,6 +1201,7 @@ export const useChatStore = defineStore("chat", {
       }
       this.presenceByChannel[channelId] = [];
       this.clearTypingForChannel(channelId);
+      pendingLocalReplyHintsByChannel.delete(channelId);
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendRealtime(socket, {
@@ -949,19 +1236,32 @@ export const useChatStore = defineStore("chat", {
         const message = normalizeIncomingMessage(payload);
         if (!message) return;
         const existing = this.messagesByChannel[message.channelId] ?? [];
-        if (hasMessage(existing, message.id)) return;
-        this.messagesByChannel[message.channelId] = [...existing, message];
-        void this.hydrateLinkPreviewsForMessages(message.channelId, [message]);
-        void this.ensureProfilesFromRealtime(serverId, [message.authorUID]);
+        const messageWithHint = withPendingLocalReplyHint(message, existing);
+        const existingIndex = existing.findIndex((item) => item.id === message.id);
+        const resolvedMessage =
+          existingIndex === -1 ? messageWithHint : mergeChannelMessage(existing[existingIndex], messageWithHint);
+        if (existingIndex === -1) {
+          this.messagesByChannel[message.channelId] = [...existing, resolvedMessage];
+        } else {
+          const nextMessages = [...existing];
+          nextMessages[existingIndex] = resolvedMessage;
+          this.messagesByChannel[message.channelId] = nextMessages;
+        }
+        void this.hydrateLinkPreviewsForMessages(resolvedMessage.channelId, [resolvedMessage]);
+        const relatedUserUIDs = [resolvedMessage.authorUID];
+        if (resolvedMessage.replyTo?.authorUID) {
+          relatedUserUIDs.push(resolvedMessage.replyTo.authorUID);
+        }
+        void this.ensureProfilesFromRealtime(serverId, relatedUserUIDs);
         const subscribedChannel = this.subscribedChannelByServer[serverId];
-        const channelIsActive = subscribedChannel === message.channelId;
+        const channelIsActive = subscribedChannel === resolvedMessage.channelId;
         const windowVisible = isDocumentVisible();
         if (!channelIsActive || !windowVisible) {
-          this.incrementUnread(message.channelId);
+          this.incrementUnread(resolvedMessage.channelId);
         } else {
-          this.markChannelRead(message.channelId);
+          this.markChannelRead(resolvedMessage.channelId);
         }
-        void this.notifyIncomingMessage(serverId, message, channelIsActive);
+        void this.notifyIncomingMessage(serverId, resolvedMessage, channelIsActive);
         return;
       }
       if (envelope.type === "chat.presence.snapshot") {

@@ -28,12 +28,21 @@ export type MessageActionPermissions = {
   canDelete?: boolean;
 };
 
+export type MessageReplyReference = {
+  messageId: string;
+  authorUID: string | null;
+  authorDisplayName: string | null;
+  previewText: string | null;
+  isUnavailable: boolean;
+};
+
 export type ChatMessage = {
   id: string;
   channelId: string;
   authorUID: string;
   body: string;
   createdAt: string;
+  replyTo?: MessageReplyReference | null;
   linkPreviews?: LinkPreview[];
   attachments?: MessageAttachment[];
   permalink?: string | null;
