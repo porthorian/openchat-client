@@ -83,9 +83,9 @@ Signing/notarization secrets (optional but recommended):
 Unsigned builds still generate artifacts, but OS trust warnings are expected.
 
 macOS entitlement note:
-- `build/entitlements.mac.plist` includes network incoming/outgoing keys (`com.apple.security.network.client`, `com.apple.security.network.server`).
-- For the current non-App-Store Developer ID flow (App Sandbox disabled), networking is already allowed and these keys are effectively no-op.
-- If App Sandbox is enabled later, these keys are required for outbound/inbound networking behavior.
+- `build/entitlements.mac.plist` includes media keys (`com.apple.security.device.audio-input`, `com.apple.security.device.camera`) and network keys (`com.apple.security.network.client`, `com.apple.security.network.server`).
+- `electron-builder.yml` sets `NSMicrophoneUsageDescription`, `NSCameraUsageDescription`, and `NSScreenCaptureDescription` so notarized builds can display required runtime privacy prompts.
+- For the current non-App-Store Developer ID flow (App Sandbox disabled), network access is already allowed; network entitlements are relevant if App Sandbox is enabled later.
 
 ## Documentation Map
 - Planning and constraints: `AGENTS.md`

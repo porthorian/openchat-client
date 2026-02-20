@@ -39,6 +39,10 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSCameraUsageDescription: OpenChat needs camera access so you can enable video in voice channels.
+    NSMicrophoneUsageDescription: OpenChat needs microphone access so you can join voice channels.
+    NSScreenCaptureDescription: OpenChat needs screen recording access so you can share your screen in channels.
 
 win:
   icon: logo.png
