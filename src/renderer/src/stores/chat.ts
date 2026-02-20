@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import type { OpenGraphMetadata } from "@shared/ipc";
 import {
   createMessage,
+  deleteMessage as deleteMessageRequest,
   fetchMyProfile,
   fetchProfilesBatch,
   fetchChannelGroups,
@@ -16,7 +17,16 @@ import {
   type RealtimeEnvelope
 } from "@renderer/services/chatClient";
 import type { AvatarMode } from "@renderer/types/models";
-import type { Channel, ChannelGroup, ChannelPresenceMember, ChatMessage, LinkPreview, MemberItem, MessageAttachment } from "@renderer/types/chat";
+import type {
+  Channel,
+  ChannelGroup,
+  ChannelPresenceMember,
+  ChatMessage,
+  LinkPreview,
+  MemberItem,
+  MessageActionPermissions,
+  MessageAttachment
+} from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
 
 type ServerRealtimeState = {
@@ -134,6 +144,40 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
   return attachments.length > 0 ? attachments : undefined;
 }
 
+function readOptionalBoolean(source: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    if (!(key in source)) continue;
+    return Boolean(source[key]);
+  }
+  return undefined;
+}
+
+function normalizeMessageActionPermissions(input: unknown): MessageActionPermissions | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  const payload = input as Record<string, unknown>;
+  const canReact = readOptionalBoolean(payload, ["can_react", "canReact", "react"]);
+  const canReply = readOptionalBoolean(payload, ["can_reply", "canReply", "reply"]);
+  const canMarkUnread = readOptionalBoolean(payload, ["can_mark_unread", "canMarkUnread", "mark_unread", "markUnread"]);
+  const canPin = readOptionalBoolean(payload, ["can_pin", "canPin", "pin"]);
+  const canDelete = readOptionalBoolean(payload, ["can_delete", "canDelete", "delete"]);
+  if (
+    typeof canReact === "undefined" &&
+    typeof canReply === "undefined" &&
+    typeof canMarkUnread === "undefined" &&
+    typeof canPin === "undefined" &&
+    typeof canDelete === "undefined"
+  ) {
+    return undefined;
+  }
+  return {
+    canReact,
+    canReply,
+    canMarkUnread,
+    canPin,
+    canDelete
+  };
+}
+
 function normalizeOpenGraphMetadata(input: OpenGraphMetadata): LinkPreview | null {
   const url = input.url.trim();
   if (!url) return null;
@@ -211,6 +255,10 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
   const id = String(messagePayload.id ?? "");
   const channelID = String(messagePayload.channel_id ?? "");
   if (!id || !channelID) return null;
+  const actionPermissionPayload = messagePayload.action_permissions ?? messagePayload.actionPermissions ?? messagePayload.permissions;
+  const actionPermissions = normalizeMessageActionPermissions(actionPermissionPayload);
+  const permalinkRaw = messagePayload.permalink ?? messagePayload.message_link ?? messagePayload.messageLink;
+  const permalink = typeof permalinkRaw === "string" ? permalinkRaw.trim() : "";
   return {
     id,
     channelId: channelID,
@@ -218,7 +266,9 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
     body: String(messagePayload.body ?? ""),
     createdAt: String(messagePayload.created_at ?? new Date().toISOString()),
     linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews),
-    attachments: normalizeMessageAttachments(messagePayload.attachments)
+    attachments: normalizeMessageAttachments(messagePayload.attachments),
+    permalink: permalink || null,
+    actionPermissions
   };
 }
 
@@ -564,6 +614,18 @@ export const useChatStore = defineStore("chat", {
       } finally {
         this.sendingByChannel[params.channelId] = false;
       }
+    },
+    async deleteMessage(params: {
+      backendUrl: string;
+      channelId: string;
+      messageId: string;
+      userUID: string;
+      deviceID: string;
+    }): Promise<void> {
+      await deleteMessageRequest(params);
+      const existing = this.messagesByChannel[params.channelId] ?? [];
+      if (existing.length === 0) return;
+      this.messagesByChannel[params.channelId] = existing.filter((message) => message.id !== params.messageId);
     },
     setMessageLinkPreviews(channelId: string, messageId: string, previews: LinkPreview[]): void {
       const messages = this.messagesByChannel[channelId];
@@ -1005,6 +1067,11 @@ export const useChatStore = defineStore("chat", {
     },
     markChannelRead(channelId: string): void {
       this.unreadByChannel[channelId] = 0;
+    },
+    markChannelUnread(channelId: string, minUnread = 1): void {
+      if (!channelId.trim()) return;
+      const targetUnread = Number.isFinite(minUnread) ? Math.max(1, Math.trunc(minUnread)) : 1;
+      this.unreadByChannel[channelId] = Math.max(targetUnread, this.unreadByChannel[channelId] ?? 0);
     },
     markChannelsRead(channelIds: string[]): void {
       channelIds.forEach((channelId) => {

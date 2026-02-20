@@ -2,6 +2,7 @@
 import {
   mdiClose,
   mdiContentCopy,
+  mdiContentPaste,
   mdiDotsHorizontal,
   mdiDownload,
   mdiInformationOutline,
@@ -26,6 +27,9 @@ const menuOpen = ref(false);
 const detailsOpen = ref(false);
 const isCopyingImage = ref(false);
 const isSavingImage = ref(false);
+const isCheckingClipboard = ref(false);
+const canPasteFromClipboard = ref(false);
+const menuContextPosition = ref<{ x: number; y: number } | null>(null);
 const actionNotice = ref("");
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 const minZoomScale = 1;
@@ -51,6 +55,17 @@ const attachmentDimensions = computed(() => {
 });
 const attachmentSizeLabel = computed(() => formatBytes(props.attachment?.bytes ?? -1));
 const isZoomActive = computed(() => zoomScale.value > minZoomScale + 0.001);
+const actionsMenuStyle = computed(() => {
+  if (!menuContextPosition.value) {
+    return undefined;
+  }
+  return {
+    position: "fixed" as const,
+    left: `${menuContextPosition.value.x}px`,
+    top: `${menuContextPosition.value.y}px`,
+    right: "auto"
+  };
+});
 const imageZoomStyle = computed(() => {
   return {
     transform: `translate3d(${imageOffsetX.value}px, ${imageOffsetY.value}px, 0) scale(${zoomScale.value})`
@@ -75,6 +90,9 @@ function setActionNotice(message: string): void {
 function resetLightboxMenus(): void {
   menuOpen.value = false;
   detailsOpen.value = false;
+  menuContextPosition.value = null;
+  canPasteFromClipboard.value = false;
+  isCheckingClipboard.value = false;
 }
 
 function closeLightbox(): void {
@@ -84,9 +102,121 @@ function closeLightbox(): void {
 }
 
 function toggleActionsMenu(): void {
-  menuOpen.value = !menuOpen.value;
-  if (!menuOpen.value) {
-    detailsOpen.value = false;
+  if (menuOpen.value) {
+    resetLightboxMenus();
+    return;
+  }
+  menuContextPosition.value = null;
+  menuOpen.value = true;
+  detailsOpen.value = false;
+  void refreshClipboardPasteAvailability();
+}
+
+function openContextActionsMenu(event: MouseEvent): void {
+  if (!props.open || !props.attachment) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest(".image-lightbox-menu")) return;
+  if (target?.closest(".image-lightbox-details")) return;
+  const menuWidth = 250;
+  const menuHeight = 224;
+  const boundedX = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
+  const boundedY = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
+  menuContextPosition.value = {
+    x: boundedX,
+    y: boundedY
+  };
+  menuOpen.value = true;
+  detailsOpen.value = false;
+  void refreshClipboardPasteAvailability();
+}
+
+async function refreshClipboardPasteAvailability(): Promise<void> {
+  const clipboard = navigator.clipboard;
+  if (!clipboard || !menuOpen.value) {
+    canPasteFromClipboard.value = false;
+    return;
+  }
+  isCheckingClipboard.value = true;
+  try {
+    if (clipboard.read) {
+      try {
+        const items = await clipboard.read();
+        const hasImage = items.some((item) => item.types.some((type) => type.toLowerCase().startsWith("image/")));
+        if (hasImage) {
+          canPasteFromClipboard.value = true;
+          return;
+        }
+      } catch (_error) {
+        // Continue to text-based checks when image reads are blocked.
+      }
+    }
+    if (!clipboard.readText) {
+      canPasteFromClipboard.value = false;
+      return;
+    }
+    const text = (await clipboard.readText()).trim();
+    canPasteFromClipboard.value = text.length > 0;
+  } catch (_error) {
+    canPasteFromClipboard.value = false;
+  } finally {
+    isCheckingClipboard.value = false;
+  }
+}
+
+function normalizeClipboardURL(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function pasteFromClipboard(): Promise<void> {
+  if (!menuOpen.value || isCheckingClipboard.value) return;
+  const clipboard = navigator.clipboard;
+  if (!clipboard) {
+    setActionNotice("Clipboard access is unavailable.");
+    return;
+  }
+  try {
+    if (clipboard.read) {
+      try {
+        const items = await clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find((type) => type.toLowerCase().startsWith("image/"));
+          if (!imageType) continue;
+          const blob = await item.getType(imageType);
+          const objectURL = URL.createObjectURL(blob);
+          window.open(objectURL, "_blank", "noopener,noreferrer");
+          setTimeout(() => {
+            URL.revokeObjectURL(objectURL);
+          }, 15000);
+          setActionNotice("Opened image from clipboard.");
+          resetLightboxMenus();
+          return;
+        }
+      } catch (_error) {
+        // Continue to text paste if image clipboard reads are blocked.
+      }
+    }
+    const text = clipboard.readText ? (await clipboard.readText()).trim() : "";
+    const clipboardURL = normalizeClipboardURL(text);
+    if (!clipboardURL) {
+      setActionNotice("Clipboard does not contain an image or URL.");
+      resetLightboxMenus();
+      return;
+    }
+    window.open(clipboardURL, "_blank", "noopener,noreferrer");
+    setActionNotice("Opened URL from clipboard.");
+    resetLightboxMenus();
+  } catch (_error) {
+    setActionNotice("Could not paste from clipboard.");
   }
 }
 
@@ -123,8 +253,7 @@ async function copyImageLink(): Promise<void> {
   } else {
     setActionNotice("Could not copy link.");
   }
-  menuOpen.value = false;
-  detailsOpen.value = false;
+  resetLightboxMenus();
 }
 
 async function copyImageData(): Promise<void> {
@@ -150,8 +279,7 @@ async function copyImageData(): Promise<void> {
 
     await clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
     setActionNotice("Image copied.");
-    menuOpen.value = false;
-    detailsOpen.value = false;
+    resetLightboxMenus();
   } catch (_error) {
     setActionNotice("Could not copy image.");
   } finally {
@@ -190,8 +318,7 @@ function downloadImage(): void {
     anchor.click();
     anchor.remove();
     setActionNotice("Save picker unavailable. Used browser download.");
-    menuOpen.value = false;
-    detailsOpen.value = false;
+    resetLightboxMenus();
     return;
   }
 
@@ -219,8 +346,7 @@ function downloadImage(): void {
       await writable.write(blob);
       await writable.close();
       setActionNotice("Image saved.");
-      menuOpen.value = false;
-      detailsOpen.value = false;
+      resetLightboxMenus();
     } catch (error) {
       const domExceptionName = error instanceof DOMException ? error.name : "";
       if (domExceptionName === "AbortError") {
@@ -236,8 +362,7 @@ function downloadImage(): void {
 function openImageInBrowser(): void {
   if (!attachmentUrl.value) return;
   window.open(attachmentUrl.value, "_blank", "noopener,noreferrer");
-  menuOpen.value = false;
-  detailsOpen.value = false;
+  resetLightboxMenus();
 }
 
 function clampZoomScale(value: number): number {
@@ -416,6 +541,7 @@ onBeforeUnmount(() => {
       role="dialog"
       aria-modal="true"
       :aria-label="`Image preview for ${attachmentFileName}`"
+      @contextmenu.prevent="openContextActionsMenu"
     >
       <div class="image-lightbox-actions">
         <div class="image-lightbox-toolbar">
@@ -456,6 +582,7 @@ onBeforeUnmount(() => {
           class="image-lightbox-menu"
           role="menu"
           aria-label="Image actions"
+          :style="actionsMenuStyle"
         >
           <button type="button" class="image-lightbox-menu-item" role="menuitem" :disabled="isCopyingImage" @click="copyImageData">
             <span>{{ isCopyingImage ? "Copying image..." : "Copy Image" }}</span>
@@ -464,6 +591,16 @@ onBeforeUnmount(() => {
           <button type="button" class="image-lightbox-menu-item" role="menuitem" @click="copyImageLink">
             <span>Copy Link</span>
             <AppIcon :path="mdiLinkVariant" :size="18" />
+          </button>
+          <button
+            type="button"
+            class="image-lightbox-menu-item"
+            role="menuitem"
+            :disabled="isCheckingClipboard || !canPasteFromClipboard"
+            @click="pasteFromClipboard"
+          >
+            <span>{{ isCheckingClipboard ? "Checking clipboard..." : "Paste from Clipboard" }}</span>
+            <AppIcon :path="mdiContentPaste" :size="18" />
           </button>
           <button type="button" class="image-lightbox-menu-item" role="menuitem" @click="toggleDetails">
             <span>View Details</span>

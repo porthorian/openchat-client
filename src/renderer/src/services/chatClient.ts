@@ -1,4 +1,11 @@
-import type { ChannelGroup, ChatMessage, LinkPreview, MemberItem, MessageAttachment } from "@renderer/types/chat";
+import type {
+  ChannelGroup,
+  ChatMessage,
+  LinkPreview,
+  MemberItem,
+  MessageActionPermissions,
+  MessageAttachment
+} from "@renderer/types/chat";
 
 export type RealtimeEnvelope = {
   type: string;
@@ -122,6 +129,63 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
   return attachments.length > 0 ? attachments : undefined;
 }
 
+function readOptionalBoolean(source: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    if (!(key in source)) continue;
+    return Boolean(source[key]);
+  }
+  return undefined;
+}
+
+function normalizeMessageActionPermissions(input: unknown): MessageActionPermissions | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  const payload = input as Record<string, unknown>;
+  const canReact = readOptionalBoolean(payload, ["can_react", "canReact", "react"]);
+  const canReply = readOptionalBoolean(payload, ["can_reply", "canReply", "reply"]);
+  const canMarkUnread = readOptionalBoolean(payload, ["can_mark_unread", "canMarkUnread", "mark_unread", "markUnread"]);
+  const canPin = readOptionalBoolean(payload, ["can_pin", "canPin", "pin"]);
+  const canDelete = readOptionalBoolean(payload, ["can_delete", "canDelete", "delete"]);
+  if (
+    typeof canReact === "undefined" &&
+    typeof canReply === "undefined" &&
+    typeof canMarkUnread === "undefined" &&
+    typeof canPin === "undefined" &&
+    typeof canDelete === "undefined"
+  ) {
+    return undefined;
+  }
+  return {
+    canReact,
+    canReply,
+    canMarkUnread,
+    canPin,
+    canDelete
+  };
+}
+
+function normalizeMessagePayload(input: unknown): ChatMessage | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const id = String(payload.id ?? "").trim();
+  const channelId = String(payload.channel_id ?? payload.channelId ?? "").trim();
+  if (!id || !channelId) return null;
+  const actionPermissionPayload = payload.action_permissions ?? payload.actionPermissions ?? payload.permissions;
+  const actionPermissions = normalizeMessageActionPermissions(actionPermissionPayload);
+  const permalinkRaw = payload.permalink ?? payload.message_link ?? payload.messageLink;
+  const permalink = typeof permalinkRaw === "string" ? permalinkRaw.trim() : "";
+  return {
+    id,
+    channelId,
+    authorUID: String(payload.author_uid ?? payload.authorUID ?? "uid_unknown"),
+    body: String(payload.body ?? ""),
+    createdAt: String(payload.created_at ?? payload.createdAt ?? new Date().toISOString()),
+    linkPreviews: normalizeLinkPreviews(payload.link_previews ?? payload.linkPreviews),
+    attachments: normalizeMessageAttachments(payload.attachments),
+    permalink: permalink || null,
+    actionPermissions
+  };
+}
+
 function hasLimit(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -171,25 +235,11 @@ export async function fetchMessages(backendUrl: string, channelId: string, limit
     throw new Error(`Failed to load messages (${response.status})`);
   }
   const payload = (await response.json()) as {
-    messages?: Array<{
-      id: string;
-      channel_id: string;
-      author_uid: string;
-      body: string;
-      created_at: string;
-      link_previews?: unknown;
-      attachments?: unknown;
-    }>;
+    messages?: unknown[];
   };
-  return (payload.messages ?? []).map((message) => ({
-    id: message.id,
-    channelId: message.channel_id,
-    authorUID: message.author_uid,
-    body: message.body,
-    createdAt: message.created_at,
-    linkPreviews: normalizeLinkPreviews(message.link_previews),
-    attachments: normalizeMessageAttachments(message.attachments)
-  }));
+  return (payload.messages ?? [])
+    .map((message) => normalizeMessagePayload(message))
+    .filter((message): message is ChatMessage => message !== null);
 }
 
 export async function createMessage(params: {
@@ -264,25 +314,31 @@ export async function createMessage(params: {
     throw new Error(`Failed to send message (${response.status}): ${text}`);
   }
   const payload = (await response.json()) as {
-    message: {
-      id: string;
-      channel_id: string;
-      author_uid: string;
-      body: string;
-      created_at: string;
-      link_previews?: unknown;
-      attachments?: unknown;
-    };
+    message?: unknown;
   };
-  return {
-    id: payload.message.id,
-    channelId: payload.message.channel_id,
-    authorUID: payload.message.author_uid,
-    body: payload.message.body,
-    createdAt: payload.message.created_at,
-    linkPreviews: normalizeLinkPreviews(payload.message.link_previews),
-    attachments: normalizeMessageAttachments(payload.message.attachments)
-  };
+  const message = normalizeMessagePayload(payload.message);
+  if (!message) {
+    throw new Error("Failed to send message: server returned an invalid payload.");
+  }
+  return message;
+}
+
+export async function deleteMessage(params: {
+  backendUrl: string;
+  channelId: string;
+  messageId: string;
+  userUID: string;
+  deviceID: string;
+}): Promise<void> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}`;
+  const response = await fetch(endpoint, {
+    method: "DELETE",
+    headers: authHeaders(params.userUID, params.deviceID)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to delete message (${response.status}): ${text}`);
+  }
 }
 
 export async function fetchMyProfile(params: {

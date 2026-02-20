@@ -23,6 +23,8 @@ const props = defineProps<{
   maxUploadBytes: number | null;
   maxMessageBytes: number | null;
   sendErrorMessage: string | null;
+  prefillText?: string | null;
+  prefillNonce?: number;
 }>();
 
 const emit = defineEmits<{
@@ -349,6 +351,21 @@ function handleGlobalTyping(event: KeyboardEvent): void {
   });
 }
 
+function applyPrefillText(value: string): void {
+  const text = value.trim();
+  if (!text) return;
+  const existing = draftMessage.value.trimEnd();
+  draftMessage.value = existing ? `${existing}\n${text}` : text;
+  void nextTick(() => {
+    const input = composerInputRef.value;
+    if (!input) return;
+    input.focus();
+    const cursor = draftMessage.value.length;
+    input.setSelectionRange(cursor, cursor);
+    syncComposerInputHeight(true);
+  });
+}
+
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalTyping);
   void nextTick(() => {
@@ -384,6 +401,16 @@ watch(
     awaitingSendResult.value = false;
     uploadError.value = null;
     clearPendingAttachments();
+  }
+);
+
+watch(
+  () => props.prefillNonce ?? 0,
+  (nonce, previous) => {
+    if (nonce === previous) return;
+    const text = props.prefillText ?? "";
+    if (!text.trim()) return;
+    applyPrefillText(text);
   }
 );
 

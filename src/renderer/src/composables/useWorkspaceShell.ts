@@ -931,6 +931,36 @@ export function useWorkspaceShell() {
     chat.markChannelsRead(channelIds);
   }
 
+  function markMessageUnread(payload: { channelId: string; messageId: string }): void {
+    const channelId = payload.channelId.trim();
+    if (!channelId) return;
+    chat.markChannelUnread(channelId, 1);
+  }
+
+  async function deleteMessage(payload: { channelId: string; messageId: string }): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    const channelId = payload.channelId.trim();
+    const messageId = payload.messageId.trim();
+    if (!server || !currentUID || !channelId || !messageId) return;
+    messageSendError.value = null;
+    try {
+      await chat.deleteMessage({
+        backendUrl: server.backendUrl,
+        channelId,
+        messageId,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+    } catch (error) {
+      if (error instanceof Error) {
+        messageSendError.value = error.message;
+        return;
+      }
+      messageSendError.value = "Failed to delete message.";
+    }
+  }
+
   async function triggerTaskbarUpdateAction(): Promise<void> {
     try {
       if (clientUpdate.status === "available") {
@@ -1482,6 +1512,8 @@ export function useWorkspaceShell() {
 
   const chatPaneProps = computed(() => ({
     channelId: activeChannelName.value,
+    activeServerId: appUI.activeServerId,
+    activeServerBackendUrl: activeServer.value?.backendUrl ?? "",
     messages: activeMessages.value,
     isLoadingMessages: isLoadingMessages.value,
     isSendingMessage: isSendingMessage.value,
@@ -1561,7 +1593,9 @@ export function useWorkspaceShell() {
 
   const chatPaneListeners = {
     sendMessage,
-    typingActivity: setTypingActivity
+    typingActivity: setTypingActivity,
+    markMessageUnread,
+    deleteMessage
   };
 
   const membersPaneListeners = {

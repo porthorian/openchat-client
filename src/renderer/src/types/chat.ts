@@ -20,6 +20,14 @@ export type MemberItem = {
   status: "online" | "idle" | "dnd";
 };
 
+export type MessageActionPermissions = {
+  canReact?: boolean;
+  canReply?: boolean;
+  canMarkUnread?: boolean;
+  canPin?: boolean;
+  canDelete?: boolean;
+};
+
 export type ChatMessage = {
   id: string;
   channelId: string;
@@ -28,6 +36,8 @@ export type ChatMessage = {
   createdAt: string;
   linkPreviews?: LinkPreview[];
   attachments?: MessageAttachment[];
+  permalink?: string | null;
+  actionPermissions?: MessageActionPermissions;
 };
 
 export type LinkPreview = {

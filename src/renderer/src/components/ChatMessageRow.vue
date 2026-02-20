@@ -14,6 +14,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   openImageLightbox: [attachment: MessageAttachment];
+  openContextMenu: [event: MouseEvent];
 }>();
 
 const messageTextSegments = computed(() => splitMessageTextSegments(props.message.body));
@@ -75,7 +76,7 @@ function onAttachmentImageClick(attachment: MessageAttachment): void {
 </script>
 
 <template>
-  <article class="message-row" :class="{ 'is-compact': isCompact }">
+  <article class="message-row" :class="{ 'is-compact': isCompact }" @contextmenu.prevent="emit('openContextMenu', $event)">
     <div
       v-if="!isCompact"
       class="message-avatar"
