@@ -146,6 +146,13 @@ function queueScrollTimelineToBottom(): void {
   });
 }
 
+function handleComposerHeightDelta(delta: number): void {
+  if (!delta) return;
+  const timeline = timelineRef.value;
+  if (!timeline) return;
+  timeline.scrollTop += delta;
+}
+
 function clearTimelineScrollTimer(): void {
   if (timelineScrollTimer === null) return;
   clearTimeout(timelineScrollTimer);
@@ -256,6 +263,7 @@ watch(
       :send-error-message="sendErrorMessage"
       @send-message="emit('sendMessage', $event)"
       @typing-activity="emit('typingActivity', $event)"
+      @composer-height-delta="handleComposerHeightDelta"
     />
 
     <ChatImageLightbox :open="lightboxAttachment !== null" :attachment="lightboxAttachment" @close="closeImageLightbox" />

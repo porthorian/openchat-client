@@ -3373,26 +3373,42 @@ button {
 }
 
 .composer {
-  height: var(--composer-row-height);
+  min-height: var(--composer-row-height);
   border: 1px solid #2f323d;
   border-radius: var(--radius-md);
   background: #23252d;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
-  padding: 0 12px;
+  padding: 8px 12px;
   min-width: 0;
 }
 
-.composer input {
-  height: 100%;
+.composer textarea {
+  width: 100%;
+  min-height: 1.45em;
+  max-height: 192px;
   border: 0;
   background: transparent;
   color: var(--text-main);
   outline: none;
   font-size: 1.02rem;
+  line-height: 1.45;
   min-width: 0;
+  padding: 4px 0;
+  resize: none;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  align-self: center;
+}
+
+.composer textarea::placeholder {
+  color: #9ca5b8;
+  opacity: 0.30;
 }
 
 .composer-icon {

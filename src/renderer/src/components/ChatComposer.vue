@@ -28,20 +28,25 @@ const props = defineProps<{
 const emit = defineEmits<{
   sendMessage: [payload: { body: string; attachments: File[] }];
   typingActivity: [isTyping: boolean];
+  composerHeightDelta: [delta: number];
 }>();
 
 const draftMessage = ref("");
-const composerInputRef = ref<HTMLInputElement | null>(null);
+const composerInputRef = ref<HTMLTextAreaElement | null>(null);
+const composerShellRef = ref<HTMLElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const pendingAttachments = ref<PendingAttachment[]>([]);
 const uploadError = ref<string | null>(null);
 const typingRefreshMS = 2500;
 const maxAttachmentsPerMessage = 4;
+const maxComposerInputHeight = 192;
 const typingActive = ref(false);
 const lastTypingSentAt = ref(0);
 const attachmentCounter = ref(0);
 const replaceTargetAttachmentId = ref<string | null>(null);
 const awaitingSendResult = ref(false);
+let composerShellHeight = 0;
+let composerShellResizeObserver: ResizeObserver | null = null;
 const isComposerEmpty = computed(() => {
   return draftMessage.value.trim().length === 0 && pendingAttachments.value.length === 0;
 });
@@ -258,6 +263,63 @@ function submitMessage(): void {
   emitTypingActivity(false);
 }
 
+function syncComposerInputHeight(keepCaretVisible = false): void {
+  const input = composerInputRef.value;
+  if (!input) return;
+
+  input.style.height = "0px";
+  const scrollHeight = input.scrollHeight;
+  const nextHeight = Math.min(scrollHeight, maxComposerInputHeight);
+  input.style.height = `${nextHeight}px`;
+  if (scrollHeight > maxComposerInputHeight) {
+    input.style.overflowY = "auto";
+    if (keepCaretVisible) {
+      input.scrollTop = input.scrollHeight;
+    }
+    return;
+  }
+  input.style.overflowY = "hidden";
+  input.scrollTop = 0;
+}
+
+function emitComposerHeightDelta(nextHeight: number): void {
+  if (composerShellHeight === 0) {
+    composerShellHeight = nextHeight;
+    return;
+  }
+  const delta = nextHeight - composerShellHeight;
+  if (delta !== 0) {
+    emit("composerHeightDelta", delta);
+  }
+  composerShellHeight = nextHeight;
+}
+
+function observeComposerHeight(): void {
+  const shell = composerShellRef.value;
+  if (!shell || typeof ResizeObserver === "undefined") return;
+  composerShellHeight = Math.round(shell.getBoundingClientRect().height);
+  composerShellResizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (!entry) return;
+    emitComposerHeightDelta(Math.round(entry.contentRect.height));
+  });
+  composerShellResizeObserver.observe(shell);
+}
+
+function handleComposerInput(): void {
+  const input = composerInputRef.value;
+  if (!input) return;
+  const isSelectionAtEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+  syncComposerInputHeight(isSelectionAtEnd);
+}
+
+function handleComposerKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Enter" || event.isComposing) return;
+  if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+  event.preventDefault();
+  submitMessage();
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [contenteditable='plaintext-only']")) {
@@ -282,17 +344,26 @@ function handleGlobalTyping(event: KeyboardEvent): void {
   draftMessage.value = `${currentValue}${event.key}`;
   input.focus();
   requestAnimationFrame(() => {
+    syncComposerInputHeight(true);
     input.setSelectionRange(nextCursor, nextCursor);
   });
 }
 
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalTyping);
+  void nextTick(() => {
+    syncComposerInputHeight();
+    observeComposerHeight();
+  });
 });
 
 onBeforeUnmount(() => {
   emitTypingActivity(false);
   window.removeEventListener("keydown", handleGlobalTyping);
+  if (composerShellResizeObserver) {
+    composerShellResizeObserver.disconnect();
+    composerShellResizeObserver = null;
+  }
   clearPendingAttachments();
 });
 
@@ -300,6 +371,9 @@ watch(
   () => draftMessage.value,
   () => {
     syncTypingActivity();
+    void nextTick(() => {
+      syncComposerInputHeight();
+    });
   }
 );
 
@@ -331,7 +405,7 @@ watch(
 </script>
 
 <template>
-  <footer class="composer-shell">
+  <footer ref="composerShellRef" class="composer-shell">
     <div v-if="pendingAttachments.length > 0" class="composer-upload-preview-list">
       <article
         v-for="attachment in pendingAttachments"
@@ -371,17 +445,18 @@ watch(
       <button type="button" class="composer-icon" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
         <AppIcon :path="mdiPlusCircleOutline" :size="18" />
       </button>
-      <input
+      <textarea
         ref="composerInputRef"
         v-model="draftMessage"
-        type="text"
+        rows="1"
         :placeholder="`Message #${channelId}`"
         aria-label="Message composer"
         :disabled="isSendingMessage"
         @blur="emitTypingActivity(false)"
         @focus="syncTypingActivity"
+        @input="handleComposerInput"
         @paste="handlePaste"
-        @keydown.enter.prevent="submitMessage"
+        @keydown="handleComposerKeydown"
       />
       <div class="composer-actions">
         <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isComposerEmpty" @click="submitMessage">
