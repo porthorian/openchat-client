@@ -13,7 +13,7 @@ import type { SyncedUserProfile } from "@renderer/services/chatClient";
 import type { ChatMessage, MessageAttachment } from "@renderer/types/chat";
 import type { AvatarMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from "vue";
 import AppIcon from "./AppIcon.vue";
 import ChatComposer from "./ChatComposer.vue";
 import ChatImageLightbox from "./ChatImageLightbox.vue";
@@ -81,9 +81,12 @@ const timelineRef = ref<HTMLElement | null>(null);
 const isTimelineScrolling = ref(false);
 const lightboxAttachment = ref<MessageAttachment | null>(null);
 const compactWindowMS = 5 * 60 * 1000;
+const nearBottomThresholdPx = 120;
 const reactionMenuId = "message-reaction-menu";
 const composerPrefillText = ref<string | null>(null);
 const composerPrefillNonce = ref(0);
+const pendingSendAutoScroll = ref(false);
+const shouldStickToBottom = ref(true);
 const messageContextMenu = ref<MessageContextMenuState>({
   open: false,
   x: 0,
@@ -240,6 +243,16 @@ function scrollTimelineToBottom(): void {
   timeline.scrollTop = timeline.scrollHeight;
 }
 
+function timelineDistanceFromBottom(): number {
+  const timeline = timelineRef.value;
+  if (!timeline) return Number.POSITIVE_INFINITY;
+  return timeline.scrollHeight - (timeline.scrollTop + timeline.clientHeight);
+}
+
+function isTimelineNearBottom(threshold = nearBottomThresholdPx): boolean {
+  return timelineDistanceFromBottom() <= threshold;
+}
+
 function queueScrollTimelineToBottom(): void {
   if (scrollFrame) {
     cancelAnimationFrame(scrollFrame);
@@ -250,11 +263,28 @@ function queueScrollTimelineToBottom(): void {
   });
 }
 
+function queueScrollTimelineToBottomIfFollowing(): void {
+  if (!shouldStickToBottom.value) return;
+  queueScrollTimelineToBottom();
+}
+
 function handleComposerHeightDelta(delta: number): void {
   if (!delta) return;
   const timeline = timelineRef.value;
   if (!timeline) return;
+  if (shouldStickToBottom.value) {
+    timeline.scrollTop += delta;
+    return;
+  }
+  const threshold = nearBottomThresholdPx + Math.max(delta, 0);
+  if (!isTimelineNearBottom(threshold)) return;
   timeline.scrollTop += delta;
+}
+
+function handleComposerSendMessage(payload: { body: string; attachments: File[] }): void {
+  pendingSendAutoScroll.value = true;
+  shouldStickToBottom.value = true;
+  emit("sendMessage", payload);
 }
 
 function clearTimelineScrollTimer(): void {
@@ -341,8 +371,21 @@ function openMessageContextMenu(event: MouseEvent, entry: TimelineMessage): void
 }
 
 function onTimelineScroll(): void {
+  shouldStickToBottom.value = isTimelineNearBottom();
   markTimelineScrolling();
   closeMessageContextMenu();
+}
+
+function onTimelineMediaLoad(event: Event): void {
+  const target = event.target;
+  if (!(target instanceof HTMLImageElement)) return;
+  if (!timelineRef.value?.contains(target)) return;
+  if (!shouldStickToBottom.value && !pendingSendAutoScroll.value) return;
+  queueScrollTimelineToBottom();
+}
+
+function onWindowResize(): void {
+  queueScrollTimelineToBottomIfFollowing();
 }
 
 function onWindowPointerDown(event: PointerEvent): void {
@@ -574,18 +617,24 @@ async function runContextAction(action: MessageContextAction): Promise<void> {
 }
 
 onMounted(() => {
-  window.addEventListener("resize", queueScrollTimelineToBottom);
+  window.addEventListener("resize", onWindowResize);
   window.addEventListener("pointerdown", onWindowPointerDown);
   window.addEventListener("keydown", onWindowKeydown);
+  timelineRef.value?.addEventListener("load", onTimelineMediaLoad, true);
   void nextTick(() => {
     queueScrollTimelineToBottom();
   });
 });
 
+onUpdated(() => {
+  queueScrollTimelineToBottomIfFollowing();
+});
+
 onBeforeUnmount(() => {
-  window.removeEventListener("resize", queueScrollTimelineToBottom);
+  window.removeEventListener("resize", onWindowResize);
   window.removeEventListener("pointerdown", onWindowPointerDown);
   window.removeEventListener("keydown", onWindowKeydown);
+  timelineRef.value?.removeEventListener("load", onTimelineMediaLoad, true);
   if (scrollFrame) {
     cancelAnimationFrame(scrollFrame);
     scrollFrame = 0;
@@ -602,18 +651,59 @@ watch(
     total: timelineMessages.value.length,
     lastMessageId: timelineMessages.value[timelineMessages.value.length - 1]?.message.id ?? ""
   }),
-  (state) => {
+  (state, previous) => {
     if (state.loading) return;
+    const channelChanged = !previous || state.channelId !== previous.channelId;
+    const finishedLoading = Boolean(previous?.loading) && !state.loading;
+    if (channelChanged || finishedLoading) {
+      void nextTick(() => {
+        queueScrollTimelineToBottom();
+      });
+      return;
+    }
+    const timelineChanged = !previous || state.total !== previous.total || state.lastMessageId !== previous.lastMessageId;
+    if (!timelineChanged) return;
+    const shouldForceSendScroll = pendingSendAutoScroll.value;
+    const shouldAutoScrollIncoming = !shouldForceSendScroll && shouldStickToBottom.value;
+    if (!shouldForceSendScroll && !shouldAutoScrollIncoming) return;
+    pendingSendAutoScroll.value = false;
+    shouldStickToBottom.value = true;
     void nextTick(() => {
       queueScrollTimelineToBottom();
     });
   },
-  { immediate: true }
+  { immediate: true, flush: "pre" }
+);
+
+watch(
+  () => props.isSendingMessage,
+  (isSending, wasSending) => {
+    if (isSending || !wasSending || !pendingSendAutoScroll.value) return;
+    if (props.sendErrorMessage) {
+      pendingSendAutoScroll.value = false;
+      return;
+    }
+    pendingSendAutoScroll.value = false;
+    shouldStickToBottom.value = true;
+    void nextTick(() => {
+      queueScrollTimelineToBottom();
+    });
+  }
+);
+
+watch(
+  () => props.sendErrorMessage,
+  (message) => {
+    if (!message) return;
+    pendingSendAutoScroll.value = false;
+  }
 );
 
 watch(
   () => props.channelId,
   () => {
+    pendingSendAutoScroll.value = false;
+    shouldStickToBottom.value = true;
     closeImageLightbox();
     closeMessageContextMenu();
     actionNotice.value = "";
@@ -781,13 +871,15 @@ watch(
 
     <p v-if="actionNotice" class="chat-pane-action-notice" role="status" aria-live="polite">{{ actionNotice }}</p>
 
-    <div v-if="typingLabel" class="typing-indicator" aria-live="polite">
-      <span class="typing-indicator-dots" aria-hidden="true">
-        <span />
-        <span />
-        <span />
-      </span>
-      <span class="typing-indicator-label">{{ typingLabel }}</span>
+    <div class="typing-indicator-slot" aria-live="polite">
+      <div v-if="typingLabel" class="typing-indicator" role="status">
+        <span class="typing-indicator-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+        <span class="typing-indicator-label">{{ typingLabel }}</span>
+      </div>
     </div>
 
     <ChatComposer
@@ -799,7 +891,7 @@ watch(
       :send-error-message="sendErrorMessage"
       :prefill-text="composerPrefillText"
       :prefill-nonce="composerPrefillNonce"
-      @send-message="emit('sendMessage', $event)"
+      @send-message="handleComposerSendMessage"
       @typing-activity="emit('typingActivity', $event)"
       @composer-height-delta="handleComposerHeightDelta"
     />
@@ -807,3 +899,20 @@ watch(
     <ChatImageLightbox :open="lightboxAttachment !== null" :attachment="lightboxAttachment" @close="closeImageLightbox" />
   </main>
 </template>
+
+<style scoped>
+.typing-indicator-slot {
+  min-height: 1.35rem;
+  padding: 0 1rem 0.35rem;
+}
+
+.typing-indicator {
+  position: static;
+  overflow: visible;
+}
+
+.typing-indicator-label {
+  min-width: 0;
+  line-height: 1.25;
+}
+</style>
