@@ -8,6 +8,7 @@ import {
   mdiPencilOutline,
   mdiPlusCircleOutline
 } from "@mdi/js";
+import { composerEmojiOptions, type EmojiOption } from "@renderer/utils/emoji";
 import AppIcon from "./AppIcon.vue";
 
 type PendingAttachment = {
@@ -47,6 +48,8 @@ const lastTypingSentAt = ref(0);
 const attachmentCounter = ref(0);
 const replaceTargetAttachmentId = ref<string | null>(null);
 const awaitingSendResult = ref(false);
+const emojiPickerOpen = ref(false);
+const emojiOptions = composerEmojiOptions;
 let composerShellHeight = 0;
 let composerShellResizeObserver: ResizeObserver | null = null;
 const isComposerEmpty = computed(() => {
@@ -257,12 +260,57 @@ function submitMessage(): void {
   }
 
   uploadError.value = null;
+  emojiPickerOpen.value = false;
   awaitingSendResult.value = true;
   emit("sendMessage", {
     body,
     attachments: pendingAttachments.value.map((attachment) => attachment.file)
   });
   emitTypingActivity(false);
+}
+
+function insertTextAtSelection(inputText: string): void {
+  const input = composerInputRef.value;
+  if (!input) return;
+
+  const selectionStart = input.selectionStart ?? draftMessage.value.length;
+  const selectionEnd = input.selectionEnd ?? draftMessage.value.length;
+  const before = draftMessage.value.slice(0, selectionStart);
+  const after = draftMessage.value.slice(selectionEnd);
+  draftMessage.value = `${before}${inputText}${after}`;
+
+  const cursor = selectionStart + inputText.length;
+  void nextTick(() => {
+    const nextInput = composerInputRef.value;
+    if (!nextInput) return;
+    nextInput.focus();
+    nextInput.setSelectionRange(cursor, cursor);
+    syncComposerInputHeight(true);
+  });
+}
+
+function toggleEmojiPicker(): void {
+  if (props.isSendingMessage) return;
+  emojiPickerOpen.value = !emojiPickerOpen.value;
+  if (emojiPickerOpen.value) {
+    void nextTick(() => {
+      composerInputRef.value?.focus();
+    });
+  }
+}
+
+function pickEmoji(option: EmojiOption): void {
+  const input = composerInputRef.value;
+  if (!input) return;
+  const selectionStart = input.selectionStart ?? draftMessage.value.length;
+  const selectionEnd = input.selectionEnd ?? draftMessage.value.length;
+  const before = draftMessage.value.slice(0, selectionStart);
+  const after = draftMessage.value.slice(selectionEnd);
+  const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
+  const needsTrailingSpace = after.length > 0 && !/^\s/.test(after);
+  const insertion = `${needsLeadingSpace ? " " : ""}${option.emoji}${needsTrailingSpace ? " " : ""}`;
+  insertTextAtSelection(insertion);
+  emojiPickerOpen.value = false;
 }
 
 function syncComposerInputHeight(keepCaretVisible = false): void {
@@ -351,6 +399,21 @@ function handleGlobalTyping(event: KeyboardEvent): void {
   });
 }
 
+function handleWindowPointerDown(event: PointerEvent): void {
+  if (!emojiPickerOpen.value) return;
+  const target = event.target as HTMLElement | null;
+  if (!target) return;
+  if (target.closest(".composer-emoji-picker") || target.closest(".composer-emoji-toggle")) {
+    return;
+  }
+  emojiPickerOpen.value = false;
+}
+
+function handleWindowKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Escape") return;
+  emojiPickerOpen.value = false;
+}
+
 function applyPrefillText(value: string): void {
   const text = value.trim();
   if (!text) return;
@@ -368,6 +431,8 @@ function applyPrefillText(value: string): void {
 
 onMounted(() => {
   window.addEventListener("keydown", handleGlobalTyping);
+  window.addEventListener("pointerdown", handleWindowPointerDown);
+  window.addEventListener("keydown", handleWindowKeydown);
   void nextTick(() => {
     syncComposerInputHeight();
     observeComposerHeight();
@@ -377,6 +442,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   emitTypingActivity(false);
   window.removeEventListener("keydown", handleGlobalTyping);
+  window.removeEventListener("pointerdown", handleWindowPointerDown);
+  window.removeEventListener("keydown", handleWindowKeydown);
   if (composerShellResizeObserver) {
     composerShellResizeObserver.disconnect();
     composerShellResizeObserver = null;
@@ -400,6 +467,7 @@ watch(
     emitTypingActivity(false);
     awaitingSendResult.value = false;
     uploadError.value = null;
+    emojiPickerOpen.value = false;
     clearPendingAttachments();
   }
 );
@@ -492,10 +560,33 @@ watch(
         <button type="button" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
           <AppIcon :path="mdiImageOutline" :size="18" />
         </button>
-        <button type="button">
+        <button
+          type="button"
+          class="composer-emoji-toggle"
+          :disabled="isSendingMessage"
+          :aria-expanded="emojiPickerOpen ? 'true' : 'false'"
+          aria-haspopup="dialog"
+          aria-label="Insert emoji"
+          @click.stop="toggleEmojiPicker"
+        >
           <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
         </button>
       </div>
+      <section v-if="emojiPickerOpen" class="composer-emoji-picker" role="dialog" aria-label="Emoji picker">
+        <p class="composer-emoji-picker-title">Emoji</p>
+        <div class="composer-emoji-grid">
+          <button
+            v-for="option in emojiOptions"
+            :key="option.shortcode"
+            type="button"
+            class="composer-emoji-option"
+            :title="`${option.label} (${option.shortcode})`"
+            @click="pickEmoji(option)"
+          >
+            {{ option.emoji }}
+          </button>
+        </div>
+      </section>
       <input
         ref="fileInputRef"
         class="composer-file-input"

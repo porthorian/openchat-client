@@ -163,6 +163,28 @@ function normalizeMessageActionPermissions(input: unknown): MessageActionPermiss
   };
 }
 
+function normalizeMessageBodyText(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (typeof input === "number" || typeof input === "boolean" || typeof input === "bigint") {
+    return String(input);
+  }
+  if (input === null || typeof input === "undefined") {
+    return "";
+  }
+  if (typeof input === "object") {
+    const payload = input as Record<string, unknown>;
+    const candidate = payload.text ?? payload.markdown ?? payload.value ?? payload.body;
+    if (typeof candidate === "string") {
+      return candidate;
+    }
+  }
+  try {
+    return JSON.stringify(input);
+  } catch (_error) {
+    return String(input);
+  }
+}
+
 function normalizeMessagePayload(input: unknown): ChatMessage | null {
   if (typeof input !== "object" || input === null) return null;
   const payload = input as Record<string, unknown>;
@@ -177,7 +199,7 @@ function normalizeMessagePayload(input: unknown): ChatMessage | null {
     id,
     channelId,
     authorUID: String(payload.author_uid ?? payload.authorUID ?? "uid_unknown"),
-    body: String(payload.body ?? ""),
+    body: normalizeMessageBodyText(payload.body),
     createdAt: String(payload.created_at ?? payload.createdAt ?? new Date().toISOString()),
     linkPreviews: normalizeLinkPreviews(payload.link_previews ?? payload.linkPreviews),
     attachments: normalizeMessageAttachments(payload.attachments),

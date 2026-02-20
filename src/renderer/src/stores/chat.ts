@@ -195,6 +195,28 @@ function normalizeOpenGraphMetadata(input: OpenGraphMetadata): LinkPreview | nul
   };
 }
 
+function normalizeMessageBodyText(input: unknown): string {
+  if (typeof input === "string") return input;
+  if (typeof input === "number" || typeof input === "boolean" || typeof input === "bigint") {
+    return String(input);
+  }
+  if (input === null || typeof input === "undefined") {
+    return "";
+  }
+  if (typeof input === "object") {
+    const payload = input as Record<string, unknown>;
+    const candidate = payload.text ?? payload.markdown ?? payload.value ?? payload.body;
+    if (typeof candidate === "string") {
+      return candidate;
+    }
+  }
+  try {
+    return JSON.stringify(input);
+  } catch (_error) {
+    return String(input);
+  }
+}
+
 function isSameLinkPreview(left: LinkPreview, right: LinkPreview): boolean {
   return (
     left.url === right.url &&
@@ -263,7 +285,7 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
     id,
     channelId: channelID,
     authorUID: String(messagePayload.author_uid ?? "uid_unknown"),
-    body: String(messagePayload.body ?? ""),
+    body: normalizeMessageBodyText(messagePayload.body),
     createdAt: String(messagePayload.created_at ?? new Date().toISOString()),
     linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews),
     attachments: normalizeMessageAttachments(messagePayload.attachments),

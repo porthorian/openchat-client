@@ -3204,6 +3204,11 @@ button {
   gap: 1px;
 }
 
+.message-body {
+  display: grid;
+  gap: 6px;
+}
+
 .message-meta {
   display: inline-flex;
   align-items: baseline;
@@ -3223,11 +3228,160 @@ button {
 }
 
 .message-text {
+  margin: 0;
   color: #d5dae6;
   font-size: 1rem;
   line-height: 1.34;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.message-heading {
+  margin: 0;
+  color: #edf1fd;
+  font-weight: 800;
+  line-height: 1.26;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-heading.is-level-1 {
+  font-size: 1.5rem;
+}
+
+.message-heading.is-level-2 {
+  font-size: 1.36rem;
+}
+
+.message-heading.is-level-3 {
+  font-size: 1.24rem;
+}
+
+.message-heading.is-level-4 {
+  font-size: 1.14rem;
+}
+
+.message-heading.is-level-5 {
+  font-size: 1.04rem;
+}
+
+.message-heading.is-level-6 {
+  font-size: 0.97rem;
+  color: #c2cbdf;
+}
+
+.message-body .is-bold {
+  font-weight: 700;
+}
+
+.message-body .is-italic {
+  font-style: italic;
+}
+
+.message-body .is-strikethrough {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: #8f98ad;
+}
+
+.message-inline-code {
+  display: inline-block;
+  margin: 0 0.1em;
+  padding: 0.06em 0.35em;
+  border-radius: 5px;
+  border: 1px solid #40485e;
+  background: #1a1f2c;
+  color: #f4b4bc;
+  font-family: "IBM Plex Mono", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 0.86em;
+  line-height: 1.2;
+  vertical-align: baseline;
+}
+
+.message-quote {
+  margin: 0;
+  border-left: 3px solid #4a5f92;
+  border-radius: 8px;
+  background: rgb(55 69 103 / 22%);
+  padding: 7px 10px;
+  color: #dbe1f2;
+  font-size: 0.98rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-code-shell {
+  display: grid;
+  gap: 4px;
+  max-width: min(100%, 760px);
+}
+
+.message-list-shell {
+  display: grid;
+  gap: 2px;
+}
+
+.message-list {
+  margin: 0;
+  padding-left: 1.35rem;
+  display: grid;
+  gap: 4px;
+  color: #d7ddeb;
+}
+
+.message-list.is-ordered {
+  list-style: decimal outside;
+}
+
+.message-list:not(.is-ordered) {
+  list-style: disc outside;
+}
+
+.message-list-item {
+  margin-left: calc(var(--message-list-depth, 0) * 1rem);
+}
+
+.message-list-item-copy {
+  color: #d7ddeb;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-divider {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid #40485f;
+  margin: 4px 0;
+}
+
+.message-code-language {
+  color: #9ca8c8;
+  font-size: 0.69rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.message-code-block {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #35405a;
+  background: #111723;
+  color: #dae0f5;
+  font-family: "IBM Plex Mono", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 0.87rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.message-code-block code {
+  font-family: inherit;
+  color: inherit;
 }
 
 .message-link {
@@ -3244,6 +3398,10 @@ button {
   margin-left: 9px;
   color: #8d94a7;
   font-size: 0.69rem;
+}
+
+.message-time-inline.is-block {
+  margin-left: 0;
 }
 
 .message-attachment-list {
@@ -3521,6 +3679,7 @@ button {
   border: 1px solid #2f323d;
   border-radius: var(--radius-md);
   background: #23252d;
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -3604,6 +3763,61 @@ button {
 .composer-actions button:hover:not(:disabled) {
   background: #353946;
   color: #e9ebf1;
+}
+
+.composer-emoji-toggle[aria-expanded="true"] {
+  border-color: #536692;
+  background: #34405d;
+  color: #f0f4ff;
+}
+
+.composer-emoji-picker {
+  position: absolute;
+  right: 10px;
+  bottom: calc(100% + 10px);
+  width: 240px;
+  border-radius: 12px;
+  border: 1px solid #465270;
+  background: linear-gradient(180deg, #212739, #1a1f2f);
+  box-shadow: 0 14px 30px rgb(9 12 20 / 55%);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  z-index: 12;
+}
+
+.composer-emoji-picker-title {
+  color: #b8c1d8;
+  font-size: 0.69rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.composer-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.composer-emoji-option {
+  width: 100%;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid #3f4c68;
+  background: #283149;
+  color: #eef2ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.06rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.composer-emoji-option:hover:not(:disabled) {
+  border-color: #6578a5;
+  background: #34415f;
 }
 
 .composer button:disabled {
