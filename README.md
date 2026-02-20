@@ -48,7 +48,7 @@ Prerequisites:
 Install dependencies and run the app:
 ```bash
 corepack enable
-corepack prepare yarn@4 --activate
+corepack prepare yarn@4.12.0 --activate
 corepack yarn install --immutable
 corepack yarn dev
 ```
