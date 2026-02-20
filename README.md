@@ -111,4 +111,5 @@ Start here:
 For vulnerability reporting and policy, see `SECURITY.md`.
 
 ## License
-License will be finalized before first public release candidate.
+This project is licensed under GNU General Public License v2.0 only (`GPL-2.0-only`).
+See `LICENSE.md` for the full license text.

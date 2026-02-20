@@ -3,6 +3,7 @@
   "author": "Porthorian",
   "version": "0.0.4",
   "description": "OpenChat desktop client",
+  "license": "GPL-2.0-only",
   "main": "./out/main/index.js",
   "type": "module",
   "engines": {
