@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-02-20
+
+### Added
+- Reply UX in the chat composer and message rows.
+- Markdown syntax support with markdown security test coverage.
+- Right-click context menus for message items and image lightbox actions.
+- Sticky scroll behavior when a user is firmly at the bottom of the chat pane.
+
+### Changed
+- Desktop release automation was split into OS-specific workflows for Linux, macOS, and Windows.
+- Milestone tracking docs/templates were updated from TODO-style items to issue/work-item tracking.
+
+### Fixed
+- Composer input behavior for `Shift+Enter`, including wrapping and clipping improvements.
+- macOS packaging entitlements now include audio input and video capture permissions.
+
 ## [0.0.5] - 2026-02-19
 
 ### Changed
@@ -79,7 +95,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - CI workflow and lockfile maintenance fixes leading into the first `v*` tagged release.
 
-[Unreleased]: https://github.com/porthorian/openchat-client/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/porthorian/openchat-client/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/porthorian/openchat-client/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/porthorian/openchat-client/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/porthorian/openchat-client/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/porthorian/openchat-client/compare/v0.0.2...v0.0.3
