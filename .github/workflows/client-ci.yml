@@ -35,5 +35,14 @@ jobs:
       - name: Install dependencies (immutable)
         run: corepack yarn install --immutable
 
+      - name: Lint
+        run: corepack yarn lint
+
+      - name: Typecheck
+        run: corepack yarn typecheck
+
+      - name: Test Security
+        run: corepack yarn test:security --ci
+
       - name: Build
         run: corepack yarn build
