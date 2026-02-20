@@ -8,12 +8,13 @@ OpenChat Client is an open-source Electron desktop app with a Discord-like UX wh
 - Project maturity: `Pre-Alpha`
 - Stability expectation: interfaces and behavior may change without backward compatibility until Beta.
 
-## What This Repository Is
+## Project Snapshot
+What this repository is:
 - A desktop client built with `Electron`, `Vue 3`, `Pinia`, and `PrimeVue` (unstyled).
 - A multi-server client with isolated server-scoped state and trust boundaries.
 - A frontend-first open-source project with ADRs, feature specs, and milestone tracking.
 
-## What This Repository Is Not
+What this repository is not:
 - Not a backend service repository.
 - Not a deployment/infrastructure repo for backend runtime.
 - Not a place for server-side business logic implementation.
@@ -34,46 +35,74 @@ Details: `docs/release/milestones.md`
 | Text channels + message timeline/composer | Implemented |
 | Realtime messaging + typing + presence | Implemented |
 | Voice channel join + audio relay controls | Implemented baseline (hardening in progress) |
-| Video/screenshare surfaces | Planned |
+| Video/screenshare surfaces | Implemented baseline (hardening in progress) |
+| Client update checks + install flow | Implemented baseline |
 | Settings/accessibility deep pass | In progress |
 | Moderation/governance UX | Planned |
 
-## Quickstart (Development)
+## Getting Started
 Prerequisites:
-- Node.js `>= 23.9.0`
-- Corepack enabled (`corepack enable`)
+- Node.js `>= 23.9.0` (Node `24` recommended, matches CI)
+- Corepack (`corepack enable`)
 
-Install and run:
+Install dependencies and run the app:
 ```bash
+corepack enable
 corepack prepare yarn@4 --activate
 corepack yarn install --immutable
 corepack yarn dev
 ```
 
-Quality checks:
+Run quality checks:
 ```bash
+corepack yarn test:security
 corepack yarn typecheck
 corepack yarn build
 ```
 
-## Backend Connection for Local Testing
-- Runtime default backend URL: `https://openchat.marone.us`
-- Override with env var: `VITE_OPENCHAT_BACKEND_URL`
-- Local backend example: `VITE_OPENCHAT_BACKEND_URL=http://localhost:8080`
-- Server directory endpoint expected by client: `/v1/servers`
+## Backend Setup (Local or Remote)
+Companion backend repository:
+- GitHub: [openchat-backend](https://github.com/porthorian/openchat-backend)
+
+Stand up a local backend:
+1. Clone/open `openchat-backend`.
+2. Follow the backend repository README to boot the API locally.
+3. Confirm the backend is serving `GET /v1/servers`.
+4. Start this client against that backend URL (example below).
+
+Optional RTC debug logging:
+```bash
+VITE_OPENCHAT_RTC_DEBUG=1 corepack yarn dev
+```
+
+The client performs capability probing before join and warns when transport/security expectations are not met.
+
+## Scripts Reference
+| Script | Purpose |
+| --- | --- |
+| `corepack yarn dev` | Start Electron + renderer in development mode |
+| `corepack yarn typecheck` | Run `vue-tsc` + TypeScript checks |
+| `corepack yarn test:security` | Run message-formatting security tests |
+| `corepack yarn build` | Build production bundles |
+| `corepack yarn pack` | Produce unpacked desktop bundles |
+| `corepack yarn dist` | Produce installable release artifacts in `release/` |
 
 ## Production Builds and Installers
 For end users, use release artifacts from GitHub Releases.
 
 Maintainer local packaging:
 ```bash
-corepack yarn pack   # unpacked app output
-corepack yarn dist   # platform installer artifacts in release/
+corepack yarn pack
+corepack yarn dist
 ```
 
 Release pipeline:
 - Tag format: `vX.X.X`
-- Workflow: `.github/workflows/release-desktop.yml`
+- Workflows:
+  - `.github/workflows/release-desktop.yml`
+  - `.github/workflows/release-desktop-linux.yml`
+  - `.github/workflows/release-desktop-windows.yml`
+  - `.github/workflows/release-desktop-macos.yml`
 - Targets: macOS, Windows, Linux installers + release asset publish
 
 Signing/notarization secrets (optional but recommended):
@@ -87,11 +116,19 @@ macOS entitlement note:
 - `electron-builder.yml` sets `NSMicrophoneUsageDescription`, `NSCameraUsageDescription`, and `NSScreenCaptureDescription` so notarized builds can display required runtime privacy prompts.
 - For the current non-App-Store Developer ID flow (App Sandbox disabled), network access is already allowed; network entitlements are relevant if App Sandbox is enabled later.
 
-## Documentation Map
-- Planning and constraints: `AGENTS.md`
+## Open Source Project Docs
+Core governance and community docs:
+- Project overview and onboarding: `README.md`
+- Companion backend server: [openchat-backend](https://github.com/porthorian/openchat-backend)
 - Contributing: `CONTRIBUTING.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
 - Security policy: `SECURITY.md`
 - Support: `SUPPORT.md`
+- Changelog: `CHANGELOG.md`
+- License: `LICENSE.md`
+
+Architecture and feature planning docs:
+- Planning and constraints: `AGENTS.md`
 - Architecture index: `docs/architecture/README.md`
 - ADR index: `docs/architecture/adrs/README.md`
 - Backend contract: `docs/architecture/backend-contract.md`
@@ -99,16 +136,32 @@ macOS entitlement note:
 - Feature specs: `docs/features/README.md`
 - Release milestones: `docs/release/milestones.md`
 
+## Contributor Expectations
+- Keep changes client-only (no backend implementation code in this repo).
+- Preserve multi-server data isolation by `server_id`.
+- Preserve UID-only disclosure boundaries unless explicitly expanded by ADR.
+- For user-facing behavior changes, update docs and include tests/evidence in PRs.
+
 ## Contributing
 Contributions are welcome.
 
 Start here:
 1. Read `CONTRIBUTING.md`.
-2. Check open milestones and feature specs.
-3. Open an issue/proposal for major behavior changes.
+2. Review open issues/discussions and relevant feature specs.
+3. For major behavior or architecture changes, propose updates early via issue + ADR/feature spec.
+
+Issue and PR templates:
+- `.github/ISSUE_TEMPLATE/`
+- `.github/pull_request_template.md`
+
+CI and validation workflow:
+- `.github/workflows/client-ci.yml`
 
 ## Security
 For vulnerability reporting and policy, see `SECURITY.md`.
+
+## Support
+For usage questions and bug reporting flow, see `SUPPORT.md`.
 
 ## License
 This project is licensed under GNU General Public License v2.0 only (`GPL-2.0-only`).

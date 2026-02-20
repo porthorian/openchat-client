@@ -7,7 +7,7 @@ Status: Partially implemented. `Mute/Unmute Server` and `Leave Server` are wired
 - Actions shown:
   - `Mark As Read`
   - `Invite to Server`
-  - `Unmute Server`
+  - `Mute/Unmute Server`
   - `Notification Settings` (submenu target)
   - `Hide Muted Channels`
   - `Server Settings` (submenu target)

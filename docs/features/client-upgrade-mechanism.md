@@ -1,17 +1,17 @@
 # Feature Spec: Client Upgrade Mechanism
 
 ## Status
-- Proposed
+- Implemented baseline (M3 hardening in progress)
 - Owner: Client team
-- Last updated: 2026-02-17
+- Last updated: 2026-02-20
 
 ## Problem Statement
-The desktop client currently has no formal mechanism to periodically check for newer client versions and surface upgrade actions in the UI. Users may continue running outdated versions, missing security fixes, protocol compatibility changes, and product improvements.
+The desktop client now includes a formal update mechanism, but this document defines the implemented baseline and remaining hardening work. Users should get reliable update visibility and predictable install behavior without disrupting active workflows.
 
-We need a client-side upgrade mechanism that:
-- checks for updates on a periodic schedule,
-- clearly indicates when an update is available,
-- uses the existing `AppTaskbar` download control (`mdiDownload`) as the primary action entry point.
+Current baseline behavior:
+- checks for updates on startup + periodic schedule,
+- surfaces update status and actions through `AppTaskbar` (`mdiDownload`),
+- provides version/update detail and download/install progress modals.
 
 ## Goals
 - Detect new client versions without manual user intervention.
@@ -78,14 +78,12 @@ Renderer consumes a normalized update status model:
   - `error` -> retry check or retry download (context dependent)
 
 ### Supporting UI
-- Non-blocking toast on `available`.
+- Taskbar state change on `available` (primary passive indicator).
 - Optional tooltip text with exact version (`vX.Y.Z`).
-- Optional settings page "Check for updates" action for manual trigger.
+- Version info modal includes a manual "Check again" action.
 
 ## Data Model And Client State Impact
-Add shared types for updater state and metadata.
-
-Planned model:
+Implemented model:
 - `currentVersion: string`
 - `latestVersion: string | null`
 - `status: UpdateStatus`
@@ -94,8 +92,8 @@ Planned model:
 - `releaseNotesUrl: string | null`
 - `errorMessage: string | null`
 
-Suggested store boundary:
-- New `useClientUpdateStore` in renderer state layer.
+Store boundary:
+- `useClientUpdateStore` in renderer state layer.
 - Main process remains source of truth for privileged updater events.
 - Renderer store subscribes via preload IPC and mirrors status for UI rendering.
 
@@ -153,14 +151,16 @@ Candidate check cadence:
 - Error and recovery validation.
 
 ## Rollout Plan
-1. Define update domain types and IPC contract.
-2. Implement main-process scheduler and event bridge with mock provider.
-3. Add renderer store and `AppTaskbar` integration for `mdiDownload`.
-4. Integrate real updater provider in production builds.
-5. Add docs/release notes guidance and QA checklist.
+Completed baseline:
+1. Update domain types and IPC contract implemented.
+2. Main-process scheduler + updater bridge implemented.
+3. Renderer store + `AppTaskbar` update action implemented.
+4. Version info modal + update progress modal implemented.
 
-Feature flag recommendation:
-- Gate initial rollout behind `client_updates_enabled` for staged validation.
+Remaining hardening:
+1. Expand integration/e2e coverage across macOS/Windows/Linux.
+2. Refine failure UX and retry guidance for updater-disabled environments.
+3. Add release checklist documentation for update QA signoff.
 
 ## Success Criteria
 - App performs automatic periodic checks in production.
@@ -170,8 +170,6 @@ Feature flag recommendation:
 - Test coverage added for status transitions and taskbar behavior.
 
 ## Open Questions
-- Final updater provider/package choice and platform-specific constraints.
 - Whether Linux distributions require per-channel behavior differences.
 - How aggressively to surface `error` state in taskbar vs notifications.
 - Whether release notes should open external browser or in-app modal.
-

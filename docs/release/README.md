@@ -10,4 +10,10 @@ This directory contains release process documentation for OpenChat Client.
 - Milestone tracking: `docs/release/milestones.md`
 
 ## Current State
-Release process is planned and not yet automated in this repository.
+Release automation is active via GitHub Actions workflows:
+- CI validation: `.github/workflows/client-ci.yml`
+- Cross-platform release orchestration: `.github/workflows/release-desktop.yml`
+- Platform jobs:
+  - `.github/workflows/release-desktop-linux.yml`
+  - `.github/workflows/release-desktop-windows.yml`
+  - `.github/workflows/release-desktop-macos.yml`

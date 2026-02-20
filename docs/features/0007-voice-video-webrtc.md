@@ -1,8 +1,8 @@
 # Feature: Voice and Video Communication (WebRTC)
 
-- Status: In progress (voice baseline implemented; video/screenshare pending)
+- Status: Implemented baseline (voice + video + screenshare), hardening in progress
 - Owners: Maintainers
-- Last Updated: 2026-02-17
+- Last Updated: 2026-02-20
 - Related ADRs: `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0004-multi-server-isolation.md`, `docs/architecture/adrs/0005-user-owned-identity.md`, `docs/architecture/adrs/0006-webrtc-sfu-media-architecture.md`
 - Related Issues: TBD
 
@@ -22,33 +22,38 @@ Users need low-latency voice and video communication in channels without sacrifi
 - Core controls:
   - mute/unmute
   - deafen/undeafen
+  - camera toggle
+  - screen-share toggle
   - device selection (mic/speaker where supported)
   - input/output volume
+- Screen-share source picker via Electron desktop capture bridge.
+- Video stream stage with hero tile, thumbnails, and pin/unpin behavior.
+- WebRTC offer/answer/ICE negotiation for video stream exchange.
 - Speaking indicator and participant state badges.
 - Server-scoped call lifecycle state with reconnect and degraded states.
 
 ### Out of Scope
-- Full peer-connection media negotiation (`RTCPeerConnection`, SDP/ICE exchange) in renderer.
-- Camera/video publish controls.
-- Screenshare publish controls.
+- End-to-end encrypted media layer beyond transport defaults.
+- Advanced bitrate/simulcast selection UX.
+- Push-to-talk and advanced hotkey voice controls.
+- Recording/stream archiving and post-call artifacts.
 - Backend SFU/signaling implementation details.
-- Recording/stream archiving.
 - Broadcast/live streaming workflows.
-- End-to-end media encryption beyond standard WebRTC transport security.
 - Full moderation feature set (stage channels, advanced role-controlled media policies).
 
 ## UX Flow
 1. User selects a voice-enabled channel.
 2. Client validates capabilities and requests a join ticket.
-3. Client opens signaling transport and starts local mic uplink.
-4. Remote participants appear with speaking/activity state.
-5. On transport degradation, UI shows reconnecting/degraded state and retries per policy.
-6. User leaves channel; local media uplink stops and channel-scoped call state is cleared.
+3. Client opens signaling transport, starts local mic uplink, and initializes participant session state.
+4. User can enable camera and/or screen share when capability + permission checks pass.
+5. Remote participants and video/screen streams render in call stage with speaking/activity indicators.
+6. On transport degradation, UI shows reconnecting/degraded state and retries per policy.
+7. User leaves channel; local media streams, mic uplink, and peer connections are torn down.
 
 ## UI States
-- Loading: capability check, join-ticket fetch, signaling connect, mic capture init.
+- Loading: capability check, join-ticket fetch, signaling connect, mic capture init, video publish startup.
 - Empty: user is alone in channel.
-- Success: active call with participant media and controls.
+- Success: active call with participant media tiles and controls.
 - Error: capability mismatch, permission denied, signaling transport failure.
 - Degraded/Offline: signaling disconnected, media paused, reconnect in progress.
 
@@ -96,12 +101,7 @@ Users need low-latency voice and video communication in channels without sacrifi
 
 ## Telemetry and Observability
 - Events:
-  - `voice_join_requested`
-  - `voice_join_succeeded`
-  - `voice_join_failed`
-  - `voice_reconnect_started`
-  - `voice_reconnect_succeeded`
-  - `media_toggle_changed`
+  - media telemetry is not wired in the current baseline.
 - Diagnostics:
   - aggregate call setup latency
   - reconnect frequency
@@ -133,7 +133,7 @@ Users need low-latency voice and video communication in channels without sacrifi
   - degraded network behavior
 
 ## Rollout Plan
-- Milestone target: voice baseline delivered in M2; post-M2 for video/screen-share and reliability hardening.
+- Milestone target: baseline media controls delivered; M3 reliability hardening in progress.
 - Guardrails:
   - hide/disable unsupported controls from capability flags
   - provide non-blocking fallback UI when RTC unavailable
@@ -141,6 +141,7 @@ Users need low-latency voice and video communication in channels without sacrifi
 - Success metrics:
   - call join success rate
   - median time-to-first-audio
+  - median time-to-first-video
   - reconnect success rate
   - media-related crash/error rate
 

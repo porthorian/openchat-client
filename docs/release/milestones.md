@@ -1,6 +1,6 @@
 # Release Milestones
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## M0: Project Foundation
 - Status: `done`
@@ -28,7 +28,7 @@ Last updated: 2026-02-19
 ## M3: Hardening and Open-Source Readiness
 - Status: `in_progress`
 - Current focus:
-  - Voice baseline hardening (reconnect stability, device handling, error states).
+  - RTC hardening (reconnect stability, device handling, media error states).
   - Documentation alignment with implemented behavior.
   - Accessibility and settings follow-up pass.
-  - CI/release hardening and contributor workflow polish.
+  - CI/release hardening and updater flow validation.
