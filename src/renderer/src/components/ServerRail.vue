@@ -9,6 +9,7 @@ const props = defineProps<{
   servers: ServerProfile[];
   activeServerId: string;
   unreadByServer: Record<string, number>;
+  mentionByServer: Record<string, number>;
   mutedByServer: Record<string, boolean>;
 }>();
 
@@ -129,7 +130,10 @@ onBeforeUnmount(() => {
       @contextmenu.prevent="openServerContextMenu(server.serverId, $event)"
     >
       <span>{{ server.iconText }}</span>
-      <span v-if="(unreadByServer[server.serverId] ?? 0) > 0" class="server-unread-badge">
+      <span v-if="(mentionByServer[server.serverId] ?? 0) > 0" class="server-unread-badge server-mention-badge">
+        {{ mentionByServer[server.serverId] > 99 ? "99+" : mentionByServer[server.serverId] }}
+      </span>
+      <span v-else-if="(unreadByServer[server.serverId] ?? 0) > 0" class="server-unread-badge">
         {{ unreadByServer[server.serverId] > 99 ? "99+" : unreadByServer[server.serverId] }}
       </span>
     </button>

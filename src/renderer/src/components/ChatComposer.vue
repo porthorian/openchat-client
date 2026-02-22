@@ -10,6 +10,7 @@ import {
   mdiPlusCircleOutline
 } from "@mdi/js";
 import { composerEmojiOptions, type EmojiOption } from "@renderer/utils/emoji";
+import type { MentionCandidate } from "@renderer/types/chat";
 import AppIcon from "./AppIcon.vue";
 
 type PendingAttachment = {
@@ -33,6 +34,7 @@ const props = defineProps<{
   prefillText?: string | null;
   prefillNonce?: number;
   replyTarget?: ComposerReplyTarget | null;
+  fetchMentionCandidates?: ((query: string) => Promise<MentionCandidate[]>) | null;
 }>();
 
 const emit = defineEmits<{
@@ -60,6 +62,13 @@ const submittedReplyMessageId = ref<string | null>(null);
 const emojiPickerOpen = ref(false);
 const replyMentionEnabled = ref(true);
 const emojiOptions = composerEmojiOptions;
+const mentionLookupDebounceMS = 120;
+const mentionMenuOpen = ref(false);
+const mentionQuery = ref("");
+const mentionCandidates = ref<MentionCandidate[]>([]);
+const mentionSelectionIndex = ref(0);
+let mentionLookupRequestID = 0;
+let mentionLookupTimer: ReturnType<typeof setTimeout> | null = null;
 let composerShellHeight = 0;
 let composerShellResizeObserver: ResizeObserver | null = null;
 const isComposerEmpty = computed(() => {
@@ -273,6 +282,8 @@ function submitMessage(): void {
 
   uploadError.value = null;
   emojiPickerOpen.value = false;
+  closeMentionMenu();
+  clearMentionLookupTimer();
   awaitingSendResult.value = true;
   submittedReplyMessageId.value = replyToMessageId || null;
   emit("sendMessage", {
@@ -341,6 +352,154 @@ function pickEmoji(option: EmojiOption): void {
   emojiPickerOpen.value = false;
 }
 
+function clearMentionLookupTimer(): void {
+  if (mentionLookupTimer === null) return;
+  clearTimeout(mentionLookupTimer);
+  mentionLookupTimer = null;
+}
+
+function closeMentionMenu(): void {
+  mentionLookupRequestID += 1;
+  mentionMenuOpen.value = false;
+  mentionQuery.value = "";
+  mentionCandidates.value = [];
+  mentionSelectionIndex.value = 0;
+}
+
+function readActiveMentionContext(): { query: string; start: number; end: number } | null {
+  const input = composerInputRef.value;
+  if (!input) return null;
+  const cursor = input.selectionStart ?? draftMessage.value.length;
+  const textBeforeCursor = draftMessage.value.slice(0, cursor);
+  if (!textBeforeCursor) return null;
+
+  const atIndex = textBeforeCursor.lastIndexOf("@");
+  if (atIndex < 0) return null;
+  if (atIndex > 0 && /[A-Za-z0-9_.-]/.test(textBeforeCursor[atIndex - 1])) {
+    return null;
+  }
+
+  const rawQuery = textBeforeCursor.slice(atIndex + 1);
+  if (rawQuery.length === 0) {
+    return {
+      query: "",
+      start: atIndex,
+      end: cursor
+    };
+  }
+  if (/[\s@]/.test(rawQuery)) return null;
+  if (/[^A-Za-z0-9_.-]/.test(rawQuery)) return null;
+  return {
+    query: rawQuery,
+    start: atIndex,
+    end: cursor
+  };
+}
+
+function mentionCandidateToken(candidate: MentionCandidate): string {
+  const explicitToken = candidate.token?.trim();
+  if (explicitToken) {
+    return explicitToken.startsWith("@") ? explicitToken : `@${explicitToken}`;
+  }
+  const target = candidate.targetId?.trim() || candidate.displayText.trim();
+  if (!target) return "@";
+  return target.startsWith("@") ? target : `@${target}`;
+}
+
+function mentionCandidateTypeLabel(candidate: MentionCandidate): string {
+  return candidate.type === "channel" ? "Channel mention" : "User mention";
+}
+
+async function refreshMentionCandidates(): Promise<void> {
+  const mentionContext = readActiveMentionContext();
+  if (!mentionContext) {
+    closeMentionMenu();
+    return;
+  }
+  if (!props.fetchMentionCandidates) {
+    closeMentionMenu();
+    return;
+  }
+
+  mentionQuery.value = mentionContext.query;
+  const requestID = ++mentionLookupRequestID;
+  let candidates: MentionCandidate[] = [];
+  try {
+    candidates = await props.fetchMentionCandidates(mentionContext.query);
+  } catch (_error) {
+    candidates = [];
+  }
+  if (requestID !== mentionLookupRequestID) return;
+
+  const deduped = new Set<string>();
+  const normalized: MentionCandidate[] = [];
+  candidates.forEach((candidate) => {
+    const token = mentionCandidateToken(candidate).toLowerCase();
+    if (!token || token === "@") return;
+    if (deduped.has(token)) return;
+    deduped.add(token);
+    normalized.push(candidate);
+  });
+
+  mentionCandidates.value = normalized;
+  if (normalized.length === 0) {
+    mentionSelectionIndex.value = 0;
+    mentionMenuOpen.value = false;
+    return;
+  }
+  mentionSelectionIndex.value = Math.min(mentionSelectionIndex.value, normalized.length - 1);
+  mentionMenuOpen.value = true;
+}
+
+function scheduleMentionLookup(): void {
+  clearMentionLookupTimer();
+  mentionLookupTimer = setTimeout(() => {
+    void refreshMentionCandidates();
+  }, mentionLookupDebounceMS);
+}
+
+function selectNextMentionCandidate(): void {
+  if (!mentionMenuOpen.value || mentionCandidates.value.length === 0) return;
+  mentionSelectionIndex.value = (mentionSelectionIndex.value + 1) % mentionCandidates.value.length;
+}
+
+function selectPreviousMentionCandidate(): void {
+  if (!mentionMenuOpen.value || mentionCandidates.value.length === 0) return;
+  mentionSelectionIndex.value =
+    (mentionSelectionIndex.value - 1 + mentionCandidates.value.length) % mentionCandidates.value.length;
+}
+
+function applyMentionCandidate(candidate: MentionCandidate): void {
+  const input = composerInputRef.value;
+  if (!input) return;
+  const mentionContext = readActiveMentionContext();
+  if (!mentionContext) return;
+  const token = mentionCandidateToken(candidate);
+  if (!token || token === "@") return;
+  const before = draftMessage.value.slice(0, mentionContext.start);
+  const after = draftMessage.value.slice(mentionContext.end);
+  draftMessage.value = `${before}${token} ${after}`;
+  mentionMenuOpen.value = false;
+  mentionCandidates.value = [];
+  mentionSelectionIndex.value = 0;
+  mentionQuery.value = "";
+  const cursor = before.length + token.length + 1;
+  void nextTick(() => {
+    const nextInput = composerInputRef.value;
+    if (!nextInput) return;
+    nextInput.focus();
+    nextInput.setSelectionRange(cursor, cursor);
+    syncComposerInputHeight(true);
+  });
+}
+
+function applySelectedMentionCandidate(): void {
+  if (!mentionMenuOpen.value || mentionCandidates.value.length === 0) return;
+  const selected = mentionCandidates.value[mentionSelectionIndex.value];
+  if (!selected) return;
+  applyMentionCandidate(selected);
+}
+
 function syncComposerInputHeight(keepCaretVisible = false): void {
   const input = composerInputRef.value;
   if (!input) return;
@@ -389,13 +548,41 @@ function handleComposerInput(): void {
   if (!input) return;
   const isSelectionAtEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
   syncComposerInputHeight(isSelectionAtEnd);
+  scheduleMentionLookup();
 }
 
 function handleComposerKeydown(event: KeyboardEvent): void {
+  if (mentionMenuOpen.value && mentionCandidates.value.length > 0) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      selectNextMentionCandidate();
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      selectPreviousMentionCandidate();
+      return;
+    }
+    if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey)) {
+      event.preventDefault();
+      applySelectedMentionCandidate();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMentionMenu();
+      return;
+    }
+  }
+
   if (event.key !== "Enter" || event.isComposing) return;
   if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
   event.preventDefault();
   submitMessage();
+}
+
+function handleComposerCursorActivity(): void {
+  scheduleMentionLookup();
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -428,18 +615,21 @@ function handleGlobalTyping(event: KeyboardEvent): void {
 }
 
 function handleWindowPointerDown(event: PointerEvent): void {
-  if (!emojiPickerOpen.value) return;
   const target = event.target as HTMLElement | null;
   if (!target) return;
-  if (target.closest(".composer-emoji-picker") || target.closest(".composer-emoji-toggle")) {
-    return;
+
+  if (emojiPickerOpen.value && !target.closest(".composer-emoji-picker") && !target.closest(".composer-emoji-toggle")) {
+    emojiPickerOpen.value = false;
   }
-  emojiPickerOpen.value = false;
+  if (mentionMenuOpen.value && !target.closest(".composer-mention-menu") && !target.closest(".composer textarea")) {
+    closeMentionMenu();
+  }
 }
 
 function handleWindowKeydown(event: KeyboardEvent): void {
   if (event.key !== "Escape") return;
   emojiPickerOpen.value = false;
+  closeMentionMenu();
 }
 
 function applyPrefillText(value: string): void {
@@ -472,6 +662,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", handleGlobalTyping);
   window.removeEventListener("pointerdown", handleWindowPointerDown);
   window.removeEventListener("keydown", handleWindowKeydown);
+  clearMentionLookupTimer();
   if (composerShellResizeObserver) {
     composerShellResizeObserver.disconnect();
     composerShellResizeObserver = null;
@@ -483,6 +674,7 @@ watch(
   () => draftMessage.value,
   () => {
     syncTypingActivity();
+    scheduleMentionLookup();
     void nextTick(() => {
       syncComposerInputHeight();
     });
@@ -498,6 +690,8 @@ watch(
     replyMentionEnabled.value = true;
     uploadError.value = null;
     emojiPickerOpen.value = false;
+    closeMentionMenu();
+    clearMentionLookupTimer();
     clearPendingAttachments();
   }
 );
@@ -537,6 +731,7 @@ watch(
   (messageId, previousMessageId) => {
     if (!messageId) {
       replyMentionEnabled.value = true;
+      closeMentionMenu();
       return;
     }
     if (messageId === previousMessageId) return;
@@ -631,6 +826,8 @@ watch(
           @input="handleComposerInput"
           @paste="handlePaste"
           @keydown="handleComposerKeydown"
+          @keyup="handleComposerCursorActivity"
+          @click="handleComposerCursorActivity"
         />
         <div class="composer-actions">
           <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isComposerEmpty" @click="submitMessage">
@@ -651,6 +848,27 @@ watch(
             <AppIcon :path="mdiEmoticonHappyOutline" :size="18" />
           </button>
         </div>
+        <section
+          v-if="mentionMenuOpen && mentionCandidates.length > 0"
+          class="composer-mention-menu"
+          role="listbox"
+          aria-label="Mention suggestions"
+        >
+          <button
+            v-for="(candidate, index) in mentionCandidates"
+            :key="`${mentionCandidateToken(candidate)}-${index}`"
+            type="button"
+            class="composer-mention-option"
+            :class="{ 'is-active': index === mentionSelectionIndex }"
+            role="option"
+            :aria-selected="index === mentionSelectionIndex ? 'true' : 'false'"
+            @mouseenter="mentionSelectionIndex = index"
+            @mousedown.prevent="applyMentionCandidate(candidate)"
+          >
+            <span class="composer-mention-option-token">{{ mentionCandidateToken(candidate) }}</span>
+            <small class="composer-mention-option-meta">{{ mentionCandidateTypeLabel(candidate) }}</small>
+          </button>
+        </section>
         <section v-if="emojiPickerOpen" class="composer-emoji-picker" role="dialog" aria-label="Emoji picker">
           <p class="composer-emoji-picker-title">Emoji</p>
           <div class="composer-emoji-grid">

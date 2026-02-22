@@ -10,7 +10,7 @@ import {
   mdiPinOutline
 } from "@mdi/js";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
-import type { ChatMessage, MessageAttachment } from "@renderer/types/chat";
+import type { ChatMessage, MentionCandidate, MessageAttachment } from "@renderer/types/chat";
 import type { AvatarMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, ref, watch } from "vue";
@@ -23,6 +23,7 @@ type TimelineMessage = {
   message: ChatMessage;
   isCompact: boolean;
   isOwnMessage: boolean;
+  isMentionForCurrentUser: boolean;
   authorName: string;
   avatarText: string;
   avatarColor: string;
@@ -72,6 +73,7 @@ const props = defineProps<{
   channelId: string;
   activeServerId: string;
   activeServerBackendUrl: string;
+  channelNamesById: Record<string, string>;
   messages: ChatMessage[];
   isLoadingMessages: boolean;
   isSendingMessage: boolean;
@@ -86,6 +88,7 @@ const props = defineProps<{
   localProfileAvatarPresetId: string;
   localProfileAvatarImageDataUrl: string | null;
   remoteProfilesByUID: Record<string, SyncedUserProfile>;
+  fetchMentionCandidates: (query: string) => Promise<MentionCandidate[]>;
 }>();
 
 const emit = defineEmits<{
@@ -143,6 +146,63 @@ const sortedMessages = computed(() => {
   return [...props.messages].sort((left, right) => {
     return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
   });
+});
+
+const mentionAudienceTokens = new Set(["@here", "@channel"]);
+
+function normalizeMentionToken(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
+function messageHasAudienceMention(message: ChatMessage): boolean {
+  const mentions = message.mentions ?? [];
+  for (const mention of mentions) {
+    if (mention.type !== "channel") continue;
+    const token = normalizeMentionToken(mention.token ?? mention.targetId ?? mention.displayText ?? "");
+    if (mentionAudienceTokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function messageMentionsCurrentUser(message: ChatMessage, userUID: string): boolean {
+  const normalizedUID = userUID.trim().toLowerCase();
+  if (!normalizedUID) return false;
+  const mentions = message.mentions ?? [];
+  for (const mention of mentions) {
+    if (mention.type !== "user") continue;
+    const targetId = (mention.targetId ?? "").trim().toLowerCase();
+    const token = normalizeMentionToken(mention.token ?? "");
+    if (targetId === normalizedUID) return true;
+    if (token === `@${normalizedUID}`) return true;
+  }
+  if (mentions.length === 0) {
+    const normalizedBody = message.body.toLowerCase();
+    return normalizedBody.includes(`@${normalizedUID}`) || normalizedBody.includes(normalizedUID);
+  }
+  return false;
+}
+
+function messageCountsAsMentionForUser(message: ChatMessage, userUID: string): boolean {
+  return messageMentionsCurrentUser(message, userUID) || messageHasAudienceMention(message);
+}
+
+const mentionDisplayNamesByUID = computed<Record<string, string>>(() => {
+  const summary: Record<string, string> = {};
+  const localUID = props.currentUserUID.trim();
+  const localDisplayName = props.localProfileDisplayName.trim();
+  if (localUID && localDisplayName) {
+    summary[localUID] = localDisplayName;
+  }
+  Object.entries(props.remoteProfilesByUID).forEach(([userUID, profile]) => {
+    const displayName = profile.displayName?.trim();
+    if (!displayName) return;
+    summary[userUID] = displayName;
+  });
+  return summary;
 });
 
 function normalizeReplyPreviewText(input: string): string {
@@ -276,6 +336,7 @@ const timelineMessages = computed<TimelineMessage[]>(() => {
       message,
       isCompact,
       isOwnMessage: isLocalAuthor,
+      isMentionForCurrentUser: messageCountsAsMentionForUser(message, localUserUID),
       authorName,
       avatarText: authorName.slice(0, 1).toUpperCase() || toAvatarText(message.authorUID),
       avatarColor:
@@ -868,6 +929,10 @@ watch(
         :avatar-color="entry.avatarColor"
         :avatar-text-color="entry.avatarTextColor"
         :avatar-image-data-url="entry.avatarImageDataUrl"
+        :is-mention-for-current-user="entry.isMentionForCurrentUser"
+        :currentUserUID="currentUserUID"
+        :userDisplayNamesByUID="mentionDisplayNamesByUID"
+        :channel-names-by-id="channelNamesById"
         :reply-preview="entry.replyPreview"
         @open-image-lightbox="openImageLightbox"
         @open-context-menu="openMessageContextMenu($event, entry)"
@@ -1016,6 +1081,7 @@ watch(
       :prefill-text="composerPrefillText"
       :prefill-nonce="composerPrefillNonce"
       :reply-target="composerReplyTarget"
+      :fetch-mention-candidates="fetchMentionCandidates"
       @send-message="handleComposerSendMessage"
       @typing-activity="emit('typingActivity', $event)"
       @composer-height-delta="handleComposerHeightDelta"

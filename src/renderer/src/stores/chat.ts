@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import type { OpenGraphMetadata } from "@shared/ipc";
 import {
   createMessage,
+  fetchChannelReadAck,
   deleteMessage as deleteMessageRequest,
   fetchMyProfile,
   fetchProfilesBatch,
@@ -10,22 +11,27 @@ import {
   fetchMessages,
   getRealtimeURL,
   ProfileRequestError,
+  resolveMentionCandidates,
   sendRealtime,
   type SyncedUserProfile,
+  updateChannelReadAck,
   updateMyProfile,
   uploadProfileAvatar,
   type RealtimeEnvelope
 } from "@renderer/services/chatClient";
 import type { AvatarMode } from "@renderer/types/models";
 import type {
+  ChannelReadAck,
   Channel,
   ChannelGroup,
   ChannelPresenceMember,
   ChatMessage,
   LinkPreview,
+  MentionCandidate,
   MemberItem,
   MessageActionPermissions,
   MessageAttachment,
+  MessageMention,
   MessageReplyReference
 } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
@@ -68,12 +74,14 @@ type ChatStoreState = {
   presenceByChannel: Record<string, ChannelPresenceMember[]>;
   typingByChannel: Record<string, ChannelPresenceMember[]>;
   messagesByChannel: Record<string, ChatMessage[]>;
+  readAckByChannel: Record<string, ChannelReadAck>;
   loadingByServer: Record<string, boolean>;
   loadingMessagesByChannel: Record<string, boolean>;
   sendingByChannel: Record<string, boolean>;
   realtimeByServer: Record<string, ServerRealtimeState>;
   subscribedChannelByServer: Record<string, string | null>;
   unreadByChannel: Record<string, number>;
+  mentionUnreadByChannel: Record<string, number>;
   currentUserUIDByServer: Record<string, string>;
   profilesByServer: Record<string, Record<string, SyncedUserProfile>>;
   profileSyncStateByServer: Record<string, ProfileSyncState>;
@@ -95,6 +103,7 @@ const linkPreviewInFlightByURL = new Map<string, Promise<LinkPreview | null>>();
 const pendingLocalReplyHintsByChannel = new Map<string, PendingLocalReplyHint[]>();
 const pendingLocalReplyHintMaxAgeMS = 2 * 60 * 1000;
 const pendingLocalReplyHintMaxPerChannel = 40;
+const mentionAudienceTokens = new Set(["@here", "@channel"]);
 
 function parseEnvelope(rawMessage: string): RealtimeEnvelope | null {
   try {
@@ -199,6 +208,7 @@ function mergeChannelMessage(existing: ChatMessage, incoming: ChatMessage): Chat
     ...existing,
     ...incoming,
     replyTo: hasReplyReference(incoming.replyTo) ? incoming.replyTo : existing.replyTo ?? null,
+    mentions: incoming.mentions && incoming.mentions.length > 0 ? incoming.mentions : existing.mentions,
     linkPreviews:
       incoming.linkPreviews && incoming.linkPreviews.length > 0 ? incoming.linkPreviews : existing.linkPreviews,
     attachments: incoming.attachments && incoming.attachments.length > 0 ? incoming.attachments : existing.attachments,
@@ -252,6 +262,42 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
     .map((item) => normalizeMessageAttachment(item))
     .filter((item): item is MessageAttachment => item !== null);
   return attachments.length > 0 ? attachments : undefined;
+}
+
+function normalizeMessageMentionRange(input: unknown): { start: number; end: number } | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const start = Number(payload.start ?? payload.start_index ?? payload.startIndex);
+  const end = Number(payload.end ?? payload.end_index ?? payload.endIndex);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const normalizedStart = Math.max(0, Math.trunc(start));
+  const normalizedEnd = Math.max(normalizedStart, Math.trunc(end));
+  return {
+    start: normalizedStart,
+    end: normalizedEnd
+  };
+}
+
+function normalizeMessageMention(input: unknown): MessageMention | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const rawType = String(payload.type ?? "").trim().toLowerCase();
+  if (rawType !== "user" && rawType !== "channel") return null;
+  return {
+    type: rawType,
+    token: readOptionalString(payload, ["token", "raw_token", "rawToken"]),
+    targetId: readOptionalString(payload, ["target_id", "targetId", "user_uid", "userUID"]),
+    displayText: readOptionalString(payload, ["display_text", "displayText", "label", "name"]),
+    range: normalizeMessageMentionRange(payload.range ?? payload.position ?? payload.offsets)
+  };
+}
+
+function normalizeMessageMentions(input: unknown): MessageMention[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const mentions = input
+    .map((item) => normalizeMessageMention(item))
+    .filter((item): item is MessageMention => item !== null);
+  return mentions.length > 0 ? mentions : undefined;
 }
 
 function readUnknown(source: Record<string, unknown>, keys: string[]): unknown {
@@ -536,6 +582,7 @@ function normalizeIncomingMessage(payload: Record<string, unknown>): ChatMessage
     body: normalizeMessageBodyText(messagePayload.body),
     createdAt: String(messagePayload.created_at ?? new Date().toISOString()),
     replyTo: replyTo ?? null,
+    mentions: normalizeMessageMentions(messagePayload.mentions),
     linkPreviews: normalizeLinkPreviews(messagePayload.link_previews ?? messagePayload.linkPreviews),
     attachments: normalizeMessageAttachments(messagePayload.attachments),
     permalink: permalink || null,
@@ -594,6 +641,19 @@ function normalizeUserUIDList(input: string[]): string[] {
   return normalized;
 }
 
+function mentionTargetUserUIDs(message: ChatMessage): string[] {
+  const targets: string[] = [];
+  const seen = new Set<string>();
+  (message.mentions ?? []).forEach((mention) => {
+    if (mention.type !== "user") return;
+    const targetID = mention.targetId?.trim() ?? "";
+    if (!targetID || seen.has(targetID)) return;
+    seen.add(targetID);
+    targets.push(targetID);
+  });
+  return targets;
+}
+
 function isProfileSyncUnsupportedError(error: unknown): boolean {
   if (!(error instanceof ProfileRequestError)) return false;
   return error.status === 404 || error.status === 405 || error.status === 501;
@@ -622,11 +682,63 @@ function isDocumentVisible(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
-function messageMentionsUID(body: string, userUID: string): boolean {
-  const normalizedBody = body.toLowerCase();
+function normalizeMentionToken(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+}
+
+function messageHasAudienceMention(message: ChatMessage): boolean {
+  const mentions = message.mentions ?? [];
+  for (const mention of mentions) {
+    if (mention.type !== "channel") continue;
+    const token = normalizeMentionToken(mention.token ?? mention.targetId ?? mention.displayText ?? "");
+    if (mentionAudienceTokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function messageMentionsCurrentUser(message: ChatMessage, userUID: string): boolean {
   const normalizedUID = userUID.trim().toLowerCase();
   if (!normalizedUID) return false;
-  return normalizedBody.includes(`@${normalizedUID}`) || normalizedBody.includes(normalizedUID);
+  const mentions = message.mentions ?? [];
+  for (const mention of mentions) {
+    if (mention.type !== "user") continue;
+    const targetId = (mention.targetId ?? "").trim().toLowerCase();
+    const token = normalizeMentionToken(mention.token ?? "");
+    if (targetId === normalizedUID) return true;
+    if (token === `@${normalizedUID}`) return true;
+  }
+  if (mentions.length === 0) {
+    const normalizedBody = message.body.toLowerCase();
+    return normalizedBody.includes(`@${normalizedUID}`) || normalizedBody.includes(normalizedUID);
+  }
+  return false;
+}
+
+function messageCountsAsMentionForUser(message: ChatMessage, userUID: string): boolean {
+  return messageMentionsCurrentUser(message, userUID) || messageHasAudienceMention(message);
+}
+
+function messageCursorIndex(messages: ChatMessage[], messageID: string | null | undefined): number {
+  const normalizedMessageID = messageID?.trim() ?? "";
+  if (!normalizedMessageID) return -1;
+  return messages.findIndex((message) => message.id === normalizedMessageID);
+}
+
+function computeChannelMentionUnread(messages: ChatMessage[], currentUID: string, readCursorIndex: number): number {
+  if (!currentUID.trim()) return 0;
+  let total = 0;
+  messages.forEach((message, index) => {
+    if (index <= readCursorIndex) return;
+    if (message.authorUID === currentUID) return;
+    if (messageCountsAsMentionForUser(message, currentUID)) {
+      total += 1;
+    }
+  });
+  return total;
 }
 
 function clearReconnectTimer(serverId: string): void {
@@ -674,12 +786,14 @@ export const useChatStore = defineStore("chat", {
     presenceByChannel: {},
     typingByChannel: {},
     messagesByChannel: {},
+    readAckByChannel: {},
     loadingByServer: {},
     loadingMessagesByChannel: {},
     sendingByChannel: {},
     realtimeByServer: {},
     subscribedChannelByServer: {},
     unreadByChannel: {},
+    mentionUnreadByChannel: {},
     currentUserUIDByServer: {},
     profilesByServer: {},
     profileSyncStateByServer: {},
@@ -749,6 +863,11 @@ export const useChatStore = defineStore("chat", {
       (channelId: string): number => {
         return state.unreadByChannel[channelId] ?? 0;
       },
+    mentionCountForChannel:
+      (state) =>
+      (channelId: string): number => {
+        return state.mentionUnreadByChannel[channelId] ?? 0;
+      },
     unreadCountForServer:
       (state) =>
       (serverId: string): number => {
@@ -758,6 +877,19 @@ export const useChatStore = defineStore("chat", {
           group.channels.forEach((channel) => {
             if (channel.type !== "text") return;
             total += state.unreadByChannel[channel.id] ?? 0;
+          });
+        });
+        return total;
+      },
+    mentionCountForServer:
+      (state) =>
+      (serverId: string): number => {
+        const groups = state.groupsByServer[serverId] ?? [];
+        let total = 0;
+        groups.forEach((group) => {
+          group.channels.forEach((channel) => {
+            if (channel.type !== "text") return;
+            total += state.mentionUnreadByChannel[channel.id] ?? 0;
           });
         });
         return total;
@@ -852,6 +984,18 @@ export const useChatStore = defineStore("chat", {
       try {
         const messages = await fetchMessages(params.backendUrl, params.channelId, 150);
         this.messagesByChannel[params.channelId] = messages;
+        try {
+          const readAck = await fetchChannelReadAck({
+            backendUrl: params.backendUrl,
+            channelId: params.channelId,
+            userUID: params.userUID,
+            deviceID: params.deviceID
+          });
+          this.readAckByChannel[params.channelId] = readAck;
+        } catch (_error) {
+          // Backward-compatible fallback for servers without read-ack endpoints.
+        }
+        this.recomputeMentionUnreadForChannel(params.serverId, params.channelId);
         void this.hydrateLinkPreviewsForMessages(params.channelId, messages);
         void this.ensureProfilesForUIDs({
           serverId: params.serverId,
@@ -859,10 +1003,11 @@ export const useChatStore = defineStore("chat", {
           userUID: params.userUID,
           deviceID: params.deviceID,
           targetUserUIDs: messages.flatMap((message) => {
+            const mentionTargets = mentionTargetUserUIDs(message);
             if (message.replyTo?.authorUID) {
-              return [message.authorUID, message.replyTo.authorUID];
+              return [message.authorUID, message.replyTo.authorUID, ...mentionTargets];
             }
-            return [message.authorUID];
+            return [message.authorUID, ...mentionTargets];
           })
         });
       } finally {
@@ -1186,6 +1331,10 @@ export const useChatStore = defineStore("chat", {
       this.presenceByChannel[channelId] = [];
       this.clearTypingForChannel(channelId);
       this.markChannelRead(channelId);
+      void this.syncReadAckForChannel({
+        serverId,
+        channelId
+      });
       const socket = socketsByServer.get(serverId);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       sendRealtime(socket, {
@@ -1252,16 +1401,55 @@ export const useChatStore = defineStore("chat", {
         if (resolvedMessage.replyTo?.authorUID) {
           relatedUserUIDs.push(resolvedMessage.replyTo.authorUID);
         }
+        relatedUserUIDs.push(...mentionTargetUserUIDs(resolvedMessage));
         void this.ensureProfilesFromRealtime(serverId, relatedUserUIDs);
         const subscribedChannel = this.subscribedChannelByServer[serverId];
         const channelIsActive = subscribedChannel === resolvedMessage.channelId;
         const windowVisible = isDocumentVisible();
+        const currentUID = this.currentUserUIDByServer[serverId] ?? "";
+        const isOwnMessage = Boolean(currentUID && resolvedMessage.authorUID === currentUID);
+        const mentionForCurrentUser = !isOwnMessage && messageCountsAsMentionForUser(resolvedMessage, currentUID);
         if (!channelIsActive || !windowVisible) {
           this.incrementUnread(resolvedMessage.channelId);
+          if (mentionForCurrentUser) {
+            this.incrementMentionUnread(resolvedMessage.channelId);
+          }
         } else {
           this.markChannelRead(resolvedMessage.channelId);
+          void this.syncReadAckForChannel({
+            serverId,
+            channelId: resolvedMessage.channelId,
+            lastReadMessageId: resolvedMessage.id
+          });
         }
         void this.notifyIncomingMessage(serverId, resolvedMessage, channelIsActive);
+        return;
+      }
+      if (envelope.type === "chat.read_ack.updated") {
+        const payload = (envelope.payload ?? {}) as Record<string, unknown>;
+        const channelID = String(payload.channel_id ?? "").trim();
+        const userUID = String(payload.user_uid ?? "").trim();
+        const currentUID = this.currentUserUIDByServer[serverId] ?? "";
+        if (!channelID || !userUID || !currentUID || userUID !== currentUID) return;
+        const messages = this.messagesByChannel[channelID] ?? [];
+        const incomingLastReadMessageID = String(payload.last_read_message_id ?? "").trim();
+        const incomingCursorRaw = Number(payload.cursor_index);
+        const incomingCursorIndex =
+          Number.isFinite(incomingCursorRaw) && incomingCursorRaw >= 0 ? Math.trunc(incomingCursorRaw) : messageCursorIndex(messages, incomingLastReadMessageID);
+        const existingReadAck = this.readAckByChannel[channelID];
+        const existingCursorIndex =
+          typeof existingReadAck?.cursorIndex === "number"
+            ? existingReadAck.cursorIndex
+            : messageCursorIndex(messages, existingReadAck?.lastReadMessageId);
+        if (incomingCursorIndex < existingCursorIndex) return;
+        this.readAckByChannel[channelID] = {
+          channelId: channelID,
+          userUID,
+          lastReadMessageId: incomingLastReadMessageID || null,
+          ackedAt: String(payload.acked_at ?? new Date().toISOString()),
+          cursorIndex: incomingCursorIndex >= 0 ? incomingCursorIndex : null
+        };
+        this.recomputeMentionUnreadForChannel(serverId, channelID);
         return;
       }
       if (envelope.type === "chat.presence.snapshot") {
@@ -1374,6 +1562,83 @@ export const useChatStore = defineStore("chat", {
         });
       });
     },
+    recomputeMentionUnreadForChannel(serverId: string, channelId: string): void {
+      const currentUID = this.currentUserUIDByServer[serverId] ?? "";
+      if (!channelId.trim() || !currentUID.trim()) {
+        this.mentionUnreadByChannel[channelId] = 0;
+        return;
+      }
+      const messages = this.messagesByChannel[channelId] ?? [];
+      const readAck = this.readAckByChannel[channelId];
+      const readCursorIndex =
+        typeof readAck?.cursorIndex === "number"
+          ? readAck.cursorIndex
+          : messageCursorIndex(messages, readAck?.lastReadMessageId);
+      this.mentionUnreadByChannel[channelId] = computeChannelMentionUnread(messages, currentUID, readCursorIndex);
+    },
+    async syncReadAckForChannel(params: {
+      serverId: string;
+      channelId: string;
+      lastReadMessageId?: string | null;
+    }): Promise<void> {
+      const realtimeParams = realtimeConnectParamsByServer.get(params.serverId);
+      if (!realtimeParams) return;
+      const messages = this.messagesByChannel[params.channelId] ?? [];
+      const fallbackLastMessageID = messages[messages.length - 1]?.id ?? "";
+      const lastReadMessageID = params.lastReadMessageId?.trim() || fallbackLastMessageID;
+
+      const existingReadAck = this.readAckByChannel[params.channelId];
+      const existingCursorIndex =
+        typeof existingReadAck?.cursorIndex === "number"
+          ? existingReadAck.cursorIndex
+          : messageCursorIndex(messages, existingReadAck?.lastReadMessageId);
+      const nextCursorIndex = messageCursorIndex(messages, lastReadMessageID);
+      if (nextCursorIndex >= existingCursorIndex) {
+        this.readAckByChannel[params.channelId] = {
+          channelId: params.channelId,
+          userUID: realtimeParams.userUID,
+          lastReadMessageId: lastReadMessageID || null,
+          ackedAt: new Date().toISOString(),
+          cursorIndex: nextCursorIndex >= 0 ? nextCursorIndex : null
+        };
+        this.recomputeMentionUnreadForChannel(params.serverId, params.channelId);
+      }
+
+      try {
+        const response = await updateChannelReadAck({
+          backendUrl: realtimeParams.backendUrl,
+          channelId: params.channelId,
+          userUID: realtimeParams.userUID,
+          deviceID: realtimeParams.deviceID,
+          lastReadMessageId: lastReadMessageID || null
+        });
+        this.readAckByChannel[params.channelId] = response.readAck;
+        this.recomputeMentionUnreadForChannel(params.serverId, params.channelId);
+      } catch (_error) {
+        // Backward-compatible fallback for servers without read-ack endpoints.
+      }
+    },
+    async fetchMentionCandidates(params: {
+      serverId: string;
+      channelId: string;
+      query: string;
+      limit?: number;
+    }): Promise<MentionCandidate[]> {
+      const realtimeParams = realtimeConnectParamsByServer.get(params.serverId);
+      if (!realtimeParams) return [];
+      try {
+        return await resolveMentionCandidates({
+          backendUrl: realtimeParams.backendUrl,
+          channelId: params.channelId,
+          query: params.query,
+          userUID: realtimeParams.userUID,
+          deviceID: realtimeParams.deviceID,
+          limit: params.limit
+        });
+      } catch (_error) {
+        return [];
+      }
+    },
     syncTypingMembersWithPresence(channelId: string, members: ChannelPresenceMember[]): void {
       const presenceKeys = new Set(members.map((member) => presenceMemberKey(member)));
       const typingMembers = this.typingByChannel[channelId] ?? [];
@@ -1402,6 +1667,9 @@ export const useChatStore = defineStore("chat", {
     },
     incrementUnread(channelId: string): void {
       this.unreadByChannel[channelId] = (this.unreadByChannel[channelId] ?? 0) + 1;
+    },
+    incrementMentionUnread(channelId: string): void {
+      this.mentionUnreadByChannel[channelId] = (this.mentionUnreadByChannel[channelId] ?? 0) + 1;
     },
     findChannelName(serverId: string, channelId: string): string {
       const groups = this.groupsByServer[serverId] ?? [];
@@ -1440,7 +1708,7 @@ export const useChatStore = defineStore("chat", {
       if (this.serverMutedById[serverId]) return;
 
       const windowVisible = isDocumentVisible();
-      const isMention = messageMentionsUID(message.body, currentUID);
+      const isMention = messageCountsAsMentionForUser(message, currentUID);
       if (windowVisible && channelIsActive && !isMention) return;
 
       if (Notification.permission === "denied") return;
@@ -1508,11 +1776,13 @@ export const useChatStore = defineStore("chat", {
 
       channelIds.forEach((channelId) => {
         delete this.messagesByChannel[channelId];
+        delete this.readAckByChannel[channelId];
         delete this.presenceByChannel[channelId];
         delete this.typingByChannel[channelId];
         delete this.loadingMessagesByChannel[channelId];
         delete this.sendingByChannel[channelId];
         delete this.unreadByChannel[channelId];
+        delete this.mentionUnreadByChannel[channelId];
       });
 
       delete this.serverMutedById[serverId];

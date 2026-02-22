@@ -414,6 +414,11 @@ button {
   bottom: -2px;
 }
 
+.server-mention-badge {
+  background: #f0a03f;
+  color: #1d1200;
+}
+
 .server-context-menu {
   position: fixed;
   z-index: 84;
@@ -969,6 +974,11 @@ button {
   line-height: 18px;
   text-align: center;
   padding: 0 5px;
+}
+
+.mention-badge {
+  background: #f0a03f;
+  color: #1d1200;
 }
 
 .voice-member-list {
@@ -3017,10 +3027,28 @@ button {
   padding: 3px 16px;
   margin-top: 1px;
   align-items: start;
+  position: relative;
 }
 
 .message-row:hover {
   background: rgb(255 255 255 / 2.8%);
+}
+
+.message-row.is-mentioned-current-user {
+  background: rgb(233 175 64 / 13%);
+}
+
+.message-row.is-mentioned-current-user::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: #ffbf59;
+}
+
+.message-row.is-mentioned-current-user:hover {
+  background: rgb(233 175 64 / 18%);
 }
 
 .message-row.is-compact {
@@ -3465,6 +3493,41 @@ button {
 
 .message-link:hover {
   text-decoration: underline;
+}
+
+.message-mention {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.15em;
+  margin: 0 0.04em;
+  padding: 0.04em 0.34em;
+  border-radius: 5px;
+  border: 1px solid #495b8f;
+  background: rgb(112 142 240 / 24%);
+  color: #d6e2ff;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.message-mention.is-user {
+  border-color: #4d6198;
+  background: rgb(113 142 247 / 24%);
+}
+
+.message-mention.is-channel {
+  border-color: #6370a3;
+  background: rgb(112 125 178 / 24%);
+}
+
+.message-mention.is-current-user {
+  border-color: #84a5ff;
+  background: rgb(138 169 255 / 35%);
+  color: #f3f8ff;
+}
+
+.message-row.is-mentioned-current-user .message-mention.is-current-user {
+  border-color: #97b0f7;
+  background: rgb(158 183 255 / 44%);
 }
 
 .message-time-inline {
@@ -3994,6 +4057,53 @@ button {
   border-color: #536692;
   background: #34405d;
   color: #f0f4ff;
+}
+
+.composer-mention-menu {
+  position: absolute;
+  left: 44px;
+  right: 92px;
+  bottom: calc(100% + 10px);
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid #455273;
+  background: linear-gradient(180deg, #1f2638, #1a2132);
+  box-shadow: 0 14px 30px rgb(9 12 20 / 55%);
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  z-index: 13;
+}
+
+.composer-mention-option {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #ecf1ff;
+  text-align: left;
+  padding: 7px 8px;
+  display: grid;
+  gap: 2px;
+}
+
+.composer-mention-option:hover,
+.composer-mention-option.is-active {
+  border-color: #5f739f;
+  background: #2f3a55;
+}
+
+.composer-mention-option-token {
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.composer-mention-option-meta {
+  color: #aab5d1;
+  font-size: 0.72rem;
+  line-height: 1.2;
 }
 
 .composer-emoji-picker {

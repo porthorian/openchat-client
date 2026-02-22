@@ -17,6 +17,7 @@ type Channel = {
   name: string;
   type: "text" | "voice";
   unreadCount?: number;
+  mentionCount?: number;
 };
 
 type ChannelGroup = {
@@ -437,7 +438,13 @@ onBeforeUnmount(() => {
                 <AppIcon :path="mdiMessage" :size="14" />
               </span>
               <span
-                v-if="channel.type === 'text' && (channel.unreadCount ?? 0) > 0"
+                v-if="channel.type === 'text' && (channel.mentionCount ?? 0) > 0"
+                class="badge mention-badge"
+              >
+                {{ (channel.mentionCount ?? 0) > 99 ? "99+" : channel.mentionCount }}
+              </span>
+              <span
+                v-else-if="channel.type === 'text' && (channel.unreadCount ?? 0) > 0"
                 class="badge"
               >
                 {{ channel.unreadCount }}

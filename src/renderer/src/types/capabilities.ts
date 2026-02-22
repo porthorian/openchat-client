@@ -22,6 +22,20 @@ export type CoreFeatureFlagsResponse = {
   notifications?: boolean;
 };
 
+export type MentionCapabilitiesResponse = {
+  user?: boolean;
+  channel?: boolean;
+  resolve?: boolean;
+  notifications?: boolean;
+  supported_tokens?: string[];
+};
+
+export type ReadAckCapabilitiesResponse = {
+  channel?: boolean;
+  cursor_type?: string;
+  monotonic?: boolean;
+};
+
 export type CapabilityLimitsResponse = {
   max_message_bytes?: number;
   max_upload_bytes?: number;
@@ -102,6 +116,8 @@ export type ServerCapabilitiesResponse = {
   profile_data_policy: ProfileDataPolicy;
   transport: TransportCapabilitiesResponse;
   features: CoreFeatureFlagsResponse;
+  mentions?: MentionCapabilitiesResponse;
+  read_acks?: ReadAckCapabilitiesResponse;
   limits: CapabilityLimitsResponse;
   security: SecurityCapabilitiesResponse;
   rtc?: RTCCapabilitiesResponse;
@@ -119,6 +135,20 @@ export type CoreFeatureFlags = {
   presence: boolean;
   attachments: boolean;
   notifications: boolean;
+};
+
+export type MentionCapabilities = {
+  user: boolean;
+  channel: boolean;
+  resolve: boolean;
+  notifications: boolean;
+  supportedTokens: string[];
+};
+
+export type ReadAckCapabilities = {
+  channel: boolean;
+  cursorType: string | null;
+  monotonic: boolean;
 };
 
 export type CapabilityLimits = {
@@ -201,6 +231,8 @@ export type ServerCapabilities = {
   profileDataPolicy: ProfileDataPolicy;
   transport: TransportCapabilities;
   features: CoreFeatureFlags;
+  mentions: MentionCapabilities;
+  readAcks: ReadAckCapabilities;
   limits: CapabilityLimits;
   security: SecurityCapabilities;
   rtc: RTCCapabilities | null;
@@ -279,6 +311,18 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
       presence: source.features.presence ?? false,
       attachments: source.features.attachments ?? false,
       notifications: source.features.notifications ?? false
+    },
+    mentions: {
+      user: source.mentions?.user ?? false,
+      channel: source.mentions?.channel ?? false,
+      resolve: source.mentions?.resolve ?? false,
+      notifications: source.mentions?.notifications ?? false,
+      supportedTokens: source.mentions?.supported_tokens ?? []
+    },
+    readAcks: {
+      channel: source.read_acks?.channel ?? false,
+      cursorType: source.read_acks?.cursor_type ?? null,
+      monotonic: source.read_acks?.monotonic ?? false
     },
     limits: {
       maxMessageBytes: source.limits.max_message_bytes ?? null,

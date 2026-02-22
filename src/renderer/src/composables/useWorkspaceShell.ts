@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DesktopCaptureSource, RuntimeInfo } from "@shared/ipc";
-import type { Channel, ChannelGroup } from "@renderer/types/chat";
+import type { Channel, ChannelGroup, MentionCandidate } from "@renderer/types/chat";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
@@ -233,7 +233,8 @@ export function useWorkspaceShell() {
       ...group,
       channels: group.channels.map((channel) => ({
         ...channel,
-        unreadCount: channel.type === "text" ? chat.unreadCountForChannel(channel.id) : channel.unreadCount
+        unreadCount: channel.type === "text" ? chat.unreadCountForChannel(channel.id) : channel.unreadCount,
+        mentionCount: channel.type === "text" ? chat.mentionCountForChannel(channel.id) : 0
       }))
     }));
     const filter = appUI.channelFilter.trim().toLowerCase();
@@ -476,6 +477,17 @@ export function useWorkspaceShell() {
     return summary;
   });
 
+  const mentionByServer = computed<Record<string, number>>(() => {
+    const summary: Record<string, number> = {};
+    registry.servers.forEach((server) => {
+      const mentionCount = chat.mentionCountForServer(server.serverId);
+      if (mentionCount > 0) {
+        summary[server.serverId] = mentionCount;
+      }
+    });
+    return summary;
+  });
+
   async function hydrateServer(serverId: string): Promise<void> {
     const server = registry.byId(serverId);
     if (!server) return;
@@ -539,7 +551,6 @@ export function useWorkspaceShell() {
           deviceID: localDeviceID.value
         });
         chat.subscribeToChannel(serverId, targetChannelID);
-        chat.markChannelRead(targetChannelID);
       }
     } finally {
       isHydrating.value = false;
@@ -744,7 +755,6 @@ export function useWorkspaceShell() {
       deviceID: localDeviceID.value
     });
     chat.subscribeToChannel(appUI.activeServerId, channelId);
-    chat.markChannelRead(channelId);
   }
 
   function selectVoiceChannel(channelId: string): void {
@@ -912,7 +922,10 @@ export function useWorkspaceShell() {
         maxMessageBytes: server.capabilities?.limits.maxMessageBytes ?? null,
         maxUploadBytes: server.capabilities?.limits.maxUploadBytes ?? null
       });
-      chat.markChannelRead(appUI.activeChannelId);
+      void chat.syncReadAckForChannel({
+        serverId: appUI.activeServerId,
+        channelId: appUI.activeChannelId
+      });
     } catch (error) {
       if (error instanceof Error) {
         messageSendError.value = error.message;
@@ -929,8 +942,26 @@ export function useWorkspaceShell() {
     chat.sendTyping(serverId, channelId, isTyping);
   }
 
+  async function fetchMentionCandidatesForActiveChannel(query: string): Promise<MentionCandidate[]> {
+    const serverId = appUI.activeServerId;
+    const channelId = appUI.activeChannelId;
+    if (!serverId || !channelId) return [];
+    return chat.fetchMentionCandidates({
+      serverId,
+      channelId,
+      query,
+      limit: 12
+    });
+  }
+
   function markChannelsRead(channelIds: string[]): void {
     chat.markChannelsRead(channelIds);
+    channelIds.forEach((channelId) => {
+      void chat.syncReadAckForChannel({
+        serverId: appUI.activeServerId,
+        channelId
+      });
+    });
   }
 
   function markMessageUnread(payload: { channelId: string; messageId: string }): void {
@@ -1430,6 +1461,7 @@ export function useWorkspaceShell() {
     servers: registry.servers,
     activeServerId: appUI.activeServerId,
     unreadByServer: unreadByServer.value,
+    mentionByServer: mentionByServer.value,
     mutedByServer: registry.servers.reduce<Record<string, boolean>>((summary, server) => {
       summary[server.serverId] = chat.serverMutedFor(server.serverId);
       return summary;
@@ -1516,6 +1548,12 @@ export function useWorkspaceShell() {
     channelId: activeChannelName.value,
     activeServerId: appUI.activeServerId,
     activeServerBackendUrl: activeServer.value?.backendUrl ?? "",
+    channelNamesById: rawChannelGroups.value.reduce<Record<string, string>>((summary, group) => {
+      group.channels.forEach((channel) => {
+        summary[channel.id] = channel.name;
+      });
+      return summary;
+    }, {}),
     messages: activeMessages.value,
     isLoadingMessages: isLoadingMessages.value,
     isSendingMessage: isSendingMessage.value,
@@ -1529,7 +1567,8 @@ export function useWorkspaceShell() {
     localProfileAvatarMode: identity.avatarMode,
     localProfileAvatarPresetId: identity.avatarPresetId,
     localProfileAvatarImageDataUrl: identity.avatarImageDataUrl,
-    remoteProfilesByUID: activeProfilesByUID.value
+    remoteProfilesByUID: activeProfilesByUID.value,
+    fetchMentionCandidates: fetchMentionCandidatesForActiveChannel
   }));
 
   const membersPaneProps = computed(() => ({

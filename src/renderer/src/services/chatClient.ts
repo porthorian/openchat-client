@@ -1,10 +1,14 @@
 import type {
+  ChannelReadAck,
   ChannelGroup,
   ChatMessage,
   LinkPreview,
+  MentionCandidate,
   MemberItem,
   MessageActionPermissions,
   MessageAttachment,
+  MessageMention,
+  MessageMentionRange,
   MessageReplyReference
 } from "@renderer/types/chat";
 
@@ -128,6 +132,76 @@ function normalizeMessageAttachments(input: unknown): MessageAttachment[] | unde
     .map((item) => normalizeMessageAttachment(item))
     .filter((item): item is MessageAttachment => item !== null);
   return attachments.length > 0 ? attachments : undefined;
+}
+
+function normalizeMessageMentionRange(input: unknown): MessageMentionRange | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const start = Number(payload.start ?? payload.start_index ?? payload.startIndex);
+  const end = Number(payload.end ?? payload.end_index ?? payload.endIndex);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const normalizedStart = Math.max(0, Math.trunc(start));
+  const normalizedEnd = Math.max(normalizedStart, Math.trunc(end));
+  return {
+    start: normalizedStart,
+    end: normalizedEnd
+  };
+}
+
+function normalizeMessageMention(input: unknown): MessageMention | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const rawType = String(payload.type ?? "").trim().toLowerCase();
+  if (rawType !== "user" && rawType !== "channel") return null;
+  return {
+    type: rawType,
+    token: readOptionalString(payload, ["token", "raw_token", "rawToken"]),
+    targetId: readOptionalString(payload, ["target_id", "targetId", "user_uid", "userUID"]),
+    displayText: readOptionalString(payload, ["display_text", "displayText", "label", "name"]),
+    range: normalizeMessageMentionRange(payload.range ?? payload.position ?? payload.offsets)
+  };
+}
+
+function normalizeMessageMentions(input: unknown): MessageMention[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const mentions = input
+    .map((item) => normalizeMessageMention(item))
+    .filter((item): item is MessageMention => item !== null);
+  return mentions.length > 0 ? mentions : undefined;
+}
+
+function normalizeMentionCandidate(input: unknown): MentionCandidate | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const rawType = String(payload.type ?? "").trim().toLowerCase();
+  if (rawType !== "user" && rawType !== "channel") return null;
+  const displayText =
+    readOptionalString(payload, ["display_text", "displayText", "label", "name"]) ??
+    readOptionalString(payload, ["target_id", "targetId", "token"]) ??
+    "";
+  if (!displayText) return null;
+  return {
+    type: rawType,
+    token: readOptionalString(payload, ["token", "raw_token", "rawToken"]),
+    targetId: readOptionalString(payload, ["target_id", "targetId"]),
+    displayText
+  };
+}
+
+function normalizeChannelReadAck(input: unknown, fallbackChannelId: string): ChannelReadAck {
+  const payload = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  return {
+    channelId:
+      readOptionalString(payload, ["channel_id", "channelId"]) ?? fallbackChannelId.trim(),
+    userUID: readOptionalString(payload, ["user_uid", "userUID"]),
+    lastReadMessageId: readOptionalString(payload, ["last_read_message_id", "lastReadMessageId"]),
+    ackedAt: readOptionalString(payload, ["acked_at", "ackedAt"]),
+    cursorIndex: (() => {
+      const value = Number(payload.cursor_index ?? payload.cursorIndex);
+      if (!Number.isFinite(value)) return null;
+      return Math.max(0, Math.trunc(value));
+    })()
+  };
 }
 
 function readUnknown(source: Record<string, unknown>, keys: string[]): unknown {
@@ -341,6 +415,7 @@ function normalizeMessagePayload(input: unknown): ChatMessage | null {
     body: normalizeMessageBodyText(payload.body),
     createdAt: String(payload.created_at ?? payload.createdAt ?? new Date().toISOString()),
     replyTo: replyTo ?? null,
+    mentions: normalizeMessageMentions(payload.mentions),
     linkPreviews: normalizeLinkPreviews(payload.link_previews ?? payload.linkPreviews),
     attachments: normalizeMessageAttachments(payload.attachments),
     permalink: permalink || null,
@@ -402,6 +477,90 @@ export async function fetchMessages(backendUrl: string, channelId: string, limit
   return (payload.messages ?? [])
     .map((message) => normalizeMessagePayload(message))
     .filter((message): message is ChatMessage => message !== null);
+}
+
+export async function resolveMentionCandidates(params: {
+  backendUrl: string;
+  channelId: string;
+  query: string;
+  userUID: string;
+  deviceID: string;
+  limit?: number;
+}): Promise<MentionCandidate[]> {
+  const endpoint = new URL(
+    `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/mentions:resolve`
+  );
+  endpoint.searchParams.set("query", params.query);
+  if (typeof params.limit === "number" && Number.isFinite(params.limit) && params.limit > 0) {
+    endpoint.searchParams.set("limit", String(Math.trunc(params.limit)));
+  }
+  const response = await fetch(endpoint.toString(), {
+    headers: authHeaders(params.userUID, params.deviceID)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to resolve mentions (${response.status}): ${text}`);
+  }
+  const payload = (await response.json()) as {
+    results?: unknown[];
+  };
+  return (payload.results ?? [])
+    .map((item) => normalizeMentionCandidate(item))
+    .filter((item): item is MentionCandidate => item !== null);
+}
+
+export async function fetchChannelReadAck(params: {
+  backendUrl: string;
+  channelId: string;
+  userUID: string;
+  deviceID: string;
+}): Promise<ChannelReadAck> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/read-ack`;
+  const response = await fetch(endpoint, {
+    headers: authHeaders(params.userUID, params.deviceID)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to fetch read ack (${response.status}): ${text}`);
+  }
+  const payload = (await response.json()) as {
+    read_ack?: unknown;
+    channel_id?: string;
+  };
+  return normalizeChannelReadAck(payload.read_ack, payload.channel_id ?? params.channelId);
+}
+
+export async function updateChannelReadAck(params: {
+  backendUrl: string;
+  channelId: string;
+  userUID: string;
+  deviceID: string;
+  lastReadMessageId?: string | null;
+}): Promise<{ readAck: ChannelReadAck; applied: boolean }> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/read-ack`;
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      ...authHeaders(params.userUID, params.deviceID),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      last_read_message_id: params.lastReadMessageId?.trim() || undefined
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update read ack (${response.status}): ${text}`);
+  }
+  const payload = (await response.json()) as {
+    read_ack?: unknown;
+    channel_id?: string;
+    applied?: boolean;
+  };
+  return {
+    readAck: normalizeChannelReadAck(payload.read_ack, payload.channel_id ?? params.channelId),
+    applied: Boolean(payload.applied)
+  };
 }
 
 export async function createMessage(params: {

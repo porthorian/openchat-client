@@ -5,6 +5,7 @@ export type Channel = {
   name: string;
   type: ChannelType;
   unreadCount?: number;
+  mentionCount?: number;
 };
 
 export type ChannelGroup = {
@@ -36,6 +37,36 @@ export type MessageReplyReference = {
   isUnavailable: boolean;
 };
 
+export type MessageMentionType = "user" | "channel";
+
+export type MessageMentionRange = {
+  start: number;
+  end: number;
+};
+
+export type MessageMention = {
+  type: MessageMentionType;
+  token: string | null;
+  targetId: string | null;
+  displayText: string | null;
+  range: MessageMentionRange | null;
+};
+
+export type MentionCandidate = {
+  type: MessageMentionType;
+  token: string | null;
+  targetId: string | null;
+  displayText: string;
+};
+
+export type ChannelReadAck = {
+  channelId: string;
+  userUID: string | null;
+  lastReadMessageId: string | null;
+  ackedAt: string | null;
+  cursorIndex: number | null;
+};
+
 export type ChatMessage = {
   id: string;
   channelId: string;
@@ -43,6 +74,7 @@ export type ChatMessage = {
   body: string;
   createdAt: string;
   replyTo?: MessageReplyReference | null;
+  mentions?: MessageMention[];
   linkPreviews?: LinkPreview[];
   attachments?: MessageAttachment[];
   permalink?: string | null;
