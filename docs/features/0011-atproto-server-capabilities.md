@@ -19,7 +19,7 @@ OpenChat servers can expose different AT Protocol behaviors. The client needs a 
 ### In Scope
 - Capability discovery contract extension for AT metadata.
 - Join flow compatibility checks and trust/disclosure presentation.
-- Server settings diagnostics for AT identity, sync, and moderation-related capabilities.
+- Server settings diagnostics for AT identity, sync, mentions, read-ack, and moderation-related capabilities.
 - Re-probe behavior on reconnect/version change and stale capability handling.
 - Per-server feature gating based on capability matrix.
 
@@ -34,7 +34,7 @@ OpenChat servers can expose different AT Protocol behaviors. The client needs a 
 2. Client probes `GET /v1/client/capabilities` (or legacy `/client/capabilities`).
 3. Client evaluates AT support, trust signals, and compatibility requirements.
 4. Client shows join summary with enabled/disabled AT features and warnings.
-5. After join, server settings include AT diagnostics and last probe timestamp.
+5. After join, server settings include AT diagnostics (including mention/read-ack support) and last probe timestamp.
 6. On reconnect/version change, client re-probes and updates feature gating.
 
 ## UI States
@@ -52,7 +52,9 @@ OpenChat servers can expose different AT Protocol behaviors. The client needs a 
   - `atproto.did_methods`
   - `atproto.service_endpoints` (pds/appview/relay references when applicable)
   - `atproto.lexicon_namespaces`
-  - `atproto.features` (identity_linking, write_bridge, repo_ingest, labels)
+  - `atproto.features` (identity_linking, write_bridge, repo_ingest, labels, mentions_user, mentions_channel, mentions_notifications)
+  - `atproto.mentions` (supported tokens like `@here`, `@channel`, policy hints, and max mention targets when applicable)
+  - `atproto.read_acks` (channel-level read cursor support, cursor type, and transport mode)
   - `atproto.sync` (firehose support, cursor resume support, lag hints)
   - `atproto.trust` (verification level, certificate/pinning metadata when applicable)
 - Capability contract must remain backward-compatible for additive changes.
@@ -93,8 +95,8 @@ OpenChat servers can expose different AT Protocol behaviors. The client needs a 
 ## Testing Strategy
 - Unit: capability parsing, validation, and feature-gating logic.
 - Component: join summary and server diagnostics rendering.
-- Integration: probe flow across AT-enabled, non-AT, and malformed capability fixtures.
-- End-to-end: join flow with compatibility success/failure and re-probe on reconnect.
+- Integration: probe flow across AT-enabled, non-AT, malformed, and partial mention/read-ack capability fixtures.
+- End-to-end: join flow with compatibility success/failure, mention feature gating, and re-probe on reconnect.
 - Manual QA: trust warning clarity and stale snapshot degraded behavior.
 
 ## Rollout Plan
@@ -111,3 +113,4 @@ OpenChat servers can expose different AT Protocol behaviors. The client needs a 
 - Which AT fields should be mandatory in the first stable capability contract?
 - Should capability probes be user-triggerable in settings for diagnostics?
 - How should trust verification levels map to UI severity categories?
+- Should mention-related capabilities be considered incompatible when `atproto.features.mentions_*` is present but `atproto.read_acks` is missing?
