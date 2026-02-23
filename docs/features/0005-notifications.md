@@ -2,7 +2,7 @@
 
 - Status: Implemented (M2 baseline)
 - Owners: Maintainers
-- Last Updated: 2026-02-17
+- Last Updated: 2026-02-22
 - Related ADRs: `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0004-multi-server-isolation.md`
 - Related Issues: TBD
 
@@ -17,7 +17,7 @@ Users need timely, controllable notifications for mentions and relevant activity
 ## Scope
 ### In Scope
 - Desktop notification delivery for incoming messages when relevant.
-- Mention-sensitive behavior (always notify when current UID is mentioned).
+- Mention-sensitive behavior (direct user mentions plus `@here`/`@channel` audience mentions).
 - Per-server mute toggle from server context menu.
 - Unread badge updates across server rail and channel list.
 
@@ -31,7 +31,7 @@ Users need timely, controllable notifications for mentions and relevant activity
 ## UX Flow
 1. User optionally mutes a server from server context menu.
 2. Incoming realtime events are filtered by mute state, mention detection, channel activity, and window visibility.
-3. Client shows desktop notification when conditions are met.
+3. Client shows desktop notification when conditions are met (mention-class messages can notify even when active channel is focused).
 4. Clicking notification focuses the app window.
 
 ## UI States
@@ -59,9 +59,9 @@ Users need timely, controllable notifications for mentions and relevant activity
 - Do not require personal profile payloads from backend for notification rendering.
 
 ## Accessibility Requirements
-- Screen-reader friendly notification text and action controls.
-- Server mute controls remain keyboard accessible from context menu.
-- Configurable sound/visual cues where possible.
+- Desktop notification text remains plain-text readable by assistive technologies.
+- Server mute control is available in server context menu; keyboard-first invocation hardening is still in progress.
+- Configurable sound/visual cues remain a follow-up for dedicated settings shell work.
 
 ## Telemetry and Observability
 - Events:
@@ -69,6 +69,7 @@ Users need timely, controllable notifications for mentions and relevant activity
 - Metrics:
   - unread count accuracy
   - notification permission grant/deny rates (manual QA today)
+  - duplicate notification rate on reconnect/replay paths (manual QA today)
 
 ## Testing Strategy
 - Unit: mute/mention filtering logic.

@@ -1,7 +1,7 @@
 # 0013 - Mentions Core
 
 ## Status
-- Draft
+- Implemented baseline (M3 hardening in progress)
 
 ## Problem Statement
 - OpenChat needs first-class mentions so users can direct attention in busy channels.
@@ -10,14 +10,14 @@
 
 ## User Stories and UX Flows
 - As a user, I can type `@` in the composer and select a person to mention.
-- As a user, I can use special channel mentions such as `@channel`, `@here`, and other server-supported audience mentions.
+- As a user, I can use special channel mentions such as `@channel` and `@here`.
 - As a user, when I am mentioned, I see unread mention indicators in the channel list and server rail.
 - As a user, mention indicators clear when a read acknowledgment confirms I have read past the mentioned message.
 
 ## Scope
 - In scope:
   - User mentions.
-  - Channel/audience mentions (`@channel`, `@here`, and server-capability-supported variants).
+  - Channel/audience mentions (`@channel`, `@here`).
   - Mention rendering in timeline and composer insertion.
   - Mention counters per channel and per server.
   - Mention counter clearing on read acknowledgment.
@@ -32,6 +32,9 @@
 - `mentions.resolve`: backend supports mention autocomplete resolution.
 - `mentions.notifications`: backend emits mention-qualified notification signals.
 - `read_acks.channel`: backend emits or accepts per-channel read acknowledgments.
+- Current client behavior when capability data is incomplete:
+  - mention autocomplete gracefully falls back to plain text entry when resolve fails.
+  - mention unread counters still compute from message metadata + read-ack state.
 
 ## Mention and Read Ack Contract (Client View)
 - Message mention entity fields:
@@ -40,39 +43,42 @@
   - `target_id`: stable server-scoped identifier when applicable
   - `display_text`
   - `range`: UTF-16 start/end offsets for render mapping
-  - `server_id`
 - Read ack fields:
-  - `server_id`
   - `channel_id`
-  - `last_read_message_id` or `last_read_cursor`
+  - `user_uid`
+  - `last_read_message_id`
   - `acked_at`
+  - `cursor_index`
+  - optional `applied` on PUT response
 
 ## Read Ack Clearing Rules
 - Mention counters clear only when read ack advances past mentioned message positions.
-- Local UI may show a temporary "pending clear" state while ack is in flight, but durable counter state remains ack-driven.
+- Client applies an optimistic local read cursor update, then reconciles with server response/event state.
 - Ack cursors are monotonic per channel; stale/older ack events must be ignored.
 - On reconnect, client recomputes mention counters using latest ack cursor plus cached timeline window.
 
 ## UI States
 - Loading:
-  - Composer mention suggestions show loading state while resolving.
+  - Composer suggestions resolve asynchronously; baseline UI has no explicit loading spinner.
 - Empty:
   - No matches state in mention picker.
 - Error:
-  - Suggestion fetch failure falls back to plain text entry with non-blocking error toast.
+  - Suggestion fetch failure falls back to plain text entry without blocking send.
 - Degraded:
-  - If mention capabilities are missing, render raw `@text` without entity linking and suppress mention counters.
+  - If mention metadata is absent, user mention detection falls back to text heuristics for the active UID.
 
 ## Data Model and State Impact
-- `useMessageStore`:
-  - Store mention entities with message payloads under `server_id` and `channel_id`.
-- `useChannelStore`:
-  - Maintain unread mention counters per channel.
-  - Track per-channel read ack cursor for clearing logic.
-- `useServerRegistryStore`:
-  - Aggregate channel-level mention counts into server rail badges.
-- Notification service:
-  - Trigger in-app/desktop mention notifications gated by focused channel and user preferences.
+- `useChatStore`:
+  - stores message mention entities in `messagesByChannel`.
+  - tracks per-channel read-ack state in `readAckByChannel`.
+  - tracks unread mention counters in `mentionUnreadByChannel`.
+  - aggregates per-server mention counts through getters consumed by workspace shell.
+- `ChatComposer`:
+  - resolves mention candidates via `/mentions:resolve`.
+  - inserts selected mention tokens into draft text.
+- `ChatMessageRow`:
+  - renders mention tokens as mention pills.
+  - highlights rows that mention the current user.
 
 ## Security and Privacy Considerations
 - Mention resolution requests must include only protocol-required identifiers.
@@ -83,27 +89,32 @@
 ## Accessibility Requirements
 - Mention suggestions are keyboard navigable with clear active option semantics.
 - Mention highlights in timeline meet contrast targets and do not rely on color alone.
-- Screen readers announce mention type and display text consistently.
-- Counter badges include accessible labels (example: "3 unread mentions").
+- Mention tokens render as plain text labels so screen readers can read the mention text.
+- Dedicated mention-badge aria labeling is a hardening follow-up item.
 
 ## Test Strategy
 - Unit tests:
-  - Mention entity parse/store behavior.
-  - Counter increment/decrement and read-ack monotonicity rules.
+  - Mention parse/store behavior.
+  - Counter recomputation and read-ack monotonicity rules.
 - Integration tests:
   - Composer autocomplete and insertion flow for user and channel mentions.
   - Read ack event processing clears counters correctly.
 - E2E smoke tests:
   - Send mention, receive mention badge, issue read ack, verify badge clears.
   - Reconnect scenario with stale ack and latest ack reconciliation.
+- Current gap:
+  - dedicated automated mention tests are still pending; current validation is manual QA plus type/build checks.
 
 ## Rollout Plan and Success Criteria
 - Phase 1:
-  - User mentions + read-ack-based counter clearing.
+  - User mentions + read-ack-based counter clearing. (Implemented)
 - Phase 2:
-  - Channel/audience mentions (`@channel`, `@here`, capability-based variants).
+  - Channel/audience mentions (`@channel`, `@here`). (Implemented)
+- Hardening follow-up:
+  - capability-driven audience token handling beyond `@here`/`@channel`.
+  - explicit mention resolve loading/error UI polish.
+  - dedicated automated test coverage.
 - Success criteria:
   - Mention counters match server read state with no persistent false positives after ack.
   - No cross-server mention state contamination.
   - Keyboard-only mention compose flow is fully functional.
-

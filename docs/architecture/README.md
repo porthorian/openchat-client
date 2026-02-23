@@ -16,6 +16,7 @@ This section defines the client architecture, major constraints, and accepted te
 - Vue 3 client architecture and PrimeVue unstyled design-system approach.
 - Pinia-based state organization with server-scoped isolation.
 - Clear client/backend contract boundaries for this repository.
+- Mention/read-ack contract alignment across composer, timeline, and notification policy.
 - User-owned identity model with UID-only server disclosure.
 - WebRTC reliability, reconnect, and moderation-enforcement test coverage.
 

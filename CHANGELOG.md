@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Mention rendering in message rows with mention-pill styling and current-user mention highlight treatment.
+
+### Changed
+- Mention/profile hydration now includes mention target UIDs so mention pills resolve to display names when profile data is available.
+- Documentation status and contracts were aligned with implemented mentions/read-ack behavior.
+
 ## [0.0.6] - 2026-02-20
 
 ### Added

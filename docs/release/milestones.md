@@ -1,6 +1,6 @@
 # Release Milestones
 
-Last updated: 2026-02-20
+Last updated: 2026-02-22
 
 ## M0: Project Foundation
 - Status: `done`
@@ -24,6 +24,7 @@ Last updated: 2026-02-20
   - Message timeline and composer baseline.
   - Realtime message/presence/typing subscriptions.
   - Desktop notifications baseline and unread tracking.
+  - Mentions baseline (composer suggestions, timeline mention rendering, read-ack-driven mention badge clearing).
 
 ## M3: Hardening and Open-Source Readiness
 - Status: `in_progress`

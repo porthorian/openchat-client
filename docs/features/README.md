@@ -25,8 +25,8 @@ All user-facing features must have a feature spec before implementation.
 - `0010-atproto-identity-linking.md` (Draft)
 - `0011-atproto-server-capabilities.md` (Draft)
 - `0012-atproto-message-sync.md` (Draft)
-- `0013-mentions-core.md` (Draft)
-- `0014-mention-notification-policy.md` (Draft)
+- `0013-mentions-core.md` (Implemented baseline: composer mentions + timeline mention rendering + read-ack badge clearing)
+- `0014-mention-notification-policy.md` (Implemented baseline: mention-aware desktop notification policy; hardening in progress)
 
 ## Additional Specs
 - `client-upgrade-mechanism.md` (Implemented baseline: periodic checks + taskbar action flow)

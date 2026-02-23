@@ -34,6 +34,7 @@ Details: `docs/release/milestones.md`
 | Multi-server switching/isolation | Implemented |
 | Text channels + message timeline/composer | Implemented |
 | Realtime messaging + typing + presence | Implemented |
+| Mentions + read-ack badge clearing | Implemented baseline (policy hardening in progress) |
 | Voice channel join + audio relay controls | Implemented baseline (hardening in progress) |
 | Video/screenshare surfaces | Implemented baseline (hardening in progress) |
 | Client update checks + install flow | Implemented baseline |

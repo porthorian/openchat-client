@@ -29,6 +29,8 @@ This document defines backend assumptions required by the OpenChat client. It is
 - `profile_data_policy` (must declare `uid_only` compatibility; may additionally advertise profile-sync capability)
 - `transport` (WebSocket/SSE/polling support)
 - `features` (feature flags and limits)
+- `mentions` (optional; mention feature flags and supported audience tokens)
+- `read_acks` (optional; read-ack cursor semantics)
 - `limits` (message size, upload size, rate limits)
 - `security` (transport requirements, optional certificate metadata)
 
@@ -131,6 +133,66 @@ The exact URI layout is backend-defined, but capabilities must describe availabl
 - `404` for unknown `server_id`
 - `401` for missing/invalid identity in strict auth mode
 - standard error envelope (`code`, `message`, `retryable`)
+
+## 6.2) Mentions and Read Ack Contract
+
+### Capability fields
+When mention/read-ack features are available, capability discovery should expose:
+- `mentions.user`
+- `mentions.channel`
+- `mentions.resolve`
+- `mentions.notifications`
+- `mentions.supported_tokens` (for audience mentions)
+- `read_acks.channel`
+- `read_acks.cursor_type`
+- `read_acks.monotonic`
+
+### Mention resolve endpoint
+- `GET /v1/channels/{channel_id}/mentions:resolve`
+  - query params:
+    - `query` (required)
+    - `limit` (optional)
+  - requester headers:
+    - `X-OpenChat-User-UID`
+    - `X-OpenChat-Device-ID`
+  - response payload:
+    - `results[]` with mention candidates containing:
+      - `type` (`user` | `channel`)
+      - `token`
+      - `target_id`
+      - `display_text`
+
+### Read-ack endpoints
+- `GET /v1/channels/{channel_id}/read-ack`
+  - requester headers:
+    - `X-OpenChat-User-UID`
+    - `X-OpenChat-Device-ID`
+  - response payload:
+    - `read_ack` including:
+      - `channel_id`
+      - `user_uid`
+      - `last_read_message_id`
+      - `acked_at`
+      - `cursor_index`
+- `PUT /v1/channels/{channel_id}/read-ack`
+  - requester headers:
+    - `X-OpenChat-User-UID`
+    - `X-OpenChat-Device-ID`
+  - request payload:
+    - `last_read_message_id`
+  - response payload:
+    - `read_ack` (same shape as GET)
+    - `applied` (`true` when ack advanced, `false` when ignored as stale)
+
+### Realtime event expectations
+- `chat.read_ack.updated` should be emitted after server-side ack advancement.
+- Event payload should include:
+  - `channel_id`
+  - `user_uid`
+  - `last_read_message_id`
+  - `acked_at`
+  - `cursor_index`
+- Read-ack progression must be monotonic per `(channel_id, user_uid)` pair.
 
 ## 7) Pagination and Synchronization
 - Cursor-based pagination is preferred for message history.
