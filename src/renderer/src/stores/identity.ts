@@ -22,7 +22,15 @@ type PersistedIdentityState = {
 };
 
 function createIdentityId(): string {
-  const randomSegment = Math.random().toString(36).slice(2, 10);
+  const webCrypto = globalThis.crypto;
+  if (!webCrypto?.getRandomValues) {
+    throw new Error("Secure random number generator is unavailable.");
+  }
+
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const randomBytes = new Uint8Array(8);
+  webCrypto.getRandomValues(randomBytes);
+  const randomSegment = Array.from(randomBytes, (byte) => alphabet[byte % alphabet.length]).join("");
   return `identity_${randomSegment}`;
 }
 
