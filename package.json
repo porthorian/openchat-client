@@ -14,7 +14,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "test:security": "node --test src/renderer/src/utils/messageFormatting.security.test.ts",
+    "test:security": "node --test src/renderer/src/utils/messageFormatting.security.test.ts src/main/openGraphText.security.test.ts",
     "typecheck:app": "vue-tsc --noEmit -p tsconfig.json",
     "typecheck:build": "tsc --noEmit -p tsconfig.build-scripts.json",
     "typecheck": "yarn run typecheck:app && yarn run typecheck:build",

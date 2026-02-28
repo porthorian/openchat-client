@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { IPCChannels, type DesktopCaptureSource, type OpenGraphMetadata, type RuntimeInfo } from "../shared/ipc";
 import { ClientUpdateService } from "./clientUpdateService";
+import { sanitizeText } from "./openGraphText";
 
 const isMac = process.platform === "darwin";
 const appName = "OpenChat Client";
@@ -68,27 +69,6 @@ function resolveAppIconPath(): string | null {
     candidates
   });
   return null;
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
-}
-
-function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function sanitizeText(value: string | null, maxLength: number): string | null {
-  if (!value) return null;
-  const normalized = normalizeWhitespace(decodeHtmlEntities(value));
-  if (!normalized) return null;
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
 function toHttpURL(value: string, base?: URL): URL | null {
