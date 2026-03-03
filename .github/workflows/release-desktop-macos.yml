@@ -89,7 +89,7 @@ jobs:
           APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-macos
           path: release/**
