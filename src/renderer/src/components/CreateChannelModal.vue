@@ -21,16 +21,8 @@ const channelName = ref("");
 const selectedType = ref<ChannelType>("text");
 const selectedGroupId = ref("");
 
-const availableTypeOptions = computed(() => {
-  const available = new Set(props.groups.map((group) => group.kind));
-  return {
-    text: available.has("text"),
-    voice: available.has("voice")
-  };
-});
-
 const availableGroups = computed(() => {
-  return props.groups.filter((group) => group.kind === selectedType.value);
+  return props.groups;
 });
 
 function initializeForm(): void {
@@ -52,19 +44,8 @@ watch(
   }
 );
 
-watch(
-  () => selectedType.value,
-  () => {
-    const currentGroup = props.groups.find((group) => group.id === selectedGroupId.value);
-    if (currentGroup?.kind === selectedType.value) return;
-    selectedGroupId.value = availableGroups.value[0]?.id ?? "";
-  }
-);
-
 function setType(nextType: ChannelType): void {
   if (nextType === selectedType.value) return;
-  if (nextType === "text" && !availableTypeOptions.value.text) return;
-  if (nextType === "voice" && !availableTypeOptions.value.voice) return;
   selectedType.value = nextType;
 }
 
@@ -95,7 +76,6 @@ function submit(): void {
           type="button"
           class="create-channel-type-btn"
           :class="{ 'is-active': selectedType === 'text' }"
-          :disabled="!availableTypeOptions.text"
           @click="setType('text')"
         >
           # Text
@@ -104,7 +84,6 @@ function submit(): void {
           type="button"
           class="create-channel-type-btn"
           :class="{ 'is-active': selectedType === 'voice' }"
-          :disabled="!availableTypeOptions.voice"
           @click="setType('voice')"
         >
           Voice

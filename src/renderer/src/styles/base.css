@@ -4420,6 +4420,17 @@ button {
   outline: none;
 }
 
+.server-modal-field textarea {
+  border-radius: 8px;
+  border: 1px solid #353b4e;
+  background: #121521;
+  color: #e8edf9;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+  min-height: 88px;
+}
+
 .server-modal-field input:focus {
   border-color: #4c5c84;
 }
@@ -4428,8 +4439,73 @@ button {
   border-color: #4c5c84;
 }
 
+.server-modal-field textarea:focus {
+  border-color: #4c5c84;
+}
+
 .create-channel-modal {
   width: min(480px, 100%);
+}
+
+.server-settings-modal {
+  width: min(840px, 100%);
+}
+
+.server-settings-body {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 220px 1fr;
+}
+
+.server-settings-tabs {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.server-settings-tab {
+  min-height: 34px;
+  border-radius: 8px;
+  border: 1px solid #3a4258;
+  background: #1a202f;
+  color: #d5deef;
+  text-align: left;
+  padding: 0 10px;
+}
+
+.server-settings-tab.is-active {
+  border-color: #5b6f9e;
+  background: #2a3550;
+  color: #ffffff;
+}
+
+.server-settings-panel {
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+}
+
+.server-settings-placeholder {
+  margin: 0;
+  border: 1px dashed #44506f;
+  border-radius: 10px;
+  padding: 14px;
+  color: #aeb8d1;
+  background: #151b2b;
+}
+
+@media (max-width: 760px) {
+  .server-settings-body {
+    grid-template-columns: 1fr;
+  }
+
+  .server-settings-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .server-settings-tab {
+    text-align: center;
+  }
 }
 
 .create-channel-server {

@@ -16,6 +16,8 @@ type ServerDirectoryResponse = {
   servers?: Array<{
     server_id: string;
     display_name: string;
+    description?: string;
+    banner_preset?: string;
     icon_text: string;
     trust_state: "verified" | "unverified";
     identity_handshake_strategy: "challenge_signature" | "token_proof";
@@ -50,6 +52,8 @@ export async function fetchServerDirectory(
   return (payload.servers ?? []).map((server) => ({
     serverId: server.server_id,
     displayName: server.display_name,
+    description: typeof server.description === "string" ? server.description : "",
+    bannerPreset: typeof server.banner_preset === "string" ? server.banner_preset : "",
     backendUrl,
     iconText: server.icon_text,
     trustState: server.trust_state,

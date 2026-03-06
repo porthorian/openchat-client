@@ -14,19 +14,37 @@ function parseStoredServers(raw: string | null): ServerProfile[] {
   try {
     const parsed = JSON.parse(raw) as Partial<PersistedServerRegistryState>;
     const rawServers = Array.isArray(parsed.servers) ? parsed.servers : [];
-    return rawServers.filter((entry): entry is ServerProfile => {
-      return (
-        typeof entry.serverId === "string" &&
-        typeof entry.displayName === "string" &&
-        typeof entry.backendUrl === "string" &&
-        typeof entry.iconText === "string" &&
-        (entry.trustState === "verified" || entry.trustState === "unverified") &&
-        (entry.identityHandshakeStrategy === "challenge_signature" || entry.identityHandshakeStrategy === "token_proof") &&
-        (entry.userIdentifierPolicy === "server_scoped" ||
-          entry.userIdentifierPolicy === "global" ||
-          entry.userIdentifierPolicy === "either")
-      );
+    const normalized: ServerProfile[] = [];
+    rawServers.forEach((entry) => {
+      if (typeof entry !== "object" || entry === null) return;
+      const candidate = entry as Partial<ServerProfile>;
+      if (
+        typeof candidate.serverId !== "string" ||
+        typeof candidate.displayName !== "string" ||
+        typeof candidate.backendUrl !== "string" ||
+        typeof candidate.iconText !== "string" ||
+        (candidate.trustState !== "verified" && candidate.trustState !== "unverified") ||
+        (candidate.identityHandshakeStrategy !== "challenge_signature" && candidate.identityHandshakeStrategy !== "token_proof") ||
+        (candidate.userIdentifierPolicy !== "server_scoped" &&
+          candidate.userIdentifierPolicy !== "global" &&
+          candidate.userIdentifierPolicy !== "either")
+      ) {
+        return;
+      }
+      normalized.push({
+        ...candidate,
+        serverId: candidate.serverId,
+        displayName: candidate.displayName,
+        description: typeof candidate.description === "string" ? candidate.description : "",
+        bannerPreset: typeof candidate.bannerPreset === "string" ? candidate.bannerPreset : "",
+        backendUrl: candidate.backendUrl,
+        iconText: candidate.iconText,
+        trustState: candidate.trustState,
+        identityHandshakeStrategy: candidate.identityHandshakeStrategy,
+        userIdentifierPolicy: candidate.userIdentifierPolicy
+      });
     });
+    return normalized;
   } catch (_error) {
     return [];
   }
@@ -86,6 +104,19 @@ export const useServerRegistryStore = defineStore("server-registry", {
         return true;
       }
       return false;
+    },
+    patchServerProfile(
+      serverId: string,
+      patch: Partial<Pick<ServerProfile, "displayName" | "description" | "bannerPreset" | "iconText">>
+    ): boolean {
+      const target = this.servers.find((server) => server.serverId === serverId);
+      if (!target) return false;
+      if (typeof patch.displayName === "string") target.displayName = patch.displayName;
+      if (typeof patch.description === "string") target.description = patch.description;
+      if (typeof patch.bannerPreset === "string") target.bannerPreset = patch.bannerPreset;
+      if (typeof patch.iconText === "string" && patch.iconText.trim()) target.iconText = patch.iconText;
+      this.persistToStorage();
+      return true;
     },
     removeServer(serverId: string): boolean {
       const initialLength = this.servers.length;

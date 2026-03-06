@@ -10,6 +10,10 @@ export type ChannelCreationDefaultSelection = {
   selectedGroupId: string | null;
 };
 
+export type CategoryCreatedPatch = {
+  group: ChannelGroup;
+};
+
 export function applyChannelCreatedToGroups(
   groups: ChannelGroup[],
   patch: ChannelCreatedPatch
@@ -25,8 +29,6 @@ export function applyChannelCreatedToGroups(
   let inserted = false;
   const nextGroups = groups.map((group) => {
     if (group.id !== groupId) return group;
-    const expectedKind = patch.channel.type;
-    if (group.kind !== expectedKind) return group;
     inserted = true;
     return {
       ...group,
@@ -38,6 +40,23 @@ export function applyChannelCreatedToGroups(
     return { groups, inserted: false };
   }
   return { groups: nextGroups, inserted: true };
+}
+
+export function applyCategoryCreatedToGroups(
+  groups: ChannelGroup[],
+  patch: CategoryCreatedPatch
+): { groups: ChannelGroup[]; inserted: boolean } {
+  const groupID = patch.group.id.trim();
+  if (!groupID) {
+    return { groups, inserted: false };
+  }
+  if (groups.some((group) => group.id === groupID)) {
+    return { groups, inserted: false };
+  }
+  return {
+    groups: [...groups, patch.group],
+    inserted: true
+  };
 }
 
 type SelectDefaultsInput = {
@@ -53,30 +72,23 @@ export function selectCreateChannelDefaults(input: SelectDefaultsInput): Channel
     const selectedGroup = groups.find((group) => group.id === requestedGroupID);
     if (selectedGroup) {
       return {
-        selectedType: selectedGroup.kind,
+        selectedType: input.initialType ?? "text",
         selectedGroupId: selectedGroup.id
       };
     }
   }
 
   const preferredType = input.initialType ?? "text";
-  const preferredGroup = groups.find((group) => group.kind === preferredType) ?? null;
-  if (preferredGroup) {
+  const firstGroup = groups[0] ?? null;
+  if (firstGroup) {
     return {
       selectedType: preferredType,
-      selectedGroupId: preferredGroup.id
+      selectedGroupId: firstGroup.id
     };
   }
 
-  const fallback = groups[0] ?? null;
-  if (!fallback) {
-    return {
-      selectedType: preferredType,
-      selectedGroupId: null
-    };
-  }
   return {
-    selectedType: fallback.kind,
-    selectedGroupId: fallback.id
+    selectedType: preferredType,
+    selectedGroupId: null
   };
 }

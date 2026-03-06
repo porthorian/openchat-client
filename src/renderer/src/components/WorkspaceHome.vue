@@ -7,9 +7,11 @@ import ChannelPaneUserDock from "./ChannelPaneUserDock.vue";
 import ChatPane from "./ChatPane.vue";
 import ClientUpdateProgressModal from "./ClientUpdateProgressModal.vue";
 import ClientVersionInfoModal from "./ClientVersionInfoModal.vue";
+import CreateCategoryModal from "./CreateCategoryModal.vue";
 import CreateChannelModal from "./CreateChannelModal.vue";
 import MembersPane from "./MembersPane.vue";
 import ScreenShareSourcePickerModal from "./ScreenShareSourcePickerModal.vue";
+import ServerSettingsModal from "./ServerSettingsModal.vue";
 import ServerRail from "./ServerRail.vue";
 import WorkspaceToolbar from "./WorkspaceToolbar.vue";
 import { useWorkspaceShell } from "@renderer/composables/useWorkspaceShell";
@@ -44,6 +46,8 @@ const shell = useWorkspaceShell();
 
       <AddServerDialog v-bind="shell.addServerDialogProps.value" v-on="shell.addServerDialogListeners" />
       <CreateChannelModal v-bind="shell.createChannelModalProps.value" v-on="shell.createChannelModalListeners" />
+      <CreateCategoryModal v-bind="shell.createCategoryModalProps.value" v-on="shell.createCategoryModalListeners" />
+      <ServerSettingsModal v-bind="shell.serverSettingsModalProps.value" v-on="shell.serverSettingsModalListeners" />
     </div>
 
     <ClientUpdateProgressModal v-bind="shell.updateProgressModalProps.value" v-on="shell.updateProgressModalListeners" />

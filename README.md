@@ -30,10 +30,12 @@ Details: `docs/release/milestones.md`
 ## Feature Snapshot
 | Area | Status |
 | --- | --- |
-| Server discovery/join + trust probe | Implemented |
+| Server discovery/join + trust probe | Implemented (UUID server IDs, no manual server-id entry) |
 | Multi-server switching/isolation | Implemented |
 | Text channels + message timeline/composer | Implemented |
-| Text/voice channel creation (owner-gated) | Implemented baseline |
+| Text/voice channel creation (owner-gated) | Implemented (mixed categories) |
+| Category creation (owner-gated) | Implemented baseline |
+| Server settings v1 (name/description/banner preset) | Implemented baseline |
 | Realtime messaging + typing + presence | Implemented |
 | Mentions + read-ack badge clearing | Implemented baseline (policy hardening in progress) |
 | Voice channel join + audio relay controls | Implemented baseline (hardening in progress) |

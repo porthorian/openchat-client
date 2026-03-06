@@ -1,9 +1,11 @@
 import { defineStore } from "pinia";
 import type { OpenGraphMetadata } from "@shared/ipc";
 import {
+  createCategory as createCategoryRequest,
   createChannel as createChannelRequest,
   createMessage,
   fetchChannelReadAck,
+  fetchServerSettings as fetchServerSettingsRequest,
   deleteMessage as deleteMessageRequest,
   fetchMyProfile,
   fetchProfilesBatch,
@@ -14,9 +16,12 @@ import {
   ProfileRequestError,
   resolveMentionCandidates,
   sendRealtime,
+  type CreatedCategoryResponse,
   type CreatedChannelResponse,
+  type ServerSettingsResponse,
   type SyncedUserProfile,
   updateChannelReadAck,
+  updateServerSettings as updateServerSettingsRequest,
   updateMyProfile,
   uploadProfileAvatar,
   type RealtimeEnvelope
@@ -37,7 +42,8 @@ import type {
   MessageReplyReference
 } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
-import { applyChannelCreatedToGroups } from "./chat/channelGroups.ts";
+import { useServerRegistryStore } from "./serverRegistry";
+import { applyCategoryCreatedToGroups, applyChannelCreatedToGroups } from "./chat/channelGroups.ts";
 
 type ServerRealtimeState = {
   connected: boolean;
@@ -632,6 +638,48 @@ function normalizeChannelCreatedPayload(input: unknown): CreatedChannelResponse 
   };
 }
 
+function normalizeCategoryCreatedPayload(input: unknown): CreatedCategoryResponse | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const serverId = String(payload.server_id ?? "").trim();
+  const groupPayload = typeof payload.group === "object" && payload.group !== null ? (payload.group as Record<string, unknown>) : null;
+  if (!serverId || !groupPayload) return null;
+
+  const groupID = String(groupPayload.id ?? "").trim();
+  const groupLabel = String(groupPayload.label ?? "").trim();
+  const groupKindRaw = String(groupPayload.kind ?? "").trim().toLowerCase();
+  if (!groupID || !groupLabel) return null;
+  if (groupKindRaw !== "text" && groupKindRaw !== "voice") return null;
+
+  return {
+    serverId,
+    createdByUID: String(payload.created_by_uid ?? "").trim(),
+    createdAt: String(payload.created_at ?? new Date().toISOString()),
+    group: {
+      id: groupID,
+      label: groupLabel,
+      kind: groupKindRaw,
+      channels: []
+    }
+  };
+}
+
+function normalizeServerUpdatedPayload(input: unknown): ServerSettingsResponse | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const serverId = String(payload.server_id ?? "").trim();
+  const displayName = String(payload.display_name ?? "").trim();
+  if (!serverId || !displayName) return null;
+  return {
+    serverId,
+    displayName,
+    description: String(payload.description ?? ""),
+    bannerPreset: String(payload.banner_preset ?? ""),
+    updatedByUID: String(payload.updated_by_uid ?? ""),
+    updatedAt: String(payload.updated_at ?? "")
+  };
+}
+
 function normalizeRealtimeProfile(input: unknown): SyncedUserProfile | null {
   if (typeof input !== "object" || input === null) return null;
   const payload = input as Record<string, unknown>;
@@ -1020,6 +1068,29 @@ export const useChatStore = defineStore("chat", {
       }
       return true;
     },
+    applyCreatedCategory(serverId: string, created: CreatedCategoryResponse): boolean {
+      const groups = this.groupsByServer[serverId] ?? [];
+      const result = applyCategoryCreatedToGroups(groups, {
+        group: created.group
+      });
+      if (!result.inserted) {
+        return false;
+      }
+      this.groupsByServer[serverId] = result.groups;
+      return true;
+    },
+    applyServerUpdated(settings: ServerSettingsResponse): void {
+      const registry = useServerRegistryStore();
+      const normalizedDisplayName = settings.displayName.trim();
+      const normalizedDescription = settings.description;
+      const normalizedBannerPreset = settings.bannerPreset.trim().toLowerCase();
+      if (!normalizedDisplayName) return;
+      registry.patchServerProfile(settings.serverId, {
+        displayName: normalizedDisplayName,
+        description: normalizedDescription,
+        bannerPreset: normalizedBannerPreset
+      });
+    },
     async createChannel(params: {
       serverId: string;
       backendUrl: string;
@@ -1040,6 +1111,46 @@ export const useChatStore = defineStore("chat", {
       });
       this.applyCreatedChannel(params.serverId, created);
       return created;
+    },
+    async createCategory(params: {
+      serverId: string;
+      backendUrl: string;
+      name: string;
+      kind: "text" | "voice";
+      userUID: string;
+      deviceID: string;
+    }): Promise<CreatedCategoryResponse> {
+      const created = await createCategoryRequest({
+        backendUrl: params.backendUrl,
+        serverId: params.serverId,
+        name: params.name,
+        kind: params.kind,
+        userUID: params.userUID,
+        deviceID: params.deviceID
+      });
+      this.applyCreatedCategory(params.serverId, created);
+      return created;
+    },
+    async fetchServerSettings(params: {
+      serverId: string;
+      backendUrl: string;
+      userUID: string;
+      deviceID: string;
+    }): Promise<ServerSettingsResponse> {
+      return fetchServerSettingsRequest(params);
+    },
+    async updateServerSettings(params: {
+      serverId: string;
+      backendUrl: string;
+      displayName: string;
+      description: string;
+      bannerPreset: string;
+      userUID: string;
+      deviceID: string;
+    }): Promise<ServerSettingsResponse> {
+      const updated = await updateServerSettingsRequest(params);
+      this.applyServerUpdated(updated);
+      return updated;
     },
     async loadMessages(params: {
       serverId: string;
@@ -1454,6 +1565,20 @@ export const useChatStore = defineStore("chat", {
         if (!created) return;
         if (created.serverId !== serverId) return;
         this.applyCreatedChannel(serverId, created);
+        return;
+      }
+      if (envelope.type === "chat.category.created") {
+        const created = normalizeCategoryCreatedPayload(envelope.payload);
+        if (!created) return;
+        if (created.serverId !== serverId) return;
+        this.applyCreatedCategory(serverId, created);
+        return;
+      }
+      if (envelope.type === "chat.server.updated") {
+        const updated = normalizeServerUpdatedPayload(envelope.payload);
+        if (!updated) return;
+        if (updated.serverId !== serverId) return;
+        this.applyServerUpdated(updated);
         return;
       }
       if (envelope.type === "chat.message.created") {

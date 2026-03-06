@@ -56,6 +56,8 @@ const emit = defineEmits<{
   updateFilter: [value: string];
   markChannelsRead: [channelIds: string[]];
   createChannel: [groupId: string | null];
+  createCategory: [groupId: string | null, suggestedKind: "text" | "voice" | null];
+  openServerSettings: [];
 }>();
 
 type ChannelPaneMenuState = {
@@ -175,16 +177,35 @@ function toggleGuildHeaderMenu(event: MouseEvent): void {
   };
 }
 
-function runGuildHeaderAction(_event?: Event, action: "create-channel" | "noop" = "noop"): void {
+function categoryKindForID(categoryId: string | null): "text" | "voice" | null {
+  if (!categoryId) return null;
+  const group = props.groups.find((item) => item.id === categoryId) ?? null;
+  if (!group) return null;
+  return group.kind;
+}
+
+function runGuildHeaderAction(
+  _event?: Event,
+  action: "create-channel" | "create-category" | "open-settings" | "noop" = "noop"
+): void {
   if (action === "create-channel") {
     emit("createChannel", null);
+  }
+  if (action === "create-category") {
+    emit("createCategory", null, null);
+  }
+  if (action === "open-settings") {
+    emit("openServerSettings");
   }
   closeGuildHeaderMenu();
 }
 
-function runChannelPaneAction(_event?: Event, action: "create-channel" | "noop" = "noop"): void {
+function runChannelPaneAction(_event?: Event, action: "create-channel" | "create-category" | "noop" = "noop"): void {
   if (action === "create-channel") {
     emit("createChannel", channelPaneMenu.value.categoryId ?? null);
+  }
+  if (action === "create-category") {
+    emit("createCategory", channelPaneMenu.value.categoryId ?? null, categoryKindForID(channelPaneMenu.value.categoryId));
   }
   closeChannelPaneMenu();
 }
@@ -321,7 +342,7 @@ onBeforeUnmount(() => {
           <AppIcon :path="mdiAccountMultiplePlus" :size="17" />
         </span>
       </button>
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+      <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'open-settings')">
         Server Settings
         <span class="guild-menu-icon">
           <AppIcon :path="mdiCogOutline" :size="17" />
@@ -338,7 +359,12 @@ onBeforeUnmount(() => {
           <AppIcon :path="mdiPlus" :size="17" />
         </span>
       </button>
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+      <button
+        type="button"
+        class="guild-menu-item"
+        role="menuitem"
+        @click="($event) => runGuildHeaderAction($event, 'create-category')"
+      >
         Create Category
         <span class="guild-menu-icon">
           <AppIcon :path="mdiPlus" :size="17" />
@@ -517,7 +543,12 @@ onBeforeUnmount(() => {
         >
           Create Channel
         </button>
-        <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
+        <button
+          type="button"
+          class="channel-pane-menu-item"
+          role="menuitem"
+          @click="($event) => runChannelPaneAction($event, 'create-category')"
+        >
           Create Category
         </button>
         <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">

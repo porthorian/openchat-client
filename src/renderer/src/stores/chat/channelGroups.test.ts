@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChannelGroup } from "../../types/chat.ts";
-import { applyChannelCreatedToGroups, selectCreateChannelDefaults } from "./channelGroups.ts";
+import { applyCategoryCreatedToGroups, applyChannelCreatedToGroups, selectCreateChannelDefaults } from "./channelGroups.ts";
 
 const groupsFixture: ChannelGroup[] = [
   {
@@ -48,7 +48,7 @@ test("applyChannelCreatedToGroups ignores duplicate channel ids", () => {
   assert.equal(result.groups, groupsFixture);
 });
 
-test("applyChannelCreatedToGroups ignores kind mismatches", () => {
+test("applyChannelCreatedToGroups allows mixed category channel kinds", () => {
   const result = applyChannelCreatedToGroups(groupsFixture, {
     groupId: "grp_text",
     channel: {
@@ -58,8 +58,33 @@ test("applyChannelCreatedToGroups ignores kind mismatches", () => {
     }
   });
 
-  assert.equal(result.inserted, false);
-  assert.equal(result.groups, groupsFixture);
+  assert.equal(result.inserted, true);
+  const targetGroup = result.groups.find((group) => group.id === "grp_text");
+  assert.ok(targetGroup);
+  assert.equal(targetGroup.channels.some((channel) => channel.id === "vc_created"), true);
+});
+
+test("applyCategoryCreatedToGroups appends category and dedupes by id", () => {
+  const appended = applyCategoryCreatedToGroups(groupsFixture, {
+    group: {
+      id: "grp_new",
+      label: "New Category",
+      kind: "voice",
+      channels: []
+    }
+  });
+  assert.equal(appended.inserted, true);
+  assert.equal(appended.groups.some((group) => group.id === "grp_new"), true);
+
+  const deduped = applyCategoryCreatedToGroups(appended.groups, {
+    group: {
+      id: "grp_new",
+      label: "Duplicate Category",
+      kind: "text",
+      channels: []
+    }
+  });
+  assert.equal(deduped.inserted, false);
 });
 
 test("selectCreateChannelDefaults prioritizes explicit category", () => {
@@ -70,7 +95,7 @@ test("selectCreateChannelDefaults prioritizes explicit category", () => {
   });
 
   assert.deepEqual(defaults, {
-    selectedType: "voice",
+    selectedType: "text",
     selectedGroupId: "grp_voice"
   });
 });

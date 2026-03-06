@@ -55,6 +55,22 @@ export type CreatedChannelResponse = {
   createdAt: string;
 };
 
+export type CreatedCategoryResponse = {
+  serverId: string;
+  group: ChannelGroup;
+  createdByUID: string;
+  createdAt: string;
+};
+
+export type ServerSettingsResponse = {
+  serverId: string;
+  displayName: string;
+  description: string;
+  bannerPreset: string;
+  updatedByUID?: string;
+  updatedAt?: string;
+};
+
 export class ProfileRequestError extends Error {
   status: number;
   code: string | null;
@@ -450,6 +466,26 @@ function normalizeChannelPayload(input: unknown): Channel | null {
   };
 }
 
+function normalizeChannelGroupPayload(input: unknown): ChannelGroup | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const id = String(payload.id ?? "").trim();
+  const label = String(payload.label ?? "").trim();
+  const kindRaw = String(payload.kind ?? "").trim().toLowerCase();
+  const channelsRaw = Array.isArray(payload.channels) ? payload.channels : [];
+  if (!id || !label) return null;
+  if (kindRaw !== "text" && kindRaw !== "voice") return null;
+  const channels = channelsRaw
+    .map((channel) => normalizeChannelPayload(channel))
+    .filter((channel): channel is Channel => channel !== null);
+  return {
+    id,
+    label,
+    kind: kindRaw,
+    channels
+  };
+}
+
 function hasLimit(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -530,6 +566,104 @@ export async function createChannel(params: {
     channel,
     createdByUID: String(payload.created_by_uid ?? params.userUID),
     createdAt: String(payload.created_at ?? new Date().toISOString())
+  };
+}
+
+export async function createCategory(params: {
+  backendUrl: string;
+  serverId: string;
+  name: string;
+  kind: "text" | "voice";
+  userUID: string;
+  deviceID: string;
+}): Promise<CreatedCategoryResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/categories`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      ...authHeaders(params.userUID, params.deviceID),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: params.name,
+      kind: params.kind
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to create category (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const group = normalizeChannelGroupPayload(payload.group);
+  if (!group) {
+    throw new Error("Failed to create category: server returned an invalid group payload.");
+  }
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    group,
+    createdByUID: String(payload.created_by_uid ?? params.userUID),
+    createdAt: String(payload.created_at ?? new Date().toISOString())
+  };
+}
+
+export async function fetchServerSettings(params: {
+  backendUrl: string;
+  serverId: string;
+  userUID: string;
+  deviceID: string;
+}): Promise<ServerSettingsResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/settings`;
+  const response = await fetch(endpoint, {
+    headers: authHeaders(params.userUID, params.deviceID)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to load server settings (${response.status}): ${text}`);
+  }
+  const payload = (await response.json()) as Record<string, unknown>;
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    displayName: String(payload.display_name ?? ""),
+    description: String(payload.description ?? ""),
+    bannerPreset: String(payload.banner_preset ?? "")
+  };
+}
+
+export async function updateServerSettings(params: {
+  backendUrl: string;
+  serverId: string;
+  displayName: string;
+  description: string;
+  bannerPreset: string;
+  userUID: string;
+  deviceID: string;
+}): Promise<ServerSettingsResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/settings`;
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      ...authHeaders(params.userUID, params.deviceID),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      display_name: params.displayName,
+      description: params.description,
+      banner_preset: params.bannerPreset
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update server settings (${response.status}): ${text}`);
+  }
+  const payload = (await response.json()) as Record<string, unknown>;
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    displayName: String(payload.display_name ?? ""),
+    description: String(payload.description ?? ""),
+    bannerPreset: String(payload.banner_preset ?? ""),
+    updatedByUID: String(payload.updated_by_uid ?? ""),
+    updatedAt: String(payload.updated_at ?? "")
   };
 }
 

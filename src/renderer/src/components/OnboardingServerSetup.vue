@@ -15,13 +15,9 @@ type ServerSetupResult = {
 type ProbeSummary = {
   serverId: string;
   serverName: string;
+  description: string;
   backendUrl: string;
   trustState: ServerProfile["trustState"];
-  userUidPolicy: ServerCapabilities["userUidPolicy"];
-  identityHandshakeMode: ServerProfile["identityHandshakeStrategy"];
-  messagingEnabled: boolean;
-  presenceEnabled: boolean;
-  rtcEnabled: boolean;
   warningMessage: string | null;
   probedAt: string;
 };
@@ -32,8 +28,8 @@ const emit = defineEmits<{
 
 const mode = ref<ServerSetupMode>("join");
 const backendUrl = ref(DEFAULT_BACKEND_URL);
-const serverId = ref("");
-const displayName = ref("");
+const createDisplayName = ref("");
+const createDescription = ref("");
 const errorMessage = ref<string | null>(null);
 const isSubmitting = ref(false);
 const discoveredServers = ref<ServerProfile[]>([]);
@@ -83,13 +79,6 @@ function resolveTrustWarning(targetBackendUrl: string, capabilities: ServerCapab
   return null;
 }
 
-function toHandshakeStrategy(capabilities: ServerCapabilities): ServerProfile["identityHandshakeStrategy"] {
-  if (capabilities.identityHandshakeModes.includes("challenge_signature")) {
-    return "challenge_signature";
-  }
-  return "token_proof";
-}
-
 function setMode(nextMode: ServerSetupMode): void {
   mode.value = nextMode;
   errorMessage.value = null;
@@ -104,27 +93,10 @@ function setBackendUrl(value: string): void {
   errorMessage.value = null;
 }
 
-function setServerId(value: string): void {
-  serverId.value = value;
-  if (selectedDiscoveredServerId.value && selectedDiscoveredServerId.value !== value) {
-    selectedDiscoveredServerId.value = "";
-  }
-  probeSummary.value = null;
-  probedCapabilities.value = null;
-  errorMessage.value = null;
-}
-
-function setDisplayName(value: string): void {
-  displayName.value = value;
-  errorMessage.value = null;
-}
-
 function chooseDiscoveredServer(value: string): void {
   const selected = discoveredServers.value.find((server) => server.serverId === value);
   if (!selected) return;
   selectedDiscoveredServerId.value = selected.serverId;
-  serverId.value = selected.serverId;
-  displayName.value = selected.displayName;
   probeSummary.value = null;
   probedCapabilities.value = null;
   errorMessage.value = null;
@@ -176,24 +148,14 @@ async function probeJoinTarget(manageSubmitting = true): Promise<ProbeSummary | 
     const summary: ProbeSummary = {
       serverId: capabilities.serverId,
       serverName: capabilities.serverName,
+      description: discovered?.description ?? "",
       backendUrl: targetBackendUrl,
       trustState,
-      userUidPolicy: capabilities.userUidPolicy,
-      identityHandshakeMode: toHandshakeStrategy(capabilities),
-      messagingEnabled: capabilities.features.messaging,
-      presenceEnabled: capabilities.features.presence,
-      rtcEnabled: capabilities.rtc !== null,
       warningMessage: resolveTrustWarning(targetBackendUrl, capabilities),
       probedAt: new Date().toISOString()
     };
     probeSummary.value = summary;
     probedCapabilities.value = capabilities;
-    if (!serverId.value.trim()) {
-      serverId.value = summary.serverId;
-    }
-    if (!displayName.value.trim()) {
-      displayName.value = summary.serverName;
-    }
     return summary;
   } catch (error) {
     errorMessage.value = (error as Error).message;
@@ -225,22 +187,21 @@ async function completeJoin(): Promise<void> {
     }
     if (!summary || !capabilities) return;
 
-    const resolvedServerId = serverId.value.trim() || summary.serverId;
-    if (!resolvedServerId) {
-      errorMessage.value = "Server ID is required.";
-      return;
-    }
-    const resolvedDisplayName = displayName.value.trim() || summary.serverName || resolvedServerId;
-
     const discovered = selectedDiscoveredServer.value;
+    const displayName = discovered?.displayName?.trim() || summary.serverName || summary.serverId;
+    const description = discovered?.description ?? summary.description ?? "";
     const profile: ServerProfile = {
-      serverId: resolvedServerId,
-      displayName: resolvedDisplayName,
+      serverId: summary.serverId,
+      displayName,
+      description,
+      bannerPreset: discovered?.bannerPreset ?? "ocean",
       backendUrl: targetBackendUrl,
-      iconText: discovered?.iconText ?? toIconText(resolvedDisplayName),
+      iconText: discovered?.iconText ?? toIconText(displayName),
       trustState: discovered?.trustState ?? summary.trustState,
-      identityHandshakeStrategy: summary.identityHandshakeMode,
-      userIdentifierPolicy: summary.userUidPolicy
+      identityHandshakeStrategy: capabilities.identityHandshakeModes.includes("challenge_signature")
+        ? "challenge_signature"
+        : "token_proof",
+      userIdentifierPolicy: capabilities.userUidPolicy
     };
 
     emit("complete", {
@@ -252,27 +213,34 @@ async function completeJoin(): Promise<void> {
   }
 }
 
+function createUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `oc-${Math.random().toString(16).slice(2)}-${Date.now().toString(16)}`;
+}
+
 function completeCreateModel(): void {
   const targetBackendUrl = normalizeBackendURL(backendUrl.value);
-  const resolvedServerId = serverId.value.trim();
-  const resolvedDisplayName = displayName.value.trim() || resolvedServerId;
-
+  const displayName = createDisplayName.value.trim();
   if (!targetBackendUrl) {
     errorMessage.value = "Backend URL is required.";
     return;
   }
-  if (!resolvedServerId) {
-    errorMessage.value = "Server ID is required.";
+  if (!displayName) {
+    errorMessage.value = "Server name is required.";
     return;
   }
 
   errorMessage.value = null;
   emit("complete", {
     profile: {
-      serverId: resolvedServerId,
-      displayName: resolvedDisplayName,
+      serverId: createUUID(),
+      displayName,
+      description: createDescription.value.trim(),
+      bannerPreset: "ocean",
       backendUrl: targetBackendUrl,
-      iconText: toIconText(resolvedDisplayName),
+      iconText: toIconText(displayName),
       trustState: "unverified",
       identityHandshakeStrategy: "token_proof",
       userIdentifierPolicy: "server_scoped"
@@ -332,32 +300,10 @@ function completeCreateModel(): void {
           >
             <span class="discovery-copy">
               <strong>{{ server.displayName }}</strong>
-              <small>{{ server.serverId }}</small>
-            </span>
-            <span class="trust-pill" :class="`is-${server.trustState}`">
-              {{ server.trustState === "verified" ? "Verified" : "Unverified" }}
+              <small>{{ server.description || "No description." }}</small>
             </span>
           </button>
         </section>
-
-        <label class="onboarding-field">
-          <span>Server ID</span>
-          <input
-            type="text"
-            :value="serverId"
-            placeholder="srv_demo"
-            @input="setServerId(($event.target as HTMLInputElement).value)"
-          />
-        </label>
-        <label class="onboarding-field">
-          <span>Display Name</span>
-          <input
-            type="text"
-            :value="displayName"
-            placeholder="Demo Server"
-            @input="setDisplayName(($event.target as HTMLInputElement).value)"
-          />
-        </label>
 
         <section v-if="probeSummary" class="probe-summary">
           <header>
@@ -366,50 +312,38 @@ function completeCreateModel(): void {
               {{ probeSummary.trustState === "verified" ? "Verified" : "Unverified" }}
             </span>
           </header>
+          <p>{{ probeSummary.description || "No description." }}</p>
           <p>{{ probeSummary.backendUrl }}</p>
-          <p>UID policy: {{ probeSummary.userUidPolicy }} · Handshake: {{ probeSummary.identityHandshakeMode }}</p>
-          <p>
-            Features:
-            {{ probeSummary.messagingEnabled ? "Messaging" : "No messaging" }},
-            {{ probeSummary.presenceEnabled ? "Presence" : "No presence" }},
-            {{ probeSummary.rtcEnabled ? "RTC" : "No RTC" }}
-          </p>
           <p v-if="probeSummary.warningMessage" class="probe-warning">{{ probeSummary.warningMessage }}</p>
         </section>
 
-        <footer class="onboarding-actions">
-          <button type="button" class="onboarding-continue" :disabled="isSubmitting" @click="completeJoin">
-            Join server
-          </button>
-        </footer>
+        <button type="button" class="onboarding-continue" :disabled="isSubmitting" @click="completeJoin">
+          {{ isSubmitting ? "Connecting..." : "Continue" }}
+        </button>
       </template>
 
       <template v-else>
-        <p class="create-note">
-          Create a local server model when you want to define a new server profile before backend availability is finalized.
-        </p>
         <label class="onboarding-field">
-          <span>Server ID</span>
+          <span>Server Name</span>
           <input
             type="text"
-            :value="serverId"
-            placeholder="srv_mycommunity"
-            @input="setServerId(($event.target as HTMLInputElement).value)"
+            :value="createDisplayName"
+            placeholder="My Community"
+            @input="createDisplayName = ($event.target as HTMLInputElement).value"
           />
         </label>
         <label class="onboarding-field">
-          <span>Display Name</span>
-          <input
-            type="text"
-            :value="displayName"
-            placeholder="My Community"
-            @input="setDisplayName(($event.target as HTMLInputElement).value)"
+          <span>Description</span>
+          <textarea
+            rows="4"
+            maxlength="280"
+            :value="createDescription"
+            placeholder="What is this server for?"
+            @input="createDescription = ($event.target as HTMLTextAreaElement).value"
           />
         </label>
 
-        <footer class="onboarding-actions">
-          <button type="button" class="onboarding-continue" @click="completeCreateModel">Create server model</button>
-        </footer>
+        <button type="button" class="onboarding-continue" @click="completeCreateModel">Create server model</button>
       </template>
 
       <p v-if="errorMessage" class="onboarding-error">{{ errorMessage }}</p>
@@ -469,6 +403,7 @@ function completeCreateModel(): void {
   background: #262d40;
   color: #dde5f7;
   padding: 0 12px;
+  cursor: pointer;
 }
 
 .mode-btn.is-active {
@@ -487,17 +422,28 @@ function completeCreateModel(): void {
   letter-spacing: 0.03em;
 }
 
-.onboarding-field input {
-  height: 40px;
+.onboarding-field input,
+.onboarding-field textarea {
   border: 1px solid #3d4359;
   border-radius: 9px;
   background: #111623;
   color: #ecf0fb;
-  padding: 0 12px;
   outline: none;
 }
 
-.onboarding-field input:focus {
+.onboarding-field input {
+  height: 40px;
+  padding: 0 12px;
+}
+
+.onboarding-field textarea {
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px 12px;
+}
+
+.onboarding-field input:focus,
+.onboarding-field textarea:focus {
   border-color: #5d72aa;
 }
 
@@ -514,6 +460,7 @@ function completeCreateModel(): void {
   background: #2f3d5f;
   color: #eaf0ff;
   padding: 0 12px;
+  cursor: pointer;
 }
 
 .action-btn:disabled {
@@ -544,6 +491,7 @@ function completeCreateModel(): void {
   gap: 8px;
   text-align: left;
   padding: 6px 10px;
+  cursor: pointer;
 }
 
 .discovery-item.is-active {
@@ -632,12 +580,6 @@ function completeCreateModel(): void {
   padding: 6px 8px;
 }
 
-.create-note {
-  color: #b5c0d8;
-  font-size: 0.88rem;
-  line-height: 1.3;
-}
-
 .onboarding-error {
   border-radius: 8px;
   border: 1px solid #7a3a40;
@@ -647,11 +589,6 @@ function completeCreateModel(): void {
   font-size: 0.85rem;
 }
 
-.onboarding-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
 .onboarding-continue {
   min-height: 38px;
   border-radius: 9px;
@@ -659,5 +596,12 @@ function completeCreateModel(): void {
   background: #3b4d77;
   color: #f2f6ff;
   padding: 0 14px;
+  justify-self: end;
+  cursor: pointer;
+}
+
+.onboarding-continue:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

@@ -36,8 +36,6 @@ type VoiceParticipant = {
 
 type AddServerFormState = {
   backendUrl: string;
-  serverId: string;
-  displayName: string;
   errorMessage: string | null;
   isSubmitting: boolean;
   discoveredServers: ServerProfile[];
@@ -47,17 +45,10 @@ type AddServerFormState = {
 };
 
 type ServerJoinProbeSummary = {
-  serverId: string;
   serverName: string;
+  description: string;
   backendUrl: string;
   trustState: ServerProfile["trustState"];
-  buildVersion: string | null;
-  buildCommit: string | null;
-  userUidPolicy: ServerCapabilities["userUidPolicy"];
-  identityHandshakeMode: ServerProfile["identityHandshakeStrategy"];
-  messagingEnabled: boolean;
-  presenceEnabled: boolean;
-  rtcEnabled: boolean;
   warningMessage: string | null;
   probedAt: string;
 };
@@ -74,6 +65,23 @@ type CreateChannelFormState = {
   isSubmitting: boolean;
   errorMessage: string | null;
   initialGroupId: string | null;
+};
+
+type CreateCategoryFormState = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  initialKind: "text" | "voice" | null;
+};
+
+type ServerSettingsFormState = {
+  isOpen: boolean;
+  isLoading: boolean;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  displayName: string;
+  description: string;
+  bannerPreset: string;
 };
 
 type CallStageParticipantCard = {
@@ -105,8 +113,6 @@ export function useWorkspaceShell() {
   const isAddServerDialogOpen = ref(false);
   const addServerForm = ref<AddServerFormState>({
     backendUrl: DEFAULT_BACKEND_URL,
-    serverId: "",
-    displayName: "",
     errorMessage: null,
     isSubmitting: false,
     discoveredServers: [],
@@ -125,6 +131,21 @@ export function useWorkspaceShell() {
     isSubmitting: false,
     errorMessage: null,
     initialGroupId: null
+  });
+  const createCategoryForm = ref<CreateCategoryFormState>({
+    isOpen: false,
+    isSubmitting: false,
+    errorMessage: null,
+    initialKind: null
+  });
+  const serverSettingsForm = ref<ServerSettingsFormState>({
+    isOpen: false,
+    isLoading: false,
+    isSubmitting: false,
+    errorMessage: null,
+    displayName: "",
+    description: "",
+    bannerPreset: "ocean"
   });
 
   const moodCatalog: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -233,16 +254,10 @@ export function useWorkspaceShell() {
   const activeRealtimeState = computed(() => chat.realtimeStateFor(appUI.activeServerId));
   const activeServerAudioPrefs = computed(() => call.audioPrefsByServer[appUI.activeServerId] ?? null);
 
-  function orderChannelGroups(groups: ChannelGroup[]): ChannelGroup[] {
-    const voiceGroups = groups.filter((group) => group.kind === "voice");
-    const textGroups = groups.filter((group) => group.kind === "text");
-    return [...voiceGroups, ...textGroups];
-  }
-
   const rawChannelGroups = computed(() => chat.groupsFor(appUI.activeServerId));
 
   const filteredChannelGroups = computed(() => {
-    const groups = orderChannelGroups(rawChannelGroups.value).map((group) => ({
+    const groups = rawChannelGroups.value.map((group) => ({
       ...group,
       channels: group.channels.map((channel) => ({
         ...channel,
@@ -671,6 +686,8 @@ export function useWorkspaceShell() {
 
   onBeforeUnmount(() => {
     closeCreateChannelModal();
+    closeCreateCategoryModal();
+    closeServerSettingsModal();
     closeScreenSharePicker();
     call.disconnectAll();
     chat.disconnectAllRealtime();
@@ -711,6 +728,8 @@ export function useWorkspaceShell() {
       return;
     }
     closeCreateChannelModal();
+    closeCreateCategoryModal();
+    closeServerSettingsModal();
     closeScreenSharePicker();
     const currentActiveVoice = activeVoiceChannelId.value;
     if (currentActiveVoice) {
@@ -847,6 +866,133 @@ export function useWorkspaceShell() {
       createChannelForm.value.errorMessage = (error as Error).message;
     } finally {
       createChannelForm.value.isSubmitting = false;
+    }
+  }
+
+  function openCreateCategoryModal(_groupId: string | null, suggestedKind: "text" | "voice" | null): void {
+    createCategoryForm.value = {
+      isOpen: true,
+      isSubmitting: false,
+      errorMessage: null,
+      initialKind: suggestedKind
+    };
+  }
+
+  function closeCreateCategoryModal(): void {
+    createCategoryForm.value = {
+      isOpen: false,
+      isSubmitting: false,
+      errorMessage: null,
+      initialKind: null
+    };
+  }
+
+  async function submitCreateCategory(payload: { name: string; kind: "text" | "voice" }): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    if (!server || !currentUID) return;
+
+    createCategoryForm.value.isSubmitting = true;
+    createCategoryForm.value.errorMessage = null;
+    try {
+      await chat.createCategory({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        name: payload.name,
+        kind: payload.kind,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+      closeCreateCategoryModal();
+    } catch (error) {
+      createCategoryForm.value.errorMessage = (error as Error).message;
+    } finally {
+      createCategoryForm.value.isSubmitting = false;
+    }
+  }
+
+  async function openServerSettingsModal(): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    if (!server || !currentUID) return;
+
+    serverSettingsForm.value = {
+      isOpen: true,
+      isLoading: true,
+      isSubmitting: false,
+      errorMessage: null,
+      displayName: server.displayName,
+      description: server.description ?? "",
+      bannerPreset: server.bannerPreset || "ocean"
+    };
+    try {
+      const settings = await chat.fetchServerSettings({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+      serverSettingsForm.value.displayName = settings.displayName;
+      serverSettingsForm.value.description = settings.description;
+      serverSettingsForm.value.bannerPreset = settings.bannerPreset || "ocean";
+      registry.patchServerProfile(appUI.activeServerId, {
+        displayName: settings.displayName,
+        description: settings.description,
+        bannerPreset: settings.bannerPreset
+      });
+    } catch (error) {
+      serverSettingsForm.value.errorMessage = (error as Error).message;
+    } finally {
+      serverSettingsForm.value.isLoading = false;
+    }
+  }
+
+  function closeServerSettingsModal(): void {
+    if (serverSettingsForm.value.isSubmitting) return;
+    serverSettingsForm.value = {
+      isOpen: false,
+      isLoading: false,
+      isSubmitting: false,
+      errorMessage: null,
+      displayName: "",
+      description: "",
+      bannerPreset: "ocean"
+    };
+  }
+
+  async function submitServerSettings(payload: {
+    displayName: string;
+    description: string;
+    bannerPreset: string;
+  }): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    if (!server || !currentUID) return;
+
+    serverSettingsForm.value.isSubmitting = true;
+    serverSettingsForm.value.errorMessage = null;
+    try {
+      const updated = await chat.updateServerSettings({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        displayName: payload.displayName,
+        description: payload.description,
+        bannerPreset: payload.bannerPreset,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+      registry.patchServerProfile(appUI.activeServerId, {
+        displayName: updated.displayName,
+        description: updated.description,
+        bannerPreset: updated.bannerPreset
+      });
+      serverSettingsForm.value.displayName = updated.displayName;
+      serverSettingsForm.value.description = updated.description;
+      serverSettingsForm.value.bannerPreset = updated.bannerPreset;
+    } catch (error) {
+      serverSettingsForm.value.errorMessage = (error as Error).message;
+    } finally {
+      serverSettingsForm.value.isSubmitting = false;
     }
   }
 
@@ -1188,19 +1334,12 @@ export function useWorkspaceShell() {
     const capabilities = await fetchServerCapabilities(backendUrl);
     return {
       summary: {
-      serverId: capabilities.serverId,
-      serverName: capabilities.serverName,
-      backendUrl,
-      trustState,
-      buildVersion: capabilities.buildVersion,
-      buildCommit: capabilities.buildCommit,
-      userUidPolicy: capabilities.userUidPolicy,
-      identityHandshakeMode: toHandshakeStrategy(capabilities),
-      messagingEnabled: capabilities.features.messaging,
-      presenceEnabled: capabilities.features.presence,
-      rtcEnabled: capabilities.rtc !== null,
-      warningMessage: resolveTrustWarning(backendUrl, capabilities),
-      probedAt: new Date().toISOString()
+        serverName: capabilities.serverName,
+        description: selectedDiscoveredServer()?.description ?? "",
+        backendUrl,
+        trustState,
+        warningMessage: resolveTrustWarning(backendUrl, capabilities),
+        probedAt: new Date().toISOString()
       },
       capabilities
     };
@@ -1216,8 +1355,6 @@ export function useWorkspaceShell() {
     const selected = addServerForm.value.discoveredServers.find((server) => server.serverId === serverId);
     if (!selected) return;
     addServerForm.value.selectedDiscoveredServerId = selected.serverId;
-    addServerForm.value.serverId = selected.serverId;
-    addServerForm.value.displayName = selected.displayName;
     addServerForm.value.probeSummary = null;
     addServerForm.value.probedCapabilities = null;
     addServerForm.value.errorMessage = null;
@@ -1247,12 +1384,6 @@ export function useWorkspaceShell() {
           server.serverId === selectedServerId ? { ...server, capabilities: result.capabilities } : server
         );
       }
-      if (!addServerForm.value.serverId.trim()) {
-        addServerForm.value.serverId = summary.serverId;
-      }
-      if (!addServerForm.value.displayName.trim()) {
-        addServerForm.value.displayName = summary.serverName;
-      }
       return summary;
     } catch (error) {
       addServerForm.value.errorMessage = (error as Error).message;
@@ -1269,8 +1400,6 @@ export function useWorkspaceShell() {
   function resetAddServerForm(): void {
     addServerForm.value = {
       backendUrl: DEFAULT_BACKEND_URL,
-      serverId: "",
-      displayName: "",
       errorMessage: null,
       isSubmitting: false,
       discoveredServers: [],
@@ -1334,15 +1463,9 @@ export function useWorkspaceShell() {
 
   async function addServerManually(): Promise<void> {
     const backendUrl = normalizeBackendURL(addServerForm.value.backendUrl);
-    const serverId = addServerForm.value.serverId.trim();
-    const displayName = addServerForm.value.displayName.trim();
 
     if (!backendUrl) {
       addServerForm.value.errorMessage = "Backend URL is required.";
-      return;
-    }
-    if (!serverId) {
-      addServerForm.value.errorMessage = "Server ID is required.";
       return;
     }
 
@@ -1351,7 +1474,7 @@ export function useWorkspaceShell() {
     try {
       let probe = addServerForm.value.probeSummary;
       let capabilities = addServerForm.value.probedCapabilities;
-      if (!probe || probe.backendUrl !== backendUrl || probe.serverId !== serverId) {
+      if (!probe || probe.backendUrl !== backendUrl) {
         probe = await probeAddServerTarget(false);
         capabilities = addServerForm.value.probedCapabilities;
       }
@@ -1360,14 +1483,19 @@ export function useWorkspaceShell() {
       }
 
       const discovered = selectedDiscoveredServer();
+      const serverId = capabilities.serverId;
+      const displayName = discovered?.displayName ?? probe.serverName ?? serverId;
+      const description = discovered?.description ?? probe.description ?? "";
       const profile: ServerProfile = {
         serverId,
-        displayName: displayName || serverId,
+        displayName,
+        description,
+        bannerPreset: discovered?.bannerPreset ?? "ocean",
         backendUrl,
-        iconText: discovered?.iconText ?? toIconText(displayName || serverId),
+        iconText: discovered?.iconText ?? toIconText(displayName),
         trustState: discovered?.trustState ?? probe.trustState,
-        identityHandshakeStrategy: probe.identityHandshakeMode,
-        userIdentifierPolicy: probe.userUidPolicy
+        identityHandshakeStrategy: toHandshakeStrategy(capabilities),
+        userIdentifierPolicy: capabilities.userUidPolicy
       };
 
       const added = registry.addServer(profile);
@@ -1395,21 +1523,6 @@ export function useWorkspaceShell() {
     addServerForm.value.selectedDiscoveredServerId = "";
     addServerForm.value.probeSummary = null;
     addServerForm.value.probedCapabilities = null;
-    addServerForm.value.errorMessage = null;
-  }
-
-  function setAddServerId(value: string): void {
-    addServerForm.value.serverId = value;
-    if (addServerForm.value.selectedDiscoveredServerId && addServerForm.value.selectedDiscoveredServerId !== value) {
-      addServerForm.value.selectedDiscoveredServerId = "";
-    }
-    addServerForm.value.probeSummary = null;
-    addServerForm.value.probedCapabilities = null;
-    addServerForm.value.errorMessage = null;
-  }
-
-  function setAddServerDisplayName(value: string): void {
-    addServerForm.value.displayName = value;
     addServerForm.value.errorMessage = null;
   }
 
@@ -1651,16 +1764,12 @@ export function useWorkspaceShell() {
   const addServerDialogProps = computed(() => ({
     isOpen: isAddServerDialogOpen.value,
     backendUrl: addServerForm.value.backendUrl,
-    serverId: addServerForm.value.serverId,
-    displayName: addServerForm.value.displayName,
     errorMessage: addServerForm.value.errorMessage,
     isSubmitting: addServerForm.value.isSubmitting,
     discoveredServers: addServerForm.value.discoveredServers.map((server) => ({
       serverId: server.serverId,
       displayName: server.displayName,
-      trustState: server.trustState,
-      buildVersion: server.capabilities?.buildVersion ?? null,
-      buildCommit: server.capabilities?.buildCommit ?? null
+      description: server.description
     })),
     selectedDiscoveredServerId: addServerForm.value.selectedDiscoveredServerId,
     probeSummary: addServerForm.value.probeSummary
@@ -1673,6 +1782,25 @@ export function useWorkspaceShell() {
     initialGroupId: createChannelForm.value.initialGroupId,
     serverName: activeServer.value?.displayName ?? "",
     groups: rawChannelGroups.value
+  }));
+
+  const createCategoryModalProps = computed(() => ({
+    isOpen: createCategoryForm.value.isOpen,
+    isSubmitting: createCategoryForm.value.isSubmitting,
+    errorMessage: createCategoryForm.value.errorMessage,
+    initialKind: createCategoryForm.value.initialKind,
+    serverName: activeServer.value?.displayName ?? ""
+  }));
+
+  const serverSettingsModalProps = computed(() => ({
+    isOpen: serverSettingsForm.value.isOpen,
+    isLoading: serverSettingsForm.value.isLoading,
+    isSubmitting: serverSettingsForm.value.isSubmitting,
+    errorMessage: serverSettingsForm.value.errorMessage,
+    serverName: activeServer.value?.displayName ?? "",
+    displayName: serverSettingsForm.value.displayName,
+    description: serverSettingsForm.value.description,
+    bannerPreset: serverSettingsForm.value.bannerPreset
   }));
 
   const serverRailListeners = {
@@ -1688,6 +1816,8 @@ export function useWorkspaceShell() {
     selectChannel,
     selectVoiceChannel,
     createChannel: openCreateChannelModal,
+    createCategory: openCreateCategoryModal,
+    openServerSettings: openServerSettingsModal,
     updateFilter: setChannelFilter,
     markChannelsRead
   };
@@ -1728,14 +1858,22 @@ export function useWorkspaceShell() {
     probe: probeServerJoinTarget,
     addManually: addServerManually,
     selectDiscoveredServer,
-    "update:backendUrl": setAddServerBackendUrl,
-    "update:serverId": setAddServerId,
-    "update:displayName": setAddServerDisplayName
+    "update:backendUrl": setAddServerBackendUrl
   };
 
   const createChannelModalListeners = {
     close: closeCreateChannelModal,
     submit: submitCreateChannel
+  };
+
+  const createCategoryModalListeners = {
+    close: closeCreateCategoryModal,
+    submit: submitCreateCategory
+  };
+
+  const serverSettingsModalListeners = {
+    close: closeServerSettingsModal,
+    submit: submitServerSettings
   };
 
   const screenSharePickerListeners = {
@@ -1781,6 +1919,8 @@ export function useWorkspaceShell() {
     membersPaneProps,
     addServerDialogProps,
     createChannelModalProps,
+    createCategoryModalProps,
+    serverSettingsModalProps,
     taskbarListeners,
     versionInfoModalListeners,
     updateProgressModalListeners,
@@ -1793,6 +1933,8 @@ export function useWorkspaceShell() {
     membersPaneListeners,
     addServerDialogListeners,
     createChannelModalListeners,
+    createCategoryModalListeners,
+    serverSettingsModalListeners,
     screenSharePickerListeners
   };
 }

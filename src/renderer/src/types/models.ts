@@ -23,6 +23,8 @@ export type OnboardingSetupInput = OnboardingProfileInput & OnboardingCompliance
 export type ServerProfile = {
   serverId: string;
   displayName: string;
+  description: string;
+  bannerPreset: string;
   backendUrl: string;
   iconText: string;
   trustState: "verified" | "unverified";
