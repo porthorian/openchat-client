@@ -10,6 +10,7 @@ import ClientVersionInfoModal from "./ClientVersionInfoModal.vue";
 import CreateCategoryModal from "./CreateCategoryModal.vue";
 import CreateChannelModal from "./CreateChannelModal.vue";
 import MembersPane from "./MembersPane.vue";
+import RenameCategoryModal from "./RenameCategoryModal.vue";
 import ScreenShareSourcePickerModal from "./ScreenShareSourcePickerModal.vue";
 import ServerSettingsModal from "./ServerSettingsModal.vue";
 import ServerRail from "./ServerRail.vue";
@@ -47,6 +48,7 @@ const shell = useWorkspaceShell();
       <AddServerDialog v-bind="shell.addServerDialogProps.value" v-on="shell.addServerDialogListeners" />
       <CreateChannelModal v-bind="shell.createChannelModalProps.value" v-on="shell.createChannelModalListeners" />
       <CreateCategoryModal v-bind="shell.createCategoryModalProps.value" v-on="shell.createCategoryModalListeners" />
+      <RenameCategoryModal v-bind="shell.renameCategoryModalProps.value" v-on="shell.renameCategoryModalListeners" />
       <ServerSettingsModal v-bind="shell.serverSettingsModalProps.value" v-on="shell.serverSettingsModalListeners" />
     </div>
 

@@ -15,6 +15,11 @@ export type ChannelGroup = {
   channels: Channel[];
 };
 
+export type ChannelLayoutGroupInput = {
+  id: string;
+  channelIds: string[];
+};
+
 export type MemberItem = {
   id: string;
   name: string;

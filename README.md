@@ -30,7 +30,7 @@ Details: `docs/release/milestones.md`
 ## Feature Snapshot
 | Area | Status |
 | --- | --- |
-| Server discovery/join + trust probe | Implemented (UUID server IDs, no manual server-id entry) |
+| Server discovery/join/create + trust probe | Implemented (policy-gated backend creation, UUID server IDs, no manual server-id entry) |
 | Multi-server switching/isolation | Implemented |
 | Text channels + message timeline/composer | Implemented |
 | Text/voice channel creation (owner-gated) | Implemented (mixed categories) |

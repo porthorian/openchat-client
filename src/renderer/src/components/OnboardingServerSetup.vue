@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { DEFAULT_BACKEND_URL, fetchServerDirectory } from "@renderer/services/serverRegistryClient";
+import {
+  DEFAULT_BACKEND_URL,
+  claimServerOwnership as claimServerOwnershipRequest,
+  createServer as createServerRequest,
+  fetchServerDirectory
+} from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
+import { useIdentityStore } from "@renderer/stores";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 
@@ -26,12 +32,14 @@ const emit = defineEmits<{
   complete: [payload: ServerSetupResult];
 }>();
 
+const identity = useIdentityStore();
 const mode = ref<ServerSetupMode>("join");
 const backendUrl = ref(DEFAULT_BACKEND_URL);
 const createDisplayName = ref("");
 const createDescription = ref("");
 const errorMessage = ref<string | null>(null);
 const isSubmitting = ref(false);
+const isCreateAllowed = ref<boolean | null>(null);
 const discoveredServers = ref<ServerProfile[]>([]);
 const selectedDiscoveredServerId = ref("");
 const probeSummary = ref<ProbeSummary | null>(null);
@@ -82,6 +90,9 @@ function resolveTrustWarning(targetBackendUrl: string, capabilities: ServerCapab
 function setMode(nextMode: ServerSetupMode): void {
   mode.value = nextMode;
   errorMessage.value = null;
+  if (nextMode === "create") {
+    void refreshCreatePolicy();
+  }
 }
 
 function setBackendUrl(value: string): void {
@@ -90,7 +101,11 @@ function setBackendUrl(value: string): void {
   selectedDiscoveredServerId.value = "";
   probeSummary.value = null;
   probedCapabilities.value = null;
+  isCreateAllowed.value = null;
   errorMessage.value = null;
+  if (mode.value === "create") {
+    void refreshCreatePolicy();
+  }
 }
 
 function chooseDiscoveredServer(value: string): void {
@@ -156,6 +171,7 @@ async function probeJoinTarget(manageSubmitting = true): Promise<ProbeSummary | 
     };
     probeSummary.value = summary;
     probedCapabilities.value = capabilities;
+    isCreateAllowed.value = capabilities.features.serverCreation;
     return summary;
   } catch (error) {
     errorMessage.value = (error as Error).message;
@@ -166,6 +182,23 @@ async function probeJoinTarget(manageSubmitting = true): Promise<ProbeSummary | 
     if (manageSubmitting) {
       isSubmitting.value = false;
     }
+  }
+}
+
+async function refreshCreatePolicy(): Promise<boolean | null> {
+  const targetBackendUrl = normalizeBackendURL(backendUrl.value);
+  if (!targetBackendUrl) {
+    isCreateAllowed.value = null;
+    return null;
+  }
+  try {
+    const capabilities = await fetchServerCapabilities(targetBackendUrl);
+    probedCapabilities.value = capabilities;
+    isCreateAllowed.value = capabilities.features.serverCreation;
+    return isCreateAllowed.value;
+  } catch (_error) {
+    isCreateAllowed.value = null;
+    return null;
   }
 }
 
@@ -213,14 +246,18 @@ async function completeJoin(): Promise<void> {
   }
 }
 
-function createUUID(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
+function localDeviceID(): string {
+  if (identity.rootIdentityId) {
+    return `desktop_${identity.rootIdentityId.slice(-8)}`;
   }
-  return `oc-${Math.random().toString(16).slice(2)}-${Date.now().toString(16)}`;
+  return "desktop_local";
 }
 
-function completeCreateModel(): void {
+function directoryRequesterUID(targetBackendURL: string): string {
+  return identity.getUIDForServer(`directory:${targetBackendURL}`);
+}
+
+async function completeCreateServer(): Promise<void> {
   const targetBackendUrl = normalizeBackendURL(backendUrl.value);
   const displayName = createDisplayName.value.trim();
   if (!targetBackendUrl) {
@@ -232,21 +269,48 @@ function completeCreateModel(): void {
     return;
   }
 
+  isSubmitting.value = true;
   errorMessage.value = null;
-  emit("complete", {
-    profile: {
-      serverId: createUUID(),
+  try {
+    const capabilities = await fetchServerCapabilities(targetBackendUrl);
+    probedCapabilities.value = capabilities;
+    isCreateAllowed.value = capabilities.features.serverCreation;
+    if (!capabilities.features.serverCreation) {
+      errorMessage.value = "This backend does not allow server creation.";
+      return;
+    }
+
+    const createResult = await createServerRequest({
+      backendUrl: targetBackendUrl,
       displayName,
       description: createDescription.value.trim(),
       bannerPreset: "ocean",
+      userUID: directoryRequesterUID(targetBackendUrl),
+      deviceID: localDeviceID()
+    });
+    await claimServerOwnershipRequest({
       backendUrl: targetBackendUrl,
-      iconText: toIconText(displayName),
-      trustState: "unverified",
-      identityHandshakeStrategy: "token_proof",
-      userIdentifierPolicy: "server_scoped"
-    },
-    capabilities: null
-  });
+      serverId: createResult.profile.serverId,
+      claimToken: createResult.ownershipClaimToken,
+      userUID: identity.getUIDForServer(createResult.profile.serverId),
+      deviceID: localDeviceID()
+    });
+
+    emit("complete", {
+      profile: {
+        ...createResult.profile,
+        identityHandshakeStrategy: capabilities.identityHandshakeModes.includes("challenge_signature")
+          ? "challenge_signature"
+          : "token_proof",
+        userIdentifierPolicy: capabilities.userUidPolicy
+      },
+      capabilities
+    });
+  } catch (error) {
+    errorMessage.value = (error as Error).message;
+  } finally {
+    isSubmitting.value = false;
+  }
 }
 </script>
 
@@ -264,7 +328,7 @@ function completeCreateModel(): void {
           Join Server
         </button>
         <button type="button" class="mode-btn" :class="{ 'is-active': mode === 'create' }" @click="setMode('create')">
-          Create Server Model
+          Create Server
         </button>
       </div>
 
@@ -343,7 +407,18 @@ function completeCreateModel(): void {
           />
         </label>
 
-        <button type="button" class="onboarding-continue" @click="completeCreateModel">Create server model</button>
+        <p v-if="isCreateAllowed === false" class="onboarding-error">
+          This backend currently disables server creation.
+        </p>
+
+        <button
+          type="button"
+          class="onboarding-continue"
+          :disabled="isSubmitting || isCreateAllowed === false"
+          @click="completeCreateServer"
+        >
+          {{ isSubmitting ? "Creating..." : "Create server" }}
+        </button>
       </template>
 
       <p v-if="errorMessage" class="onboarding-error">{{ errorMessage }}</p>

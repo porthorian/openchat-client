@@ -742,6 +742,11 @@ button {
   padding: 6px 8px 10px;
 }
 
+.channel-list.is-drag-disabled .category-header-row,
+.channel-list.is-drag-disabled .channel-row {
+  cursor: default;
+}
+
 .channel-group {
   margin-bottom: 12px;
 }
@@ -754,6 +759,14 @@ button {
   width: 100%;
   min-width: 0;
   margin-bottom: 4px;
+}
+
+.category-header-row[draggable="true"] {
+  cursor: grab;
+}
+
+.category-header-row[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .category-header {
@@ -836,6 +849,11 @@ button {
   display: grid;
 }
 
+.channel-drop-tail {
+  height: 8px;
+  border-radius: 6px;
+}
+
 .channel-pane-menu {
   position: fixed;
   z-index: 82;
@@ -913,6 +931,10 @@ button {
   padding: 0 8px;
   margin-bottom: 2px;
   text-align: left;
+}
+
+.channel-row[draggable="true"] {
+  cursor: grab;
 }
 
 .channel-row:hover {
@@ -4988,6 +5010,31 @@ button {
 .server-discovery-list {
   display: grid;
   gap: 6px;
+}
+
+.server-modal-mode-toggle {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.server-modal-mode-btn {
+  min-height: 34px;
+  border-radius: 8px;
+  border: 1px solid #46506c;
+  background: #262d40;
+  color: #dde5f7;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.server-modal-mode-btn.is-active {
+  border-color: #7084b8;
+  background: #334162;
+}
+
+.server-modal-mode-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .server-discovery-item {

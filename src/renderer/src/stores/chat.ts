@@ -18,9 +18,13 @@ import {
   sendRealtime,
   type CreatedCategoryResponse,
   type CreatedChannelResponse,
+  type UpdatedCategoryResponse,
+  type UpdatedChannelLayoutResponse,
   type ServerSettingsResponse,
   type SyncedUserProfile,
   updateChannelReadAck,
+  updateCategory as updateCategoryRequest,
+  updateChannelLayout as updateChannelLayoutRequest,
   updateServerSettings as updateServerSettingsRequest,
   updateMyProfile,
   uploadProfileAvatar,
@@ -30,6 +34,7 @@ import type { AvatarMode } from "@renderer/types/models";
 import type {
   ChannelReadAck,
   Channel,
+  ChannelLayoutGroupInput,
   ChannelGroup,
   ChannelPresenceMember,
   ChatMessage,
@@ -43,7 +48,14 @@ import type {
 } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
 import { useServerRegistryStore } from "./serverRegistry";
-import { applyCategoryCreatedToGroups, applyChannelCreatedToGroups } from "./chat/channelGroups.ts";
+import {
+  applyCategoryCreatedToGroups,
+  applyCategoryRenamedToGroups,
+  applyCategoryUpdatedToGroups,
+  applyChannelCreatedToGroups,
+  applyChannelLayoutUpdatedToGroups,
+  cloneChannelGroups
+} from "./chat/channelGroups.ts";
 
 type ServerRealtimeState = {
   connected: boolean;
@@ -611,6 +623,49 @@ function normalizePresenceMember(input: unknown): ChannelPresenceMember | null {
   };
 }
 
+function normalizeChannelPayload(input: unknown): Channel | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const id = String(payload.id ?? "").trim();
+  const name = String(payload.name ?? "").trim();
+  const typeRaw = String(payload.type ?? "").trim().toLowerCase();
+  if (!id || !name) return null;
+  if (typeRaw !== "text" && typeRaw !== "voice") return null;
+
+  const unreadCountValue = Number(payload.unread_count ?? payload.unreadCount);
+  const mentionCountValue = Number(payload.mention_count ?? payload.mentionCount);
+  return {
+    id,
+    name,
+    type: typeRaw,
+    unreadCount: Number.isFinite(unreadCountValue) ? Math.max(0, Math.trunc(unreadCountValue)) : undefined,
+    mentionCount: Number.isFinite(mentionCountValue) ? Math.max(0, Math.trunc(mentionCountValue)) : undefined
+  };
+}
+
+function normalizeChannelGroupPayload(input: unknown): ChannelGroup | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const id = String(payload.id ?? "").trim();
+  const label = String(payload.label ?? "").trim();
+  const kindRaw = String(payload.kind ?? "").trim().toLowerCase();
+  if (!id || !label) return null;
+  if (kindRaw !== "text" && kindRaw !== "voice") return null;
+
+  const channelsRaw = Array.isArray(payload.channels) ? payload.channels : [];
+  const channels = channelsRaw
+    .map((channel) => normalizeChannelPayload(channel))
+    .filter((channel): channel is Channel => channel !== null);
+  if (channels.length !== channelsRaw.length) return null;
+
+  return {
+    id,
+    label,
+    kind: kindRaw,
+    channels
+  };
+}
+
 function normalizeChannelCreatedPayload(input: unknown): CreatedChannelResponse | null {
   if (typeof input !== "object" || input === null) return null;
   const payload = input as Record<string, unknown>;
@@ -642,25 +697,46 @@ function normalizeCategoryCreatedPayload(input: unknown): CreatedCategoryRespons
   if (typeof input !== "object" || input === null) return null;
   const payload = input as Record<string, unknown>;
   const serverId = String(payload.server_id ?? "").trim();
-  const groupPayload = typeof payload.group === "object" && payload.group !== null ? (payload.group as Record<string, unknown>) : null;
-  if (!serverId || !groupPayload) return null;
-
-  const groupID = String(groupPayload.id ?? "").trim();
-  const groupLabel = String(groupPayload.label ?? "").trim();
-  const groupKindRaw = String(groupPayload.kind ?? "").trim().toLowerCase();
-  if (!groupID || !groupLabel) return null;
-  if (groupKindRaw !== "text" && groupKindRaw !== "voice") return null;
+  const group = normalizeChannelGroupPayload(payload.group);
+  if (!serverId || !group) return null;
 
   return {
     serverId,
     createdByUID: String(payload.created_by_uid ?? "").trim(),
     createdAt: String(payload.created_at ?? new Date().toISOString()),
-    group: {
-      id: groupID,
-      label: groupLabel,
-      kind: groupKindRaw,
-      channels: []
-    }
+    group
+  };
+}
+
+function normalizeCategoryUpdatedPayload(input: unknown): UpdatedCategoryResponse | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const serverId = String(payload.server_id ?? "").trim();
+  const group = normalizeChannelGroupPayload(payload.group);
+  if (!serverId || !group) return null;
+  return {
+    serverId,
+    group,
+    updatedByUID: String(payload.updated_by_uid ?? "").trim(),
+    updatedAt: String(payload.updated_at ?? new Date().toISOString())
+  };
+}
+
+function normalizeChannelLayoutUpdatedPayload(input: unknown): UpdatedChannelLayoutResponse | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const serverId = String(payload.server_id ?? "").trim();
+  if (!serverId) return null;
+  const groupsRaw = Array.isArray(payload.groups) ? payload.groups : [];
+  const groups = groupsRaw
+    .map((group) => normalizeChannelGroupPayload(group))
+    .filter((group): group is ChannelGroup => group !== null);
+  if (groups.length !== groupsRaw.length) return null;
+  return {
+    serverId,
+    groups,
+    updatedByUID: String(payload.updated_by_uid ?? "").trim(),
+    updatedAt: String(payload.updated_at ?? new Date().toISOString())
   };
 }
 
@@ -1079,6 +1155,24 @@ export const useChatStore = defineStore("chat", {
       this.groupsByServer[serverId] = result.groups;
       return true;
     },
+    applyUpdatedCategory(serverId: string, updated: UpdatedCategoryResponse): boolean {
+      const groups = this.groupsByServer[serverId] ?? [];
+      const result = applyCategoryUpdatedToGroups(groups, {
+        group: updated.group
+      });
+      if (!result.updated) return false;
+      this.groupsByServer[serverId] = result.groups;
+      return true;
+    },
+    applyUpdatedChannelLayout(serverId: string, updated: UpdatedChannelLayoutResponse): boolean {
+      const groups = this.groupsByServer[serverId] ?? [];
+      const result = applyChannelLayoutUpdatedToGroups(groups, {
+        groups: updated.groups
+      });
+      if (!result.updated) return false;
+      this.groupsByServer[serverId] = result.groups;
+      return true;
+    },
     applyServerUpdated(settings: ServerSettingsResponse): void {
       const registry = useServerRegistryStore();
       const normalizedDisplayName = settings.displayName.trim();
@@ -1130,6 +1224,84 @@ export const useChatStore = defineStore("chat", {
       });
       this.applyCreatedCategory(params.serverId, created);
       return created;
+    },
+    async updateCategory(params: {
+      serverId: string;
+      backendUrl: string;
+      groupId: string;
+      name: string;
+      userUID: string;
+      deviceID: string;
+    }): Promise<UpdatedCategoryResponse> {
+      const previousGroups = cloneChannelGroups(this.groupsByServer[params.serverId] ?? []);
+      const optimistic = applyCategoryRenamedToGroups(previousGroups, {
+        groupId: params.groupId,
+        label: params.name
+      });
+      if (optimistic.updated) {
+        this.groupsByServer[params.serverId] = optimistic.groups;
+      }
+
+      try {
+        const updated = await updateCategoryRequest({
+          backendUrl: params.backendUrl,
+          serverId: params.serverId,
+          groupId: params.groupId,
+          name: params.name,
+          userUID: params.userUID,
+          deviceID: params.deviceID
+        });
+        this.applyUpdatedCategory(params.serverId, updated);
+        return updated;
+      } catch (error) {
+        this.groupsByServer[params.serverId] = previousGroups;
+        try {
+          const refreshed = await fetchChannelGroups(params.backendUrl, params.serverId);
+          this.groupsByServer[params.serverId] = refreshed;
+        } catch (_refreshError) {
+          // Keep optimistic rollback when refetch fails.
+        }
+        throw error;
+      }
+    },
+    async updateChannelLayout(params: {
+      serverId: string;
+      backendUrl: string;
+      groups: ChannelGroup[];
+      userUID: string;
+      deviceID: string;
+    }): Promise<UpdatedChannelLayoutResponse> {
+      const previousGroups = cloneChannelGroups(this.groupsByServer[params.serverId] ?? []);
+      const optimistic = applyChannelLayoutUpdatedToGroups(previousGroups, {
+        groups: params.groups
+      });
+      if (optimistic.updated) {
+        this.groupsByServer[params.serverId] = optimistic.groups;
+      }
+
+      try {
+        const updated = await updateChannelLayoutRequest({
+          backendUrl: params.backendUrl,
+          serverId: params.serverId,
+          groups: params.groups.map((group): ChannelLayoutGroupInput => ({
+            id: group.id,
+            channelIds: group.channels.map((channel) => channel.id)
+          })),
+          userUID: params.userUID,
+          deviceID: params.deviceID
+        });
+        this.applyUpdatedChannelLayout(params.serverId, updated);
+        return updated;
+      } catch (error) {
+        this.groupsByServer[params.serverId] = previousGroups;
+        try {
+          const refreshed = await fetchChannelGroups(params.backendUrl, params.serverId);
+          this.groupsByServer[params.serverId] = refreshed;
+        } catch (_refreshError) {
+          // Keep optimistic rollback when refetch fails.
+        }
+        throw error;
+      }
     },
     async fetchServerSettings(params: {
       serverId: string;
@@ -1572,6 +1744,20 @@ export const useChatStore = defineStore("chat", {
         if (!created) return;
         if (created.serverId !== serverId) return;
         this.applyCreatedCategory(serverId, created);
+        return;
+      }
+      if (envelope.type === "chat.category.updated") {
+        const updated = normalizeCategoryUpdatedPayload(envelope.payload);
+        if (!updated) return;
+        if (updated.serverId !== serverId) return;
+        this.applyUpdatedCategory(serverId, updated);
+        return;
+      }
+      if (envelope.type === "chat.channel.layout.updated") {
+        const updated = normalizeChannelLayoutUpdatedPayload(envelope.payload);
+        if (!updated) return;
+        if (updated.serverId !== serverId) return;
+        this.applyUpdatedChannelLayout(serverId, updated);
         return;
       }
       if (envelope.type === "chat.server.updated") {

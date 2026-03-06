@@ -1,5 +1,6 @@
 import type {
   Channel,
+  ChannelLayoutGroupInput,
   ChannelReadAck,
   ChannelGroup,
   ChannelType,
@@ -60,6 +61,20 @@ export type CreatedCategoryResponse = {
   group: ChannelGroup;
   createdByUID: string;
   createdAt: string;
+};
+
+export type UpdatedCategoryResponse = {
+  serverId: string;
+  group: ChannelGroup;
+  updatedByUID: string;
+  updatedAt: string;
+};
+
+export type UpdatedChannelLayoutResponse = {
+  serverId: string;
+  groups: ChannelGroup[];
+  updatedByUID: string;
+  updatedAt: string;
 };
 
 export type ServerSettingsResponse = {
@@ -604,6 +619,86 @@ export async function createCategory(params: {
     group,
     createdByUID: String(payload.created_by_uid ?? params.userUID),
     createdAt: String(payload.created_at ?? new Date().toISOString())
+  };
+}
+
+export async function updateCategory(params: {
+  backendUrl: string;
+  serverId: string;
+  groupId: string;
+  name: string;
+  userUID: string;
+  deviceID: string;
+}): Promise<UpdatedCategoryResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/categories/${encodeURIComponent(params.groupId)}`;
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      ...authHeaders(params.userUID, params.deviceID),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: params.name
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update category (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const group = normalizeChannelGroupPayload(payload.group);
+  if (!group) {
+    throw new Error("Failed to update category: server returned an invalid group payload.");
+  }
+
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    group,
+    updatedByUID: String(payload.updated_by_uid ?? params.userUID),
+    updatedAt: String(payload.updated_at ?? new Date().toISOString())
+  };
+}
+
+export async function updateChannelLayout(params: {
+  backendUrl: string;
+  serverId: string;
+  groups: ChannelLayoutGroupInput[];
+  userUID: string;
+  deviceID: string;
+}): Promise<UpdatedChannelLayoutResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/channel-layout`;
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      ...authHeaders(params.userUID, params.deviceID),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      groups: params.groups.map((group) => ({
+        id: group.id,
+        channel_ids: group.channelIds
+      }))
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update channel layout (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const groupsRaw = Array.isArray(payload.groups) ? payload.groups : [];
+  const groups = groupsRaw
+    .map((group) => normalizeChannelGroupPayload(group))
+    .filter((group): group is ChannelGroup => group !== null);
+  if (groups.length === 0 && groupsRaw.length > 0) {
+    throw new Error("Failed to update channel layout: server returned an invalid groups payload.");
+  }
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    groups,
+    updatedByUID: String(payload.updated_by_uid ?? params.userUID),
+    updatedAt: String(payload.updated_at ?? new Date().toISOString())
   };
 }
 

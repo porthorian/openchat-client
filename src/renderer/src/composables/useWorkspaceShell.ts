@@ -6,6 +6,8 @@ import type { ServerProfile } from "@renderer/types/models";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
 import type { CallVideoStream } from "@renderer/stores/call";
 import {
+  claimServerOwnership as claimServerOwnershipRequest,
+  createServer as createServerRequest,
   DEFAULT_BACKEND_URL,
   fetchServerDirectory,
   leaveServerMembership,
@@ -35,9 +37,13 @@ type VoiceParticipant = {
 };
 
 type AddServerFormState = {
+  mode: "join" | "create";
   backendUrl: string;
   errorMessage: string | null;
   isSubmitting: boolean;
+  createDisplayName: string;
+  createDescription: string;
+  canCreateServers: boolean | null;
   discoveredServers: ServerProfile[];
   selectedDiscoveredServerId: string;
   probeSummary: ServerJoinProbeSummary | null;
@@ -72,6 +78,14 @@ type CreateCategoryFormState = {
   isSubmitting: boolean;
   errorMessage: string | null;
   initialKind: "text" | "voice" | null;
+};
+
+type RenameCategoryFormState = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  groupId: string | null;
+  initialName: string;
 };
 
 type ServerSettingsFormState = {
@@ -112,9 +126,13 @@ export function useWorkspaceShell() {
   const messageSendError = ref<string | null>(null);
   const isAddServerDialogOpen = ref(false);
   const addServerForm = ref<AddServerFormState>({
+    mode: "join",
     backendUrl: DEFAULT_BACKEND_URL,
     errorMessage: null,
     isSubmitting: false,
+    createDisplayName: "",
+    createDescription: "",
+    canCreateServers: null,
     discoveredServers: [],
     selectedDiscoveredServerId: "",
     probeSummary: null,
@@ -137,6 +155,13 @@ export function useWorkspaceShell() {
     isSubmitting: false,
     errorMessage: null,
     initialKind: null
+  });
+  const renameCategoryForm = ref<RenameCategoryFormState>({
+    isOpen: false,
+    isSubmitting: false,
+    errorMessage: null,
+    groupId: null,
+    initialName: ""
   });
   const serverSettingsForm = ref<ServerSettingsFormState>({
     isOpen: false,
@@ -687,6 +712,7 @@ export function useWorkspaceShell() {
   onBeforeUnmount(() => {
     closeCreateChannelModal();
     closeCreateCategoryModal();
+    closeRenameCategoryModal();
     closeServerSettingsModal();
     closeScreenSharePicker();
     call.disconnectAll();
@@ -729,6 +755,7 @@ export function useWorkspaceShell() {
     }
     closeCreateChannelModal();
     closeCreateCategoryModal();
+    closeRenameCategoryModal();
     closeServerSettingsModal();
     closeScreenSharePicker();
     const currentActiveVoice = activeVoiceChannelId.value;
@@ -908,6 +935,75 @@ export function useWorkspaceShell() {
       createCategoryForm.value.errorMessage = (error as Error).message;
     } finally {
       createCategoryForm.value.isSubmitting = false;
+    }
+  }
+
+  function openRenameCategoryModal(groupId: string): void {
+    const normalizedGroupID = groupId.trim();
+    if (!normalizedGroupID) return;
+    const group = rawChannelGroups.value.find((item) => item.id === normalizedGroupID);
+    if (!group) return;
+
+    renameCategoryForm.value = {
+      isOpen: true,
+      isSubmitting: false,
+      errorMessage: null,
+      groupId: normalizedGroupID,
+      initialName: group.label
+    };
+  }
+
+  function closeRenameCategoryModal(): void {
+    if (renameCategoryForm.value.isSubmitting) return;
+    renameCategoryForm.value = {
+      isOpen: false,
+      isSubmitting: false,
+      errorMessage: null,
+      groupId: null,
+      initialName: ""
+    };
+  }
+
+  async function submitRenameCategory(payload: { name: string }): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    const groupID = renameCategoryForm.value.groupId?.trim() ?? "";
+    if (!server || !currentUID || !groupID) return;
+
+    renameCategoryForm.value.isSubmitting = true;
+    renameCategoryForm.value.errorMessage = null;
+    try {
+      await chat.updateCategory({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        groupId: groupID,
+        name: payload.name,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+      closeRenameCategoryModal();
+    } catch (error) {
+      renameCategoryForm.value.errorMessage = (error as Error).message;
+    } finally {
+      renameCategoryForm.value.isSubmitting = false;
+    }
+  }
+
+  async function submitChannelTreeLayout(groups: ChannelGroup[]): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    if (!server || !currentUID) return;
+
+    try {
+      await chat.updateChannelLayout({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        groups,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+    } catch (error) {
+      console.warn("Failed to persist channel layout", error);
     }
   }
 
@@ -1378,6 +1474,7 @@ export function useWorkspaceShell() {
       const summary = result.summary;
       addServerForm.value.probeSummary = summary;
       addServerForm.value.probedCapabilities = result.capabilities;
+      addServerForm.value.canCreateServers = result.capabilities.features.serverCreation;
       const selectedServerId = addServerForm.value.selectedDiscoveredServerId;
       if (selectedServerId) {
         addServerForm.value.discoveredServers = addServerForm.value.discoveredServers.map((server) =>
@@ -1389,6 +1486,7 @@ export function useWorkspaceShell() {
       addServerForm.value.errorMessage = (error as Error).message;
       addServerForm.value.probeSummary = null;
       addServerForm.value.probedCapabilities = null;
+      addServerForm.value.canCreateServers = null;
       return null;
     } finally {
       if (manageSubmitting) {
@@ -1399,9 +1497,13 @@ export function useWorkspaceShell() {
 
   function resetAddServerForm(): void {
     addServerForm.value = {
+      mode: "join",
       backendUrl: DEFAULT_BACKEND_URL,
       errorMessage: null,
       isSubmitting: false,
+      createDisplayName: "",
+      createDescription: "",
+      canCreateServers: null,
       discoveredServers: [],
       selectedDiscoveredServerId: "",
       probeSummary: null,
@@ -1438,6 +1540,7 @@ export function useWorkspaceShell() {
         addServerForm.value.discoveredServers = [];
         addServerForm.value.selectedDiscoveredServerId = "";
         addServerForm.value.probedCapabilities = null;
+        addServerForm.value.canCreateServers = null;
         return;
       }
 
@@ -1455,6 +1558,7 @@ export function useWorkspaceShell() {
       addServerForm.value.discoveredServers = [];
       addServerForm.value.selectedDiscoveredServerId = "";
       addServerForm.value.probedCapabilities = null;
+      addServerForm.value.canCreateServers = null;
       addServerForm.value.errorMessage = (directoryError as Error).message;
     } finally {
       addServerForm.value.isSubmitting = false;
@@ -1523,7 +1627,93 @@ export function useWorkspaceShell() {
     addServerForm.value.selectedDiscoveredServerId = "";
     addServerForm.value.probeSummary = null;
     addServerForm.value.probedCapabilities = null;
+    addServerForm.value.canCreateServers = null;
     addServerForm.value.errorMessage = null;
+  }
+
+  function setAddServerMode(value: "join" | "create"): void {
+    addServerForm.value.mode = value;
+    addServerForm.value.errorMessage = null;
+    if (value === "create" && addServerForm.value.canCreateServers === null) {
+      void probeAddServerTarget();
+    }
+  }
+
+  function setAddServerCreateDisplayName(value: string): void {
+    addServerForm.value.createDisplayName = value;
+    addServerForm.value.errorMessage = null;
+  }
+
+  function setAddServerCreateDescription(value: string): void {
+    addServerForm.value.createDescription = value;
+    addServerForm.value.errorMessage = null;
+  }
+
+  async function createServerFromDialog(): Promise<void> {
+    const backendUrl = normalizeBackendURL(addServerForm.value.backendUrl);
+    const displayName = addServerForm.value.createDisplayName.trim();
+    if (!backendUrl) {
+      addServerForm.value.errorMessage = "Backend URL is required.";
+      return;
+    }
+    if (!displayName) {
+      addServerForm.value.errorMessage = "Server name is required.";
+      return;
+    }
+
+    addServerForm.value.isSubmitting = true;
+    addServerForm.value.errorMessage = null;
+    try {
+      let capabilities = addServerForm.value.probedCapabilities;
+      if (!capabilities) {
+        await probeAddServerTarget(false);
+        capabilities = addServerForm.value.probedCapabilities;
+      }
+      if (!capabilities) {
+        addServerForm.value.errorMessage = "Could not probe backend capabilities.";
+        return;
+      }
+      addServerForm.value.canCreateServers = capabilities.features.serverCreation;
+      if (!capabilities.features.serverCreation) {
+        addServerForm.value.errorMessage = "This backend does not allow server creation.";
+        return;
+      }
+
+      const created = await createServerRequest({
+        backendUrl,
+        displayName,
+        description: addServerForm.value.createDescription.trim(),
+        bannerPreset: "ocean",
+        userUID: directoryRequesterUID(backendUrl),
+        deviceID: localDeviceID.value
+      });
+      await claimServerOwnershipRequest({
+        backendUrl,
+        serverId: created.profile.serverId,
+        claimToken: created.ownershipClaimToken,
+        userUID: identity.getUIDForServer(created.profile.serverId),
+        deviceID: localDeviceID.value
+      });
+
+      const added = registry.addServer({
+        ...created.profile,
+        identityHandshakeStrategy: toHandshakeStrategy(capabilities),
+        userIdentifierPolicy: capabilities.userUidPolicy
+      });
+      if (!added) {
+        addServerForm.value.errorMessage = `Server already added: ${created.profile.serverId}`;
+        return;
+      }
+      registry.setCapabilities(created.profile.serverId, capabilities);
+      appUI.setActiveServer(created.profile.serverId);
+      startupError.value = null;
+      isAddServerDialogOpen.value = false;
+      await hydrateServerWithReachabilityHandling(created.profile.serverId);
+    } catch (error) {
+      addServerForm.value.errorMessage = (error as Error).message;
+    } finally {
+      addServerForm.value.isSubmitting = false;
+    }
   }
 
   async function probeServerJoinTarget(): Promise<void> {
@@ -1763,9 +1953,13 @@ export function useWorkspaceShell() {
 
   const addServerDialogProps = computed(() => ({
     isOpen: isAddServerDialogOpen.value,
+    mode: addServerForm.value.mode,
     backendUrl: addServerForm.value.backendUrl,
     errorMessage: addServerForm.value.errorMessage,
     isSubmitting: addServerForm.value.isSubmitting,
+    createDisplayName: addServerForm.value.createDisplayName,
+    createDescription: addServerForm.value.createDescription,
+    canCreateServers: addServerForm.value.canCreateServers,
     discoveredServers: addServerForm.value.discoveredServers.map((server) => ({
       serverId: server.serverId,
       displayName: server.displayName,
@@ -1789,6 +1983,14 @@ export function useWorkspaceShell() {
     isSubmitting: createCategoryForm.value.isSubmitting,
     errorMessage: createCategoryForm.value.errorMessage,
     initialKind: createCategoryForm.value.initialKind,
+    serverName: activeServer.value?.displayName ?? ""
+  }));
+
+  const renameCategoryModalProps = computed(() => ({
+    isOpen: renameCategoryForm.value.isOpen,
+    isSubmitting: renameCategoryForm.value.isSubmitting,
+    errorMessage: renameCategoryForm.value.errorMessage,
+    initialName: renameCategoryForm.value.initialName,
     serverName: activeServer.value?.displayName ?? ""
   }));
 
@@ -1817,6 +2019,8 @@ export function useWorkspaceShell() {
     selectVoiceChannel,
     createChannel: openCreateChannelModal,
     createCategory: openCreateCategoryModal,
+    renameCategory: openRenameCategoryModal,
+    reorderChannelTree: submitChannelTreeLayout,
     openServerSettings: openServerSettingsModal,
     updateFilter: setChannelFilter,
     markChannelsRead
@@ -1854,10 +2058,14 @@ export function useWorkspaceShell() {
 
   const addServerDialogListeners = {
     close: closeAddServerDialog,
+    "update:mode": setAddServerMode,
     discover: discoverServersFromURL,
     probe: probeServerJoinTarget,
     addManually: addServerManually,
+    createServer: createServerFromDialog,
     selectDiscoveredServer,
+    "update:createDisplayName": setAddServerCreateDisplayName,
+    "update:createDescription": setAddServerCreateDescription,
     "update:backendUrl": setAddServerBackendUrl
   };
 
@@ -1869,6 +2077,11 @@ export function useWorkspaceShell() {
   const createCategoryModalListeners = {
     close: closeCreateCategoryModal,
     submit: submitCreateCategory
+  };
+
+  const renameCategoryModalListeners = {
+    close: closeRenameCategoryModal,
+    submit: submitRenameCategory
   };
 
   const serverSettingsModalListeners = {
@@ -1920,6 +2133,7 @@ export function useWorkspaceShell() {
     addServerDialogProps,
     createChannelModalProps,
     createCategoryModalProps,
+    renameCategoryModalProps,
     serverSettingsModalProps,
     taskbarListeners,
     versionInfoModalListeners,
@@ -1934,6 +2148,7 @@ export function useWorkspaceShell() {
     addServerDialogListeners,
     createChannelModalListeners,
     createCategoryModalListeners,
+    renameCategoryModalListeners,
     serverSettingsModalListeners,
     screenSharePickerListeners
   };

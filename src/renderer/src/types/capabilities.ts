@@ -20,6 +20,7 @@ export type CoreFeatureFlagsResponse = {
   presence?: boolean;
   attachments?: boolean;
   notifications?: boolean;
+  server_creation?: boolean;
 };
 
 export type MentionCapabilitiesResponse = {
@@ -141,6 +142,7 @@ export type CoreFeatureFlags = {
   presence: boolean;
   attachments: boolean;
   notifications: boolean;
+  serverCreation: boolean;
 };
 
 export type MentionCapabilities = {
@@ -326,7 +328,8 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
       messaging: source.features.messaging ?? false,
       presence: source.features.presence ?? false,
       attachments: source.features.attachments ?? false,
-      notifications: source.features.notifications ?? false
+      notifications: source.features.notifications ?? false,
+      serverCreation: source.features.server_creation ?? false
     },
     mentions: {
       user: source.mentions?.user ?? false,
