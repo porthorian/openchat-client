@@ -71,6 +71,11 @@ export type RTCConnectionPolicyResponse = {
   reconnect_backoff_ms: number[];
 };
 
+export type RTCSubscribeReceivePolicyResponse = {
+  max_video_tracks: number;
+  max_audio_tracks: number;
+};
+
 export type RTCCapabilitiesResponse = {
   protocol_version: string;
   signaling_url: string;
@@ -79,6 +84,7 @@ export type RTCCapabilitiesResponse = {
   features: RTCFeatureFlagsResponse;
   ice_servers: RTCIceServerResponse[];
   connection_policy: RTCConnectionPolicyResponse;
+  subscribe_receive_policy: RTCSubscribeReceivePolicyResponse;
 };
 
 export type ProfileDisplayNameRulesResponse = {
@@ -186,6 +192,11 @@ export type RTCConnectionPolicy = {
   reconnectBackoffMs: number[];
 };
 
+export type RTCSubscribeReceivePolicy = {
+  maxVideoTracks: number;
+  maxAudioTracks: number;
+};
+
 export type RTCCapabilities = {
   protocolVersion: string;
   signalingUrl: string;
@@ -194,6 +205,7 @@ export type RTCCapabilities = {
   features: RTCFeatureFlags;
   iceServers: RTCIceServer[];
   connectionPolicy: RTCConnectionPolicy;
+  subscribeReceivePolicy: RTCSubscribeReceivePolicy;
 };
 
 export type ProfileDisplayNameRules = {
@@ -264,6 +276,10 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
           answerTimeoutMs: source.rtc.connection_policy.answer_timeout_ms,
           iceRestartEnabled: source.rtc.connection_policy.ice_restart_enabled,
           reconnectBackoffMs: source.rtc.connection_policy.reconnect_backoff_ms
+        },
+        subscribeReceivePolicy: {
+          maxVideoTracks: source.rtc.subscribe_receive_policy.max_video_tracks,
+          maxAudioTracks: source.rtc.subscribe_receive_policy.max_audio_tracks
         }
       }
     : null;

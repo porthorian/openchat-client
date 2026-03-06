@@ -21,6 +21,10 @@ export type JoinTicketResponse = {
     video: boolean;
     screenshare: boolean;
   };
+  subscribe_receive_policy?: {
+    max_video_tracks: number;
+    max_audio_tracks: number;
+  };
 };
 
 export type SignalEnvelope = {

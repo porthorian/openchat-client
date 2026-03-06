@@ -364,7 +364,9 @@ export function useWorkspaceShell() {
 
   const activeCallVideoStreams = computed<CallVideoStream[]>(() => {
     if (!activeVoiceChannelId.value) return [];
-    return call.videoStreamsFor(appUI.activeServerId, activeVoiceChannelId.value);
+    return call
+      .videoStreamsFor(appUI.activeServerId, activeVoiceChannelId.value)
+      .filter((stream) => stream.participantId !== "participant_unknown");
   });
 
   const isCallStageVisible = computed(() => {

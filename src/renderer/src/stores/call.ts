@@ -1,6 +1,24 @@
 import { defineStore } from "pinia";
 import { fetchServerCapabilities, requestJoinTicket, sendSignal, type SignalEnvelope } from "@renderer/services/rtcClient";
 import { useServerRegistryStore } from "@renderer/stores/serverRegistry";
+import { transitionCallState } from "@renderer/stores/call/machine";
+import {
+  decideSubscribeSync,
+  desiredSubscribeReceiveTrackCount,
+  resolveSubscribeReceivePolicy,
+  shouldDeferOffer,
+  type RTCSubscribeReceivePolicy
+} from "@renderer/stores/call/negotiation";
+import { buildMicrophoneConstraints } from "@renderer/stores/call/localMedia";
+import {
+  findPendingRemoteTrackForMeta,
+  parseRemoteTrackLifecyclePayload,
+  resolveRemoteMetaForObservedTrack,
+  selectRemoteTrackMetaForRemoval,
+  type RemoteTrackLifecyclePayload,
+  type RemoteTrackPendingCandidate
+} from "@renderer/stores/call/remoteMedia";
+import { parseSignalEnvelopeMessage } from "@renderer/stores/call/signaling";
 
 export type CallConnectionState = "idle" | "joining" | "active" | "reconnecting" | "error";
 
@@ -78,23 +96,46 @@ type CallState = {
 
 const DEFAULT_OUTPUT_DEVICE_ID = "default";
 const DEFAULT_OUTPUT_DEVICE_LABEL = "System Default";
+const RTC_AUDIO_MICROPHONE_KIND = "audio_microphone";
 const RTC_VIDEO_CAMERA_KIND = "video_camera";
 const RTC_VIDEO_SCREEN_KIND = "video_screen";
+const RTC_MEDIA_KIND_AUDIO = "audio";
+const RTC_MEDIA_KIND_VIDEO = "video";
+const RTC_DIRECTION_PUBLISH = "publish";
+const RTC_DIRECTION_SUBSCRIBE = "subscribe";
+const RTC_SFU_PUBLISH_PEER_ID = "__sfu_publish__";
+const RTC_SFU_SUBSCRIBE_PEER_ID = "__sfu_subscribe__";
 const socketsByKey = new Map<string, WebSocket>();
 const intentionallyClosed = new Set<string>();
-const nextPlaybackTimeByStream = new Map<string, number>();
 const micUplinksByKey = new Map<string, MicUplink>();
+const localMicStreamsByKey = new Map<string, MediaStream>();
 const peerConnectionsByKey = new Map<string, Map<string, PeerConnectionEntry>>();
 const iceServersByKey = new Map<string, RTCIceServer[]>();
 const videoHintByKey = new Map<string, Map<string, CallVideoStreamKind>>();
+const videoTrackOwnerByKey = new Map<string, Map<string, string>>();
+const videoStreamOwnerByKey = new Map<string, Map<string, string>>();
+const videoStreamKindByKey = new Map<string, Map<string, CallVideoStreamKind>>();
+const remoteTrackMetaByKey = new Map<string, Map<string, RemoteTrackMeta>>();
+const pendingRemoteTracksByKey = new Map<string, Map<string, PendingRemoteTrack>>();
+const remoteAudioEntriesByKey = new Map<string, Map<string, RemoteAudioEntry>>();
+const remoteVideoStatsProbeByKey = new Map<string, ReturnType<typeof setInterval>>();
+const remoteVideoStallCountByProbeKey = new Map<string, number>();
+const subscribeSyncCooldownByKey = new Map<string, number>();
+const subscribeSyncFollowUpReasonByKey = new Map<string, string>();
+const subscribeSyncFollowUpTimerByKey = new Map<string, ReturnType<typeof setTimeout>>();
+const subscribePeerResetCooldownByKey = new Map<string, number>();
+const signalingSocketRestartCooldownByKey = new Map<string, number>();
+const reconnectTimerByKey = new Map<string, ReturnType<typeof setTimeout>>();
+const reconnectAttemptByKey = new Map<string, number>();
+const joinContextByKey = new Map<string, { backendUrl: string; userUID: string; deviceID: string }>();
 const localCameraStreamsByKey = new Map<string, MediaStream>();
 const localScreenStreamsByKey = new Map<string, MediaStream>();
 const localJoinIdentityByKey = new Map<string, { userUID: string; deviceID: string }>();
+const subscribeReceivePolicyByServer = new Map<string, RTCSubscribeReceivePolicy>();
+const subscribeReceivePolicyByKey = new Map<string, RTCSubscribeReceivePolicy>();
 const speakingTimersByParticipant = new Map<string, ReturnType<typeof setTimeout>>();
-let playbackAudioContext: AudioContext | null = null;
-let playbackGainNode: GainNode | null = null;
-let playbackDestinationNode: MediaStreamAudioDestinationNode | null = null;
-let playbackAudioElement: HTMLAudioElement | null = null;
+const localMicProbeByKey = new Map<string, LocalAudioProbe>();
+const remoteAudioProbeByKey = new Map<string, LocalAudioProbe>();
 let playbackMuted = false;
 let playbackVolume = 0.5;
 const speakingIndicatorHoldMS = 450;
@@ -105,6 +146,7 @@ const rtcDebugEnabled = (() => {
     .trim()
     .toLowerCase();
   if (envValue === "1" || envValue === "true" || envValue === "yes" || envValue === "on") {
+    console.debug(`${rtcLogPrefix} RTC debug logging enabled via environment variable.`);
     return true;
   }
   if (envValue === "0" || envValue === "false" || envValue === "no" || envValue === "off") {
@@ -126,23 +168,48 @@ type MicUplink = {
   channelId: string;
   streamId: string;
   mediaStream: MediaStream;
+  track: MediaStreamTrack;
+};
+
+type RemoteTrackMeta = RemoteTrackLifecyclePayload;
+
+type PendingRemoteTrack = {
+  connection: RTCPeerConnection;
+  mediaStream: MediaStream;
+  track: MediaStreamTrack;
+  observedTrackId: string;
+  observedStreamId: string;
+  mediaKind: typeof RTC_MEDIA_KIND_AUDIO | typeof RTC_MEDIA_KIND_VIDEO;
+};
+
+type RemoteAudioEntry = {
+  entryKey: string;
+  participantId: string;
+  trackId: string;
+  streamId: string;
+  mediaStream: MediaStream;
+  audioElement: HTMLAudioElement;
+};
+
+type LocalAudioProbe = {
   audioContext: AudioContext;
   sourceNode: MediaStreamAudioSourceNode;
-  processorNode: ScriptProcessorNode;
-  sinkNode: GainNode;
-  chunkSeq: number;
+  analyserNode: AnalyserNode;
+  timer: ReturnType<typeof setInterval>;
 };
+
+type PeerSignalDirection = typeof RTC_DIRECTION_PUBLISH | typeof RTC_DIRECTION_SUBSCRIBE;
 
 type PeerConnectionEntry = {
   connection: RTCPeerConnection;
-  participantId: string;
+  peerId: string;
   channelId: string;
-  polite: boolean;
+  direction: PeerSignalDirection;
   makingOffer: boolean;
-  ignoreOffer: boolean;
   isSettingRemoteAnswerPending: boolean;
   pendingNegotiation: boolean;
   pendingNegotiationReason: string | null;
+  pendingRemoteCandidates: RTCIceCandidateInit[];
 };
 
 type ElectronDesktopVideoConstraints = MediaTrackConstraints & {
@@ -151,6 +218,13 @@ type ElectronDesktopVideoConstraints = MediaTrackConstraints & {
     chromeMediaSourceId: string;
     maxFrameRate?: number;
   };
+};
+
+type RTCTrackStatsLike = RTCStats & {
+  kind?: string;
+  trackIdentifier?: string;
+  frameWidth?: number;
+  frameHeight?: number;
 };
 
 function rtcLog(event: string, payload: Record<string, unknown>): void {
@@ -184,11 +258,7 @@ function createEmptySession(): ChannelCallSession {
 }
 
 function parseSignalEnvelope(rawMessage: string): SignalEnvelope | null {
-  try {
-    return JSON.parse(rawMessage) as SignalEnvelope;
-  } catch (_error) {
-    return null;
-  }
+  return parseSignalEnvelopeMessage(rawMessage);
 }
 
 function toNumber(value: unknown, fallback: number): number {
@@ -205,6 +275,32 @@ function toDescriptionType(value: unknown): RTCSdpType | null {
   return null;
 }
 
+function toSignalDirection(value: unknown): PeerSignalDirection | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === RTC_DIRECTION_PUBLISH || normalized === RTC_DIRECTION_SUBSCRIBE) {
+    return normalized;
+  }
+  return null;
+}
+
+function peerIdForDirection(direction: PeerSignalDirection): string {
+  return direction === RTC_DIRECTION_SUBSCRIBE ? RTC_SFU_SUBSCRIBE_PEER_ID : RTC_SFU_PUBLISH_PEER_ID;
+}
+
+function directionForPeerId(peerId: string): PeerSignalDirection | null {
+  if (peerId === RTC_SFU_PUBLISH_PEER_ID) return RTC_DIRECTION_PUBLISH;
+  if (peerId === RTC_SFU_SUBSCRIBE_PEER_ID) return RTC_DIRECTION_SUBSCRIBE;
+  return null;
+}
+
+function offerTypeForDirection(direction: PeerSignalDirection): "rtc.offer.publish" | "rtc.offer.subscribe" {
+  return direction === RTC_DIRECTION_SUBSCRIBE ? "rtc.offer.subscribe" : "rtc.offer.publish";
+}
+
+function answerTypeForDirection(direction: PeerSignalDirection): "rtc.answer.publish" | "rtc.answer.subscribe" {
+  return direction === RTC_DIRECTION_SUBSCRIBE ? "rtc.answer.subscribe" : "rtc.answer.publish";
+}
+
 function toVideoKindFromSignal(streamKind: string): CallVideoStreamKind | null {
   if (streamKind === RTC_VIDEO_CAMERA_KIND) return "camera";
   if (streamKind === RTC_VIDEO_SCREEN_KIND) return "screen";
@@ -213,6 +309,13 @@ function toVideoKindFromSignal(streamKind: string): CallVideoStreamKind | null {
 
 function toSignalStreamKind(kind: CallVideoStreamKind): string {
   return kind === "screen" ? RTC_VIDEO_SCREEN_KIND : RTC_VIDEO_CAMERA_KIND;
+}
+
+function toRemoteTrackMediaKind(value: unknown): typeof RTC_MEDIA_KIND_AUDIO | typeof RTC_MEDIA_KIND_VIDEO | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === RTC_MEDIA_KIND_AUDIO) return RTC_MEDIA_KIND_AUDIO;
+  if (normalized === RTC_MEDIA_KIND_VIDEO) return RTC_MEDIA_KIND_VIDEO;
+  return null;
 }
 
 function videoHintKey(participantId: string, trackId: string): string {
@@ -233,13 +336,40 @@ function inferVideoKindFromTrackLabel(label: string): CallVideoStreamKind {
 }
 
 function toRTCIceServers(iceServers: Array<{ urls: string[]; username?: string; credential?: string }>): RTCIceServer[] {
-  return iceServers
-    .filter((server) => Array.isArray(server.urls) && server.urls.length > 0)
-    .map((server) => ({
-      urls: server.urls,
-      ...(server.username ? { username: server.username } : {}),
-      ...(server.credential ? { credential: server.credential } : {})
-    }));
+  const normalized: Array<RTCIceServer | null> = iceServers.map((server) => {
+      const urls = Array.isArray(server.urls)
+        ? server.urls
+            .map((url) => String(url ?? "").trim())
+            .filter((url) => url.length > 0 && !url.toLowerCase().includes("example.invalid"))
+        : [];
+      if (urls.length === 0) return null;
+      return {
+        urls: [...urls],
+        ...(server.username ? { username: server.username } : {}),
+        ...(server.credential ? { credential: server.credential } : {})
+      };
+    });
+  return normalized.filter((server): server is RTCIceServer => server !== null);
+}
+
+function uniqueRemoteTrackMetas(metaMap: Map<string, RemoteTrackMeta>): RemoteTrackMeta[] {
+  const byCanonicalTrackId = new Map<string, RemoteTrackMeta>();
+  for (const meta of metaMap.values()) {
+    const canonicalTrackID = String(meta.trackId ?? "").trim();
+    if (!canonicalTrackID || byCanonicalTrackId.has(canonicalTrackID)) continue;
+    byCanonicalTrackId.set(canonicalTrackID, meta);
+  }
+  return [...byCanonicalTrackId.values()];
+}
+
+function pendingRemoteTrackCandidates(pendingMap: Map<string, PendingRemoteTrack>): Array<RemoteTrackPendingCandidate<PendingRemoteTrack>> {
+  return [...pendingMap.entries()].map(([key, value]) => ({
+    key,
+    value,
+    trackId: value.observedTrackId,
+    streamId: value.observedStreamId,
+    mediaKind: value.mediaKind
+  }));
 }
 
 function supportsOutputSelection(): boolean {
@@ -250,63 +380,110 @@ function supportsOutputSelection(): boolean {
   return typeof mediaElementProto.setSinkId === "function";
 }
 
-function applyPlaybackGain(): void {
-  if (!playbackGainNode) return;
-  playbackGainNode.gain.value = playbackMuted ? 0 : playbackVolume;
+function applyAudioElementPlayback(audioElement: HTMLAudioElement): void {
+  audioElement.volume = playbackMuted ? 0 : playbackVolume;
+  audioElement.muted = playbackMuted;
+  void audioElement.play().catch(() => {});
 }
 
-function ensureAudioPlayback(): AudioContext | null {
-  if (typeof window === "undefined") return null;
-  if (!playbackAudioContext) {
-    playbackAudioContext = new AudioContext({
-      sampleRate: 48000
-    });
-  }
-  if (!playbackGainNode) {
-    playbackGainNode = playbackAudioContext.createGain();
-  }
-  if (!playbackDestinationNode) {
-    playbackDestinationNode = playbackAudioContext.createMediaStreamDestination();
+function ensureAudioPlayback(): void {
+  // No-op for RTP audio playback; remote audio is attached to per-track elements.
+}
+
+function audioEntriesForSession(key: string): Map<string, RemoteAudioEntry> {
+  const existing = remoteAudioEntriesByKey.get(key);
+  if (existing) return existing;
+  const created = new Map<string, RemoteAudioEntry>();
+  remoteAudioEntriesByKey.set(key, created);
+  return created;
+}
+
+function stopAudioProbe(probeMap: Map<string, LocalAudioProbe>, probeKey: string): void {
+  const probe = probeMap.get(probeKey);
+  if (!probe) return;
+  clearInterval(probe.timer);
+  try {
+    probe.sourceNode.disconnect();
+  } catch (_error) {
+    // No-op.
   }
   try {
-    playbackGainNode.disconnect();
+    probe.analyserNode.disconnect();
   } catch (_error) {
-    // No-op; disconnect can throw when there are no existing connections.
+    // No-op.
   }
-  playbackGainNode.connect(playbackDestinationNode);
+  if (probe.audioContext.state !== "closed") {
+    void probe.audioContext.close().catch(() => {});
+  }
+  probeMap.delete(probeKey);
+}
 
-  if (!playbackAudioElement) {
-    playbackAudioElement = new Audio();
-    playbackAudioElement.autoplay = true;
-    playbackAudioElement.preload = "auto";
-  }
-  if (playbackAudioElement.srcObject !== playbackDestinationNode.stream) {
-    playbackAudioElement.srcObject = playbackDestinationNode.stream;
-  }
-  if (playbackAudioContext.state === "suspended") {
-    void playbackAudioContext.resume();
-  }
-  applyPlaybackGain();
-  void playbackAudioElement.play().catch(() => {});
-  return playbackAudioContext;
+function startAudioActivityProbe(params: {
+  probeMap: Map<string, LocalAudioProbe>;
+  probeKey: string;
+  mediaStream: MediaStream;
+  onSpeaking: () => void;
+}): void {
+  stopAudioProbe(params.probeMap, params.probeKey);
+  const audioTrack = params.mediaStream.getAudioTracks()[0];
+  if (!audioTrack) return;
+  const audioContext = new AudioContext();
+  const sourceNode = audioContext.createMediaStreamSource(params.mediaStream);
+  const analyserNode = audioContext.createAnalyser();
+  analyserNode.fftSize = 2048;
+  sourceNode.connect(analyserNode);
+  const samples = new Uint8Array(analyserNode.fftSize);
+  const timer = setInterval(() => {
+    analyserNode.getByteTimeDomainData(samples);
+    let total = 0;
+    for (let index = 0; index < samples.length; index += 1) {
+      const centered = (samples[index] - 128) / 128;
+      total += Math.abs(centered);
+    }
+    const activity = total / samples.length;
+    if (activity >= speakingActivityThreshold) {
+      params.onSpeaking();
+    }
+  }, 180);
+  params.probeMap.set(params.probeKey, {
+    audioContext,
+    sourceNode,
+    analyserNode,
+    timer
+  });
 }
 
 function setPlaybackMuted(isMuted: boolean): void {
   playbackMuted = isMuted;
-  applyPlaybackGain();
+  for (const entries of remoteAudioEntriesByKey.values()) {
+    for (const entry of entries.values()) {
+      applyAudioElementPlayback(entry.audioElement);
+    }
+  }
 }
 
 function setPlaybackVolume(volume: number): void {
   playbackVolume = Math.max(0, Math.min(1, volume));
-  applyPlaybackGain();
+  for (const entries of remoteAudioEntriesByKey.values()) {
+    for (const entry of entries.values()) {
+      applyAudioElementPlayback(entry.audioElement);
+    }
+  }
 }
 
 async function setPlaybackSinkDevice(deviceId: string): Promise<boolean> {
-  ensureAudioPlayback();
-  if (!playbackAudioElement) return false;
-  const sinkElement = playbackAudioElement as AudioElementWithSink;
-  if (typeof sinkElement.setSinkId !== "function") return false;
-  await sinkElement.setSinkId(deviceId || DEFAULT_OUTPUT_DEVICE_ID);
+  const mediaElementProto = HTMLMediaElement.prototype as AudioElementWithSink;
+  if (typeof mediaElementProto.setSinkId !== "function") {
+    return false;
+  }
+  const normalizedDeviceID = deviceId || DEFAULT_OUTPUT_DEVICE_ID;
+  for (const entries of remoteAudioEntriesByKey.values()) {
+    for (const entry of entries.values()) {
+      const sinkElement = entry.audioElement as AudioElementWithSink;
+      if (typeof sinkElement.setSinkId !== "function") continue;
+      await sinkElement.setSinkId(normalizedDeviceID);
+    }
+  }
   return true;
 }
 
@@ -383,118 +560,26 @@ async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
 }
 
 function clearPlaybackState(): void {
-  nextPlaybackTimeByStream.clear();
+  for (const [key, entries] of remoteAudioEntriesByKey.entries()) {
+    for (const [entryKey, entry] of entries.entries()) {
+      entry.audioElement.srcObject = null;
+      entries.delete(entryKey);
+      stopAudioProbe(remoteAudioProbeByKey, `${key}:${entry.trackId}`);
+    }
+    remoteAudioEntriesByKey.delete(key);
+  }
+  for (const probeKey of localMicProbeByKey.keys()) {
+    stopAudioProbe(localMicProbeByKey, probeKey);
+  }
+  for (const probeKey of remoteAudioProbeByKey.keys()) {
+    stopAudioProbe(remoteAudioProbeByKey, probeKey);
+  }
 }
 
 function speakingTimerKey(serverId: string, channelId: string, participantId: string): string {
   return `${serverId}:${channelId}:${participantId}`;
 }
 
-function estimatePCM16Activity(bytes: Uint8Array): number {
-  if (bytes.length < 2) return 0;
-  let total = 0;
-  let samples = 0;
-  for (let index = 0; index + 1 < bytes.length; index += 2) {
-    const lo = bytes[index];
-    const hi = bytes[index + 1];
-    let value = (hi << 8) | lo;
-    if (value >= 0x8000) value -= 0x10000;
-    total += Math.abs(value) / 32768;
-    samples += 1;
-  }
-  if (samples === 0) return 0;
-  return total / samples;
-}
-
-function estimateFloat32Activity(samples: Float32Array): number {
-  if (samples.length === 0) return 0;
-  let total = 0;
-  for (let index = 0; index < samples.length; index += 1) {
-    total += Math.abs(samples[index]);
-  }
-  return total / samples.length;
-}
-
-function encodePCM16Mono(samples: Float32Array): Uint8Array {
-  const pcm = new Uint8Array(samples.length * 2);
-  for (let index = 0; index < samples.length; index += 1) {
-    const sample = Math.max(-1, Math.min(1, samples[index]));
-    const scaled = sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767);
-    const value = scaled < 0 ? scaled + 0x10000 : scaled;
-    pcm[index * 2] = value & 0xff;
-    pcm[index * 2 + 1] = (value >> 8) & 0xff;
-  }
-  return pcm;
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 1) {
-    binary += String.fromCharCode(bytes[index]);
-  }
-  return window.btoa(binary);
-}
-
-function decodeBase64Chunk(chunkB64: string): Uint8Array | null {
-  try {
-    const binary = window.atob(chunkB64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
-    }
-    return bytes;
-  } catch (_error) {
-    return null;
-  }
-}
-
-function decodePCM16LEInterleaved(bytes: Uint8Array, channels: number): Float32Array[] {
-  const sampleCount = Math.floor(bytes.length / 2 / channels);
-  const channelBuffers: Float32Array[] = Array.from({ length: channels }, () => new Float32Array(sampleCount));
-  let offset = 0;
-  for (let sample = 0; sample < sampleCount; sample += 1) {
-    for (let channel = 0; channel < channels; channel += 1) {
-      const lo = bytes[offset];
-      const hi = bytes[offset + 1];
-      offset += 2;
-      let value = (hi << 8) | lo;
-      if (value >= 0x8000) value -= 0x10000;
-      channelBuffers[channel][sample] = value / 32768;
-    }
-  }
-  return channelBuffers;
-}
-
-function schedulePCMPlayback(params: {
-  streamKey: string;
-  chunkB64: string;
-  sampleRate: number;
-  channels: number;
-}): void {
-  const context = ensureAudioPlayback();
-  if (!context) return;
-  const bytes = decodeBase64Chunk(params.chunkB64);
-  if (!bytes || bytes.length < 2) return;
-
-  const channelCount = Math.max(1, Math.min(2, params.channels));
-  const sampleRate = Math.max(8000, Math.min(96000, params.sampleRate));
-  const samplesByChannel = decodePCM16LEInterleaved(bytes, channelCount);
-  if (samplesByChannel.length === 0 || samplesByChannel[0].length === 0) return;
-
-  const audioBuffer = context.createBuffer(channelCount, samplesByChannel[0].length, sampleRate);
-  for (let channel = 0; channel < channelCount; channel += 1) {
-    const channelData = audioBuffer.getChannelData(channel);
-    channelData.set(samplesByChannel[channel]);
-  }
-
-  const source = context.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(playbackGainNode ?? context.destination);
-  const earliest = context.currentTime + 0.01;
-  const scheduledStart = Math.max(earliest, nextPlaybackTimeByStream.get(params.streamKey) ?? earliest);
-  source.start(scheduledStart);
-  nextPlaybackTimeByStream.set(params.streamKey, scheduledStart + audioBuffer.duration);
-}
 
 function toParticipant(payload: Record<string, unknown>, isLocal: boolean): CallParticipant {
   return {
@@ -588,6 +673,345 @@ export const useCallStore = defineStore("call", {
       }
       return key;
     },
+    clearReconnectState(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const timer = reconnectTimerByKey.get(key);
+      if (timer) {
+        clearTimeout(timer);
+        reconnectTimerByKey.delete(key);
+      }
+      const followUpTimer = subscribeSyncFollowUpTimerByKey.get(key);
+      if (followUpTimer) {
+        clearTimeout(followUpTimer);
+        subscribeSyncFollowUpTimerByKey.delete(key);
+      }
+      subscribeSyncFollowUpReasonByKey.delete(key);
+      reconnectAttemptByKey.delete(key);
+      signalingSocketRestartCooldownByKey.delete(key);
+    },
+    subscribeReceivePolicyForSession(serverId: string, channelId: string): RTCSubscribeReceivePolicy {
+      const key = sessionKey(serverId, channelId);
+      return resolveSubscribeReceivePolicy({
+        capabilitiesPolicy: subscribeReceivePolicyByServer.get(serverId),
+        joinTicketPolicy: subscribeReceivePolicyByKey.get(key)
+      });
+    },
+    desiredSubscribeReceiveTrackCounts(serverId: string, channelId: string): { audio: number; video: number } {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      const localParticipantID = session?.localParticipantId ?? "";
+      const policy = this.subscribeReceivePolicyForSession(serverId, channelId);
+
+      const announcedMetas = remoteTrackMetaByKey.get(key);
+      let announcedAudioTracks = 0;
+      let announcedVideoTracks = 0;
+      if (announcedMetas) {
+        for (const meta of uniqueRemoteTrackMetas(announcedMetas)) {
+          if (localParticipantID && meta.participantId === localParticipantID) continue;
+          if (meta.mediaKind === RTC_MEDIA_KIND_AUDIO) {
+            announcedAudioTracks += 1;
+          } else if (meta.mediaKind === RTC_MEDIA_KIND_VIDEO) {
+            announcedVideoTracks += 1;
+          }
+        }
+      }
+
+      const observedVideoTracks = session
+        ? session.videoStreams.filter((entry) => !entry.isLocal).length
+        : 0;
+      const observedAudioTracks = remoteAudioEntriesByKey.get(key)?.size ?? 0;
+
+      const pendingTracks = pendingRemoteTracksByKey.get(key);
+      let pendingAudioTracks = 0;
+      let pendingVideoTracks = 0;
+      if (pendingTracks) {
+        for (const pending of pendingTracks.values()) {
+          if (pending.mediaKind === RTC_MEDIA_KIND_AUDIO) {
+            pendingAudioTracks += 1;
+          } else if (pending.mediaKind === RTC_MEDIA_KIND_VIDEO) {
+            pendingVideoTracks += 1;
+          }
+        }
+      }
+
+      return {
+        audio: desiredSubscribeReceiveTrackCount({
+          cap: policy.maxAudioTracks,
+          announcedTracks: announcedAudioTracks,
+          observedTracks: observedAudioTracks,
+          pendingTracks: pendingAudioTracks
+        }),
+        video: desiredSubscribeReceiveTrackCount({
+          cap: policy.maxVideoTracks,
+          announcedTracks: announcedVideoTracks,
+          observedTracks: observedVideoTracks,
+          pendingTracks: pendingVideoTracks
+        })
+      };
+    },
+    countSubscribeRecvonlyTransceivers(connection: RTCPeerConnection, kind: "audio" | "video"): number {
+      return connection.getTransceivers().filter((transceiver) => {
+        if (transceiver.direction === "stopped" || transceiver.currentDirection === "stopped") return false;
+        const receiverKind = transceiver.receiver?.track?.kind;
+        if (receiverKind !== kind) return false;
+        const direction = transceiver.direction;
+        const currentDirection = transceiver.currentDirection;
+        return (
+          direction === "recvonly" ||
+          direction === "sendrecv" ||
+          currentDirection === "recvonly" ||
+          currentDirection === "sendrecv"
+        );
+      }).length;
+    },
+    ensureSubscribeRecvonlyTransceivers(
+      serverId: string,
+      channelId: string,
+      peer: PeerConnectionEntry,
+      reason: string
+    ): void {
+      if (peer.direction !== RTC_DIRECTION_SUBSCRIBE || peer.connection.signalingState === "closed") return;
+      const desiredCounts = this.desiredSubscribeReceiveTrackCounts(serverId, channelId);
+      const desiredByKind: Array<{ kind: "audio" | "video"; desired: number }> = [
+        { kind: "audio", desired: desiredCounts.audio },
+        { kind: "video", desired: desiredCounts.video }
+      ];
+      for (const target of desiredByKind) {
+        let existing = this.countSubscribeRecvonlyTransceivers(peer.connection, target.kind);
+        while (existing < target.desired) {
+          try {
+            peer.connection.addTransceiver(target.kind, { direction: "recvonly" });
+            existing += 1;
+            rtcLog("subscribe.transceiver.add", {
+              serverId,
+              channelId,
+              reason,
+              kind: target.kind,
+              existing,
+              desired: target.desired
+            });
+          } catch (error) {
+            rtcLog("subscribe.transceiver.add.error", {
+              serverId,
+              channelId,
+              reason,
+              kind: target.kind,
+              existing,
+              desired: target.desired,
+              message: (error as Error).message
+            });
+            return;
+          }
+        }
+      }
+    },
+    scheduleSubscribeSyncFollowUp(serverId: string, channelId: string, reason: string, delayMs: number): void {
+      const key = sessionKey(serverId, channelId);
+      subscribeSyncFollowUpReasonByKey.set(key, reason);
+      const existingTimer = subscribeSyncFollowUpTimerByKey.get(key);
+      if (existingTimer) return;
+      const timer = setTimeout(() => {
+        subscribeSyncFollowUpTimerByKey.delete(key);
+        const queuedReason = subscribeSyncFollowUpReasonByKey.get(key);
+        subscribeSyncFollowUpReasonByKey.delete(key);
+        if (!queuedReason) return;
+        this.requestSubscribeSync(serverId, channelId, `queued:${queuedReason}`, 0);
+      }, Math.max(0, delayMs));
+      subscribeSyncFollowUpTimerByKey.set(key, timer);
+    },
+    restartSignalingSocket(serverId: string, channelId: string, reason: string, cooldownMs = 30_000): boolean {
+      const key = sessionKey(serverId, channelId);
+      const socket = socketsByKey.get(key);
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        rtcLog("signaling.socket.restart.skip.closed", {
+          serverId,
+          channelId,
+          reason
+        });
+        return false;
+      }
+      const now = Date.now();
+      const lastRestartAt = signalingSocketRestartCooldownByKey.get(key) ?? 0;
+      if (now - lastRestartAt < cooldownMs) {
+        rtcLog("signaling.socket.restart.skip.cooldown", {
+          serverId,
+          channelId,
+          reason,
+          cooldownMs,
+          elapsedMs: now - lastRestartAt
+        });
+        return false;
+      }
+      signalingSocketRestartCooldownByKey.set(key, now);
+      rtcLog("signaling.socket.restart.requested", {
+        serverId,
+        channelId,
+        reason
+      });
+      try {
+        socket.close(4000, reason);
+      } catch (_error) {
+        socket.close();
+      }
+      return true;
+    },
+    scheduleSignalingReconnect(serverId: string, channelId: string, reason: string): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session || intentionallyClosed.has(key)) return;
+      const existingTimer = reconnectTimerByKey.get(key);
+      if (existingTimer) return;
+      const context = joinContextByKey.get(key);
+      if (!context) {
+        session.state = "error";
+        session.errorMessage = "Call signaling disconnected.";
+        return;
+      }
+      const attempt = (reconnectAttemptByKey.get(key) ?? 0) + 1;
+      reconnectAttemptByKey.set(key, attempt);
+      const delayMs = Math.min(8_000, Math.max(1_000, 1_000 * 2 ** (attempt - 1)));
+      rtcLog("signaling.socket.reconnect.scheduled", {
+        serverId,
+        channelId,
+        reason,
+        attempt,
+        delayMs
+      });
+      session.state = transitionCallState(session.state, "signal_disconnected");
+      session.errorMessage = "Call signaling disconnected. Reconnecting...";
+      const timer = setTimeout(() => {
+        reconnectTimerByKey.delete(key);
+        if (intentionallyClosed.has(key)) return;
+        if (this.activeVoiceChannelByServer[serverId] !== channelId) return;
+        const activeSocket = socketsByKey.get(key);
+        if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
+          reconnectAttemptByKey.delete(key);
+          return;
+        }
+        void this.joinChannel({
+          serverId,
+          channelId,
+          backendUrl: context.backendUrl,
+          userUID: context.userUID,
+          deviceID: context.deviceID
+        });
+      }, delayMs);
+      reconnectTimerByKey.set(key, timer);
+    },
+    requestSubscribeSync(serverId: string, channelId: string, reason: string, cooldownMs = 2_000): void {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session || session.state !== "active") {
+        rtcLog("subscribe.sync.skip.inactive", {
+          serverId,
+          channelId,
+          reason
+        });
+        return;
+      }
+      const now = Date.now();
+      const lastSyncAt = subscribeSyncCooldownByKey.get(key) ?? 0;
+      const subscribePeer = this.ensurePeerConnection(serverId, channelId, RTC_SFU_SUBSCRIBE_PEER_ID);
+      if (!subscribePeer) {
+        rtcLog("subscribe.sync.skip.no-peer", {
+          serverId,
+          channelId,
+          reason
+        });
+        return;
+      }
+      this.ensureSubscribeRecvonlyTransceivers(serverId, channelId, subscribePeer, `sync:${reason}`);
+
+      const peerBusy =
+        subscribePeer.connection.signalingState !== "stable" ||
+        subscribePeer.makingOffer ||
+        subscribePeer.isSettingRemoteAnswerPending;
+      const coolingDown = now - lastSyncAt < cooldownMs;
+      const decision = decideSubscribeSync({
+        coolingDown,
+        peerBusy
+      });
+      if (!decision.sendImmediately && decision.queueFollowUp) {
+        subscribeSyncFollowUpReasonByKey.set(key, reason);
+        if (peerBusy && !coolingDown) {
+          subscribePeer.pendingNegotiation = true;
+          subscribePeer.pendingNegotiationReason = `subscribe-sync:${reason}`;
+        }
+        if (coolingDown) {
+          const remainingMs = Math.max(0, cooldownMs - (now - lastSyncAt));
+          this.scheduleSubscribeSyncFollowUp(serverId, channelId, reason, remainingMs);
+        }
+        rtcLog("subscribe.sync.queued", {
+          serverId,
+          channelId,
+          reason,
+          coolingDown,
+          peerBusy,
+          cooldownMs,
+          elapsedMs: now - lastSyncAt,
+          signalingState: subscribePeer.connection.signalingState,
+          makingOffer: subscribePeer.makingOffer,
+          isSettingRemoteAnswerPending: subscribePeer.isSettingRemoteAnswerPending
+        });
+        return;
+      }
+      subscribeSyncFollowUpReasonByKey.delete(key);
+      const followUpTimer = subscribeSyncFollowUpTimerByKey.get(key);
+      if (followUpTimer) {
+        clearTimeout(followUpTimer);
+        subscribeSyncFollowUpTimerByKey.delete(key);
+      }
+      subscribeSyncCooldownByKey.set(key, now);
+      rtcLog("subscribe.sync.requested.internal", {
+        serverId,
+        channelId,
+        reason
+      });
+      void this.createAndSendOffer(serverId, channelId, subscribePeer.peerId, "sync-subscribe");
+    },
+    resetSubscribePeerConnection(serverId: string, channelId: string, reason: string, cooldownMs = 12_000): boolean {
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session || session.state !== "active") {
+        rtcLog("subscribe.peer.reset.skip.inactive", {
+          serverId,
+          channelId,
+          reason
+        });
+        return false;
+      }
+      const now = Date.now();
+      const lastResetAt = subscribePeerResetCooldownByKey.get(key) ?? 0;
+      if (now - lastResetAt < cooldownMs) {
+        rtcLog("subscribe.peer.reset.skip.cooldown", {
+          serverId,
+          channelId,
+          reason,
+          cooldownMs,
+          elapsedMs: now - lastResetAt
+        });
+        return false;
+      }
+      subscribePeerResetCooldownByKey.set(key, now);
+      rtcLog("subscribe.peer.reset", {
+        serverId,
+        channelId,
+        reason
+      });
+      this.stopRemoteVideoStatsProbesForSession(serverId, channelId);
+      this.closePeerConnection(serverId, channelId, RTC_SFU_SUBSCRIBE_PEER_ID);
+      const subscribePeer = this.ensurePeerConnection(serverId, channelId, RTC_SFU_SUBSCRIBE_PEER_ID);
+      if (!subscribePeer) {
+        rtcLog("subscribe.peer.reset.skip.no-peer", {
+          serverId,
+          channelId,
+          reason
+        });
+        return false;
+      }
+      void this.createAndSendOffer(serverId, channelId, subscribePeer.peerId, `reset:${reason}`);
+      return true;
+    },
     peerConnectionsForSession(key: string): Map<string, PeerConnectionEntry> {
       const existing = peerConnectionsByKey.get(key);
       if (existing) return existing;
@@ -602,10 +1026,208 @@ export const useCallStore = defineStore("call", {
       videoHintByKey.set(key, created);
       return created;
     },
-    updateVideoHint(serverId: string, channelId: string, participantId: string, trackId: string, kind: CallVideoStreamKind): void {
-      if (!participantId || !trackId) return;
+    trackOwnersForSession(key: string): Map<string, string> {
+      const existing = videoTrackOwnerByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, string>();
+      videoTrackOwnerByKey.set(key, created);
+      return created;
+    },
+    streamOwnersForSession(key: string): Map<string, string> {
+      const existing = videoStreamOwnerByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, string>();
+      videoStreamOwnerByKey.set(key, created);
+      return created;
+    },
+    streamKindsForSession(key: string): Map<string, CallVideoStreamKind> {
+      const existing = videoStreamKindByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, CallVideoStreamKind>();
+      videoStreamKindByKey.set(key, created);
+      return created;
+    },
+    remoteTrackMetaForSession(key: string): Map<string, RemoteTrackMeta> {
+      const existing = remoteTrackMetaByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, RemoteTrackMeta>();
+      remoteTrackMetaByKey.set(key, created);
+      return created;
+    },
+    pendingRemoteTracksForSession(key: string): Map<string, PendingRemoteTrack> {
+      const existing = pendingRemoteTracksByKey.get(key);
+      if (existing) return existing;
+      const created = new Map<string, PendingRemoteTrack>();
+      pendingRemoteTracksByKey.set(key, created);
+      return created;
+    },
+    upsertRemoteTrackMeta(serverId: string, channelId: string, meta: RemoteTrackMeta): void {
       const key = sessionKey(serverId, channelId);
-      this.videoHintsForSession(key).set(videoHintKey(participantId, trackId), kind);
+      const metaMap = this.remoteTrackMetaForSession(key);
+      metaMap.set(meta.trackId, meta);
+      if (meta.mediaKind === RTC_MEDIA_KIND_VIDEO) {
+        const streamKind = meta.streamKind === RTC_VIDEO_SCREEN_KIND ? "screen" : "camera";
+        this.updateVideoHint(serverId, channelId, meta.participantId, meta.trackId, streamKind, meta.streamId);
+        this.reclassifyBoundVideoStreamKind(serverId, channelId, meta.participantId, meta.trackId, meta.streamId);
+      }
+      const pendingMap = this.pendingRemoteTracksForSession(key);
+      const pendingResolution = findPendingRemoteTrackForMeta({
+        pending: pendingRemoteTrackCandidates(pendingMap),
+        meta
+      });
+      if (!pendingResolution) return;
+
+      pendingMap.delete(pendingResolution.key);
+      const pending = pendingResolution.value;
+      if (pending.observedTrackId && pending.observedTrackId !== meta.trackId) {
+        metaMap.set(pending.observedTrackId, meta);
+      }
+      if (pendingResolution.strategy === "stream") {
+        rtcLog("track.meta.resolve.by_stream", {
+          serverId,
+          channelId,
+          participantId: meta.participantId,
+          mediaKind: meta.mediaKind,
+          signaledTrackId: meta.trackId,
+          signaledStreamId: meta.streamId || null,
+          observedTrackId: pending.observedTrackId,
+          observedStreamId: pending.observedStreamId
+        });
+      } else if (pendingResolution.strategy === "heuristic") {
+        rtcLog("track.meta.resolve.by_heuristic", {
+          serverId,
+          channelId,
+          participantId: meta.participantId,
+          mediaKind: meta.mediaKind,
+          signaledTrackId: meta.trackId,
+          signaledStreamId: meta.streamId || null,
+          observedTrackId: pending.observedTrackId,
+          observedStreamId: pending.observedStreamId
+        });
+      }
+      if (meta.mediaKind === RTC_MEDIA_KIND_VIDEO) {
+        this.handleRemoteVideoTrack({
+          serverId,
+          channelId,
+          participantId: meta.participantId,
+          signalStreamID: meta.streamId || pending.observedStreamId || pending.mediaStream.id,
+          connection: pending.connection,
+          mediaStream: pending.mediaStream,
+          track: pending.track
+        });
+        return;
+      }
+      this.handleRemoteAudioTrack({
+        serverId,
+        channelId,
+        participantId: meta.participantId,
+        streamId: meta.streamId || pending.observedStreamId || pending.mediaStream.id,
+        trackId: pending.observedTrackId || meta.trackId,
+        mediaStream: pending.mediaStream,
+        track: pending.track
+      });
+    },
+    removeRemoteTrackMeta(params: {
+      serverId: string;
+      channelId: string;
+      trackId?: string;
+      streamId?: string;
+      mediaKind?: typeof RTC_MEDIA_KIND_AUDIO | typeof RTC_MEDIA_KIND_VIDEO;
+    }): void {
+      const trackId = String(params.trackId ?? "").trim();
+      const streamId = String(params.streamId ?? "").trim();
+      if (!trackId && !streamId) return;
+      const key = sessionKey(params.serverId, params.channelId);
+      const metaMap = remoteTrackMetaByKey.get(key);
+      if (metaMap) {
+        const canonicalTrackID = trackId && metaMap.get(trackId) ? metaMap.get(trackId)?.trackId ?? trackId : trackId;
+        const removalTargets = selectRemoteTrackMetaForRemoval({
+          metas: uniqueRemoteTrackMetas(metaMap),
+          trackId: canonicalTrackID || undefined,
+          streamId: streamId || undefined,
+          mediaKind: params.mediaKind
+        });
+        for (const target of removalTargets) {
+          const relatedTrackIDs = [...metaMap.entries()]
+            .filter(([, mappedMeta]) => mappedMeta.trackId === target.trackId)
+            .map(([mappedTrackID]) => mappedTrackID);
+
+          if (target.mediaKind === RTC_MEDIA_KIND_VIDEO) {
+            for (const relatedTrackID of relatedTrackIDs) {
+              this.removeVideoStream(params.serverId, params.channelId, `${target.participantId}:${relatedTrackID}`);
+              this.deleteVideoHint(params.serverId, params.channelId, target.participantId, relatedTrackID);
+            }
+            if (target.streamId) {
+              this.removeVideoStreamsBySignalStreamID(params.serverId, params.channelId, target.streamId);
+            }
+          } else {
+            for (const relatedTrackID of relatedTrackIDs) {
+              this.removeRemoteAudioTrack(params.serverId, params.channelId, target.participantId, relatedTrackID);
+            }
+            if (target.streamId) {
+              this.removeRemoteAudioByStreamID(params.serverId, params.channelId, target.participantId, target.streamId);
+            }
+          }
+
+          for (const relatedTrackID of relatedTrackIDs) {
+            metaMap.delete(relatedTrackID);
+          }
+        }
+        if (metaMap.size === 0) {
+          remoteTrackMetaByKey.delete(key);
+        }
+      }
+      const pending = pendingRemoteTracksByKey.get(key);
+      if (pending) {
+        for (const [pendingTrackID, pendingTrack] of pending.entries()) {
+          const matchesTrack = !!trackId && (pendingTrackID === trackId || pendingTrack.observedTrackId === trackId);
+          const matchesStream =
+            !!streamId &&
+            pendingTrack.observedStreamId === streamId &&
+            (!params.mediaKind || pendingTrack.mediaKind === params.mediaKind);
+          if (matchesTrack || matchesStream) {
+            pending.delete(pendingTrackID);
+          }
+        }
+        if (pending.size === 0) {
+          pendingRemoteTracksByKey.delete(key);
+        }
+      }
+    },
+    removeRemoteTrackMetaByParticipant(serverId: string, channelId: string, participantId: string): void {
+      if (!participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const metaMap = remoteTrackMetaByKey.get(key);
+      if (!metaMap) return;
+      const trackIDs = uniqueRemoteTrackMetas(metaMap)
+        .filter((meta) => meta.participantId === participantId)
+        .map((meta) => meta.trackId);
+      for (const trackID of trackIDs) {
+        this.removeRemoteTrackMeta({
+          serverId,
+          channelId,
+          trackId: trackID
+        });
+      }
+    },
+    updateVideoHint(
+      serverId: string,
+      channelId: string,
+      participantId: string,
+      trackId: string,
+      kind: CallVideoStreamKind,
+      streamId?: string
+    ): void {
+      if (!participantId) return;
+      const key = sessionKey(serverId, channelId);
+      if (trackId) {
+        this.videoHintsForSession(key).set(videoHintKey(participantId, trackId), kind);
+        this.trackOwnersForSession(key).set(trackId, participantId);
+      }
+      if (streamId) {
+        this.streamOwnersForSession(key).set(streamId, participantId);
+        this.streamKindsForSession(key).set(streamId, kind);
+      }
     },
     deleteVideoHint(serverId: string, channelId: string, participantId: string, trackId: string): void {
       if (!participantId || !trackId) return;
@@ -613,6 +1235,13 @@ export const useCallStore = defineStore("call", {
       const hintMap = videoHintByKey.get(key);
       if (!hintMap) return;
       hintMap.delete(videoHintKey(participantId, trackId));
+      const trackOwners = videoTrackOwnerByKey.get(key);
+      if (trackOwners?.get(trackId) === participantId) {
+        trackOwners.delete(trackId);
+        if (trackOwners.size === 0) {
+          videoTrackOwnerByKey.delete(key);
+        }
+      }
       if (hintMap.size === 0) {
         videoHintByKey.delete(key);
       }
@@ -621,16 +1250,365 @@ export const useCallStore = defineStore("call", {
       if (!participantId) return;
       const key = sessionKey(serverId, channelId);
       const hintMap = videoHintByKey.get(key);
-      if (!hintMap) return;
-      const prefix = `${participantId}:`;
-      for (const hintKey of hintMap.keys()) {
-        if (hintKey.startsWith(prefix)) {
-          hintMap.delete(hintKey);
+      if (hintMap) {
+        const prefix = `${participantId}:`;
+        for (const hintKey of hintMap.keys()) {
+          if (hintKey.startsWith(prefix)) {
+            hintMap.delete(hintKey);
+          }
+        }
+        if (hintMap.size === 0) {
+          videoHintByKey.delete(key);
         }
       }
-      if (hintMap.size === 0) {
-        videoHintByKey.delete(key);
+      const trackOwners = videoTrackOwnerByKey.get(key);
+      if (trackOwners) {
+        for (const [trackId, ownerParticipantId] of trackOwners.entries()) {
+          if (ownerParticipantId === participantId) {
+            trackOwners.delete(trackId);
+          }
+        }
+        if (trackOwners.size === 0) {
+          videoTrackOwnerByKey.delete(key);
+        }
       }
+      const streamOwners = videoStreamOwnerByKey.get(key);
+      if (streamOwners) {
+        for (const [streamId, ownerParticipantId] of streamOwners.entries()) {
+          if (ownerParticipantId === participantId) {
+            streamOwners.delete(streamId);
+          }
+        }
+        if (streamOwners.size === 0) {
+          videoStreamOwnerByKey.delete(key);
+        }
+      }
+      const streamKinds = videoStreamKindByKey.get(key);
+      if (streamKinds) {
+        const activeStreamOwners = videoStreamOwnerByKey.get(key);
+        for (const streamId of streamKinds.keys()) {
+          if (!activeStreamOwners || !activeStreamOwners.has(streamId)) {
+            streamKinds.delete(streamId);
+          }
+        }
+        if (streamKinds.size === 0) {
+          videoStreamKindByKey.delete(key);
+        }
+      }
+    },
+    resolveParticipantIDForSignalStream(serverId: string, channelId: string, streamId: string): string | null {
+      if (!streamId) return null;
+      const key = sessionKey(serverId, channelId);
+      return videoStreamOwnerByKey.get(key)?.get(streamId) ?? null;
+    },
+    resolveVideoKindForSignalStream(serverId: string, channelId: string, streamId: string): CallVideoStreamKind | null {
+      if (!streamId) return null;
+      const key = sessionKey(serverId, channelId);
+      return videoStreamKindByKey.get(key)?.get(streamId) ?? null;
+    },
+    reclassifyBoundVideoStreamKind(
+      serverId: string,
+      channelId: string,
+      participantId: string,
+      trackId: string,
+      signalStreamID: string
+    ): void {
+      if (!participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+
+      const hintByTrack = trackId ? this.videoHintsForSession(key).get(videoHintKey(participantId, trackId)) : null;
+      const hintByStream = signalStreamID ? this.resolveVideoKindForSignalStream(serverId, channelId, signalStreamID) : null;
+      const nextKind = hintByTrack ?? hintByStream;
+      if (!nextKind) return;
+
+      const streamIndex = session.videoStreams.findIndex((entry) => {
+        if (entry.participantId !== participantId) return false;
+        if (trackId && entry.trackId === trackId) return true;
+        if (signalStreamID && entry.mediaStream.id === signalStreamID) return true;
+        return false;
+      });
+      if (streamIndex < 0) return;
+
+      const current = session.videoStreams[streamIndex];
+      if (!current || current.kind === nextKind) return;
+      session.videoStreams.splice(streamIndex, 1, {
+        ...current,
+        kind: nextKind
+      });
+      rtcLog("video.stream.reclassified", {
+        serverId,
+        channelId,
+        participantId,
+        trackId: current.trackId,
+        streamId: current.mediaStream.id,
+        previousKind: current.kind,
+        nextKind
+      });
+    },
+    resolveParticipantIDForTrack(serverId: string, channelId: string, trackId: string): string | null {
+      if (!trackId) return null;
+      const key = sessionKey(serverId, channelId);
+      const trackOwners = videoTrackOwnerByKey.get(key);
+      const ownerParticipantId = trackOwners?.get(trackId);
+      if (ownerParticipantId) return ownerParticipantId;
+
+      const hintMap = videoHintByKey.get(key);
+      if (!hintMap) return null;
+      for (const hintKey of hintMap.keys()) {
+        if (!hintKey.endsWith(`:${trackId}`)) continue;
+        const separatorIndex = hintKey.indexOf(":");
+        if (separatorIndex <= 0) continue;
+        const participantId = hintKey.slice(0, separatorIndex).trim();
+        if (participantId) return participantId;
+      }
+      return null;
+    },
+    resolveParticipantIDForIncomingVideo(
+      serverId: string,
+      channelId: string,
+      trackId: string,
+      streamId: string,
+      kind: CallVideoStreamKind,
+      options?: { allowHeuristic?: boolean }
+    ): string {
+      const byTrack = this.resolveParticipantIDForTrack(serverId, channelId, trackId);
+      if (byTrack) return byTrack;
+      const byStream = this.resolveParticipantIDForSignalStream(serverId, channelId, streamId);
+      if (byStream) return byStream;
+      if (!options?.allowHeuristic) {
+        return "participant_unknown";
+      }
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return "participant_unknown";
+      const remoteParticipants = session.participants.filter((item) => item.participantId && !item.isLocal);
+      if (remoteParticipants.length === 1) {
+        return remoteParticipants[0].participantId;
+      }
+
+      const missingKindCandidates = remoteParticipants.filter((participant) => {
+        return !session.videoStreams.some((stream) => stream.participantId === participant.participantId && stream.kind === kind);
+      });
+      if (missingKindCandidates.length === 1) {
+        return missingKindCandidates[0].participantId;
+      }
+      return "participant_unknown";
+    },
+    remoteVideoProbeKey(serverId: string, channelId: string, trackId: string): string {
+      return `${sessionKey(serverId, channelId)}:${trackId}`;
+    },
+    stopRemoteVideoStatsProbe(serverId: string, channelId: string, trackId: string): void {
+      if (!trackId) return;
+      const key = this.remoteVideoProbeKey(serverId, channelId, trackId);
+      const timer = remoteVideoStatsProbeByKey.get(key);
+      if (!timer) return;
+      clearInterval(timer);
+      remoteVideoStatsProbeByKey.delete(key);
+      remoteVideoStallCountByProbeKey.delete(key);
+    },
+    stopRemoteVideoStatsProbesForSession(serverId: string, channelId: string): void {
+      const prefix = `${sessionKey(serverId, channelId)}:`;
+      for (const [probeKey, timer] of remoteVideoStatsProbeByKey.entries()) {
+        if (!probeKey.startsWith(prefix)) continue;
+        clearInterval(timer);
+        remoteVideoStatsProbeByKey.delete(probeKey);
+      }
+      for (const probeKey of remoteVideoStallCountByProbeKey.keys()) {
+        if (!probeKey.startsWith(prefix)) continue;
+        remoteVideoStallCountByProbeKey.delete(probeKey);
+      }
+    },
+    startRemoteVideoStatsProbe(params: {
+      serverId: string;
+      channelId: string;
+      participantId: string;
+      signalStreamID: string;
+      kind: CallVideoStreamKind;
+      connection: RTCPeerConnection;
+      track: MediaStreamTrack;
+    }): void {
+      if (!rtcDebugEnabled || params.track.kind !== "video") return;
+      this.stopRemoteVideoStatsProbe(params.serverId, params.channelId, params.track.id);
+
+      const probeKey = this.remoteVideoProbeKey(params.serverId, params.channelId, params.track.id);
+      let sampleCount = 0;
+      let lastBytesReceived = 0;
+      let zeroDeltaStreak = 0;
+      const poll = async (): Promise<void> => {
+        const key = sessionKey(params.serverId, params.channelId);
+        const session = this.sessionsByKey[key];
+        const stillTracked = Boolean(
+          session?.videoStreams.some(
+            (entry) => entry.trackId === params.track.id && entry.participantId === params.participantId
+          )
+        );
+        if (!stillTracked) {
+          this.stopRemoteVideoStatsProbe(params.serverId, params.channelId, params.track.id);
+          return;
+        }
+        if (params.connection.signalingState === "closed" || params.connection.connectionState === "closed") {
+          this.stopRemoteVideoStatsProbe(params.serverId, params.channelId, params.track.id);
+          return;
+        }
+        try {
+          const stats = await params.connection.getStats(params.track);
+          const inboundVideoReports: RTCInboundRtpStreamStats[] = [];
+          let trackVideo: RTCTrackStatsLike | null = null;
+          let fallbackTrackVideo: RTCTrackStatsLike | null = null;
+          stats.forEach((report) => {
+            if (report.type === "inbound-rtp") {
+              const inbound = report as RTCInboundRtpStreamStats;
+              if (inbound.kind === "video") {
+                inboundVideoReports.push(inbound);
+              }
+              return;
+            }
+            if (report.type === "track") {
+              const trackReport = report as RTCTrackStatsLike;
+              if (trackReport.kind === "video") {
+                if (!fallbackTrackVideo) {
+                  fallbackTrackVideo = trackReport;
+                }
+                const trackIdentifier = String(
+                  (trackReport as unknown as Record<string, unknown>).trackIdentifier ?? ""
+                );
+                if (trackIdentifier === params.track.id) {
+                  trackVideo = trackReport;
+                }
+              }
+            }
+          });
+          if (!trackVideo) {
+            trackVideo = fallbackTrackVideo;
+          }
+          let inboundVideo: RTCInboundRtpStreamStats | null = null;
+          if (inboundVideoReports.length === 1) {
+            inboundVideo = inboundVideoReports[0];
+          } else if (inboundVideoReports.length > 1) {
+            const trackStatsID = String((trackVideo as unknown as Record<string, unknown> | null)?.id ?? "");
+            if (trackStatsID) {
+              inboundVideo =
+                inboundVideoReports.find((report) => {
+                  const reportTrackID = String((report as unknown as Record<string, unknown>).trackId ?? "");
+                  return reportTrackID === trackStatsID;
+                }) ?? null;
+            }
+            if (!inboundVideo) {
+              inboundVideo = inboundVideoReports.reduce<RTCInboundRtpStreamStats | null>((best, report) => {
+                if (!best) return report;
+                const currentBytes = Number(report.bytesReceived ?? 0);
+                const bestBytes = Number(best.bytesReceived ?? 0);
+                return currentBytes > bestBytes ? report : best;
+              }, null);
+            }
+          }
+
+          sampleCount += 1;
+          const bytesReceived = Number(inboundVideo?.bytesReceived ?? 0);
+          const bytesDelta = bytesReceived - lastBytesReceived;
+          lastBytesReceived = bytesReceived;
+          if (
+            bytesDelta <= 0 &&
+            params.connection.connectionState === "connected" &&
+            params.connection.iceConnectionState === "connected" &&
+            params.track.readyState !== "ended" &&
+            !params.track.muted
+          ) {
+            zeroDeltaStreak += 1;
+          } else {
+            zeroDeltaStreak = 0;
+            if (bytesDelta > 0) {
+              remoteVideoStallCountByProbeKey.delete(probeKey);
+            }
+          }
+          rtcLog("track.stats", {
+            serverId: params.serverId,
+            channelId: params.channelId,
+            participantId: params.participantId,
+            signalStreamID: params.signalStreamID,
+            trackId: params.track.id,
+            kind: params.kind,
+            sampleCount,
+            bytesReceived,
+            bytesDelta,
+            packetsReceived: inboundVideo?.packetsReceived ?? null,
+            packetsLost: inboundVideo?.packetsLost ?? null,
+            framesReceived: inboundVideo?.framesReceived ?? null,
+            framesDecoded: inboundVideo?.framesDecoded ?? null,
+            keyFramesDecoded: inboundVideo?.keyFramesDecoded ?? null,
+            pliCount: inboundVideo?.pliCount ?? null,
+            firCount: inboundVideo?.firCount ?? null,
+            nackCount: inboundVideo?.nackCount ?? null,
+            frameWidth: Number((trackVideo as unknown as Record<string, unknown> | null)?.frameWidth ?? 0) || null,
+            frameHeight: Number((trackVideo as unknown as Record<string, unknown> | null)?.frameHeight ?? 0) || null,
+            zeroDeltaStreak,
+            connectionState: params.connection.connectionState,
+            iceConnectionState: params.connection.iceConnectionState
+          });
+          if (zeroDeltaStreak >= 5) {
+            const stallCount = (remoteVideoStallCountByProbeKey.get(probeKey) ?? 0) + 1;
+            remoteVideoStallCountByProbeKey.set(probeKey, stallCount);
+            rtcLog("track.stats.stalled", {
+              serverId: params.serverId,
+              channelId: params.channelId,
+              participantId: params.participantId,
+              signalStreamID: params.signalStreamID,
+              trackId: params.track.id,
+              kind: params.kind,
+              sampleCount,
+              bytesReceived,
+              stallCount
+            });
+            this.requestSubscribeSync(params.serverId, params.channelId, "stalled-video", 5_000);
+            const packetsReceived = Number(inboundVideo?.packetsReceived ?? 0);
+            const framesReceived = Number(inboundVideo?.framesReceived ?? 0);
+            const hadMediaFlow = bytesReceived > 0 || packetsReceived > 0 || framesReceived > 0;
+            if (stallCount >= 3 && hadMediaFlow) {
+              this.requestSubscribeSync(params.serverId, params.channelId, "stalled-repeat", 8_000);
+            }
+            if (stallCount >= 3 && !hadMediaFlow) {
+              const socket = socketsByKey.get(key);
+              const signalingOpen = Boolean(socket && socket.readyState === WebSocket.OPEN);
+              rtcLog("track.stats.stalled.zero-inbound", {
+                serverId: params.serverId,
+                channelId: params.channelId,
+                participantId: params.participantId,
+                signalStreamID: params.signalStreamID,
+                trackId: params.track.id,
+                kind: params.kind,
+                stallCount,
+                signalingOpen
+              });
+              if (signalingOpen) {
+                this.requestSubscribeSync(params.serverId, params.channelId, "stalled-zero-inbound", 8_000);
+                if (stallCount >= 6) {
+                  this.restartSignalingSocket(params.serverId, params.channelId, "stalled-zero-inbound", 30_000);
+                }
+              } else {
+                this.scheduleSignalingReconnect(params.serverId, params.channelId, "stalled-zero-inbound");
+              }
+            }
+            zeroDeltaStreak = 0;
+          }
+        } catch (error) {
+          rtcLog("track.stats.error", {
+            serverId: params.serverId,
+            channelId: params.channelId,
+            participantId: params.participantId,
+            trackId: params.track.id,
+            message: (error as Error).message
+          });
+          this.stopRemoteVideoStatsProbe(params.serverId, params.channelId, params.track.id);
+        }
+      };
+
+      const timer = setInterval(() => {
+        void poll();
+      }, 1000);
+      remoteVideoStatsProbeByKey.set(probeKey, timer);
+      void poll();
     },
     upsertVideoStream(params: {
       serverId: string;
@@ -666,16 +1644,30 @@ export const useCallStore = defineStore("call", {
         return;
       }
       if (sameKindIndex >= 0) {
+        const replaced = session.videoStreams[sameKindIndex];
+        if (replaced.trackId !== next.trackId) {
+          this.stopRemoteVideoStatsProbe(params.serverId, params.channelId, replaced.trackId);
+          this.deleteVideoHint(params.serverId, params.channelId, replaced.participantId, replaced.trackId);
+        }
         session.videoStreams.splice(sameKindIndex, 1, next);
         return;
       }
       session.videoStreams.push(next);
     },
-    removeVideoStream(serverId: string, channelId: string, streamKeyToRemove: string): void {
+    removeVideoStream(
+      serverId: string,
+      channelId: string,
+      streamKeyToRemove: string,
+      options?: { stopProbe?: boolean }
+    ): void {
       const key = sessionKey(serverId, channelId);
       const session = this.sessionsByKey[key];
       if (!session) return;
+      const removed = session.videoStreams.find((entry) => entry.streamKey === streamKeyToRemove);
       session.videoStreams = session.videoStreams.filter((entry) => entry.streamKey !== streamKeyToRemove);
+      if (removed && options?.stopProbe !== false) {
+        this.stopRemoteVideoStatsProbe(serverId, channelId, removed.trackId);
+      }
     },
     removeVideoStreamsForParticipant(
       serverId: string,
@@ -686,11 +1678,84 @@ export const useCallStore = defineStore("call", {
       const key = sessionKey(serverId, channelId);
       const session = this.sessionsByKey[key];
       if (!session) return;
+      const removed = session.videoStreams.filter((entry) => {
+        if (entry.participantId !== participantId) return false;
+        if (!kind) return true;
+        return entry.kind === kind;
+      });
       session.videoStreams = session.videoStreams.filter((entry) => {
         if (entry.participantId !== participantId) return true;
         if (!kind) return false;
         return entry.kind !== kind;
       });
+      for (const entry of removed) {
+        this.stopRemoteVideoStatsProbe(serverId, channelId, entry.trackId);
+      }
+    },
+    removeVideoStreamsBySignalStreamID(serverId: string, channelId: string, signalStreamID: string): void {
+      if (!signalStreamID) return;
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      const removed = session.videoStreams.filter((entry) => entry.mediaStream.id === signalStreamID);
+      session.videoStreams = session.videoStreams.filter((entry) => entry.mediaStream.id !== signalStreamID);
+      for (const entry of removed) {
+        this.stopRemoteVideoStatsProbe(serverId, channelId, entry.trackId);
+      }
+    },
+    rebindVideoStreamParticipant(serverId: string, channelId: string, trackId: string, participantId: string): void {
+      if (!trackId || !participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      const existing = session.videoStreams.find((entry) => entry.trackId === trackId);
+      if (!existing || existing.participantId === participantId) return;
+      const participant = session.participants.find((item) => item.participantId === participantId);
+      this.removeVideoStream(serverId, channelId, existing.streamKey, { stopProbe: false });
+      this.upsertVideoStream({
+        serverId,
+        channelId,
+        participantId,
+        userUID: participant?.userUID ?? existing.userUID,
+        deviceID: participant?.deviceID ?? existing.deviceID,
+        kind: existing.kind,
+        mediaStream: existing.mediaStream,
+        trackId: existing.trackId,
+        isLocal: session.localParticipantId === participantId
+      });
+    },
+    rebindVideoStreamsBySignalStreamID(serverId: string, channelId: string, signalStreamID: string, participantId: string): void {
+      if (!signalStreamID || !participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      const participant = session.participants.find((item) => item.participantId === participantId);
+      const candidates = session.videoStreams.filter(
+        (entry) => entry.participantId === "participant_unknown" && entry.mediaStream.id === signalStreamID
+      );
+      for (const existing of candidates) {
+        this.removeVideoStream(serverId, channelId, existing.streamKey, { stopProbe: false });
+        this.upsertVideoStream({
+          serverId,
+          channelId,
+          participantId,
+          userUID: participant?.userUID ?? existing.userUID,
+          deviceID: participant?.deviceID ?? existing.deviceID,
+          kind: existing.kind,
+          mediaStream: existing.mediaStream,
+          trackId: existing.trackId,
+          isLocal: session.localParticipantId === participantId
+        });
+      }
+    },
+    rebindUnknownVideoStreamByKind(serverId: string, channelId: string, participantId: string, kind: CallVideoStreamKind): void {
+      if (!participantId) return;
+      const key = sessionKey(serverId, channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      const existing = session.videoStreams.find((entry) => entry.participantId === "participant_unknown" && entry.kind === kind);
+      if (!existing) return;
+      this.rebindVideoStreamParticipant(serverId, channelId, existing.trackId, participantId);
     },
     sendVideoStateSignal(params: {
       serverId: string;
@@ -770,20 +1835,48 @@ export const useCallStore = defineStore("call", {
       this.stopLocalVideoKind(serverId, channelId, "camera", options);
       this.stopLocalVideoKind(serverId, channelId, "screen", options);
     },
-    async syncPeerVideoTracks(serverId: string, channelId: string, participantId: string): Promise<void> {
+    hasLocalPublishableVideoTrack(serverId: string, channelId: string): boolean {
       const key = sessionKey(serverId, channelId);
-      const peers = peerConnectionsByKey.get(key);
-      const peer = peers?.get(participantId);
+      const session = this.sessionsByKey[key];
+      if (!session) return false;
+      const cameraTrack = localCameraStreamsByKey.get(key)?.getVideoTracks()[0];
+      if (session.cameraEnabled && cameraTrack) return true;
+      const screenTrack = localScreenStreamsByKey.get(key)?.getVideoTracks()[0];
+      if (session.screenShareEnabled && screenTrack) return true;
+      return false;
+    },
+    hasLocalPublishableTrack(serverId: string, channelId: string): boolean {
+      const key = sessionKey(serverId, channelId);
+      if (this.hasLocalPublishableVideoTrack(serverId, channelId)) return true;
+      const micTrack = localMicStreamsByKey.get(key)?.getAudioTracks()[0];
+      return Boolean(micTrack);
+    },
+    async syncPeerVideoTracks(serverId: string, channelId: string, peerId = RTC_SFU_PUBLISH_PEER_ID): Promise<void> {
+      const direction = directionForPeerId(peerId);
+      if (direction !== RTC_DIRECTION_PUBLISH) return;
+      const key = sessionKey(serverId, channelId);
+      const peer = peerConnectionsByKey.get(key)?.get(peerId);
       if (!peer) return;
       const session = this.sessionsByKey[key];
       if (!session || peer.connection.signalingState === "closed") return;
 
-      const desiredVideoTracks: Array<{ kind: CallVideoStreamKind; track: MediaStreamTrack; stream: MediaStream }> = [];
+      const desiredTracks: Array<{ label: string; track: MediaStreamTrack; stream: MediaStream }> = [];
+      const micStream = localMicStreamsByKey.get(key);
+      const micTrack = micStream?.getAudioTracks()[0];
+      if (micTrack && micStream) {
+        micTrack.enabled = !session.micMuted && !session.deafened;
+        desiredTracks.push({
+          label: RTC_AUDIO_MICROPHONE_KIND,
+          track: micTrack,
+          stream: micStream
+        });
+      }
+
       const cameraStream = localCameraStreamsByKey.get(key);
       const cameraTrack = cameraStream?.getVideoTracks()[0];
       if (cameraTrack && session.cameraEnabled) {
-        desiredVideoTracks.push({
-          kind: "camera",
+        desiredTracks.push({
+          label: RTC_VIDEO_CAMERA_KIND,
           track: cameraTrack,
           stream: cameraStream
         });
@@ -792,83 +1885,102 @@ export const useCallStore = defineStore("call", {
       const screenStream = localScreenStreamsByKey.get(key);
       const screenTrack = screenStream?.getVideoTracks()[0];
       if (screenTrack && session.screenShareEnabled) {
-        desiredVideoTracks.push({
-          kind: "screen",
+        desiredTracks.push({
+          label: RTC_VIDEO_SCREEN_KIND,
           track: screenTrack,
           stream: screenStream
         });
       }
 
-      const pendingTrackIDs = new Set(desiredVideoTracks.map((entry) => entry.track.id));
-      peer.connection
-        .getSenders()
-        .filter((sender) => sender.track?.kind === "video")
-        .forEach((sender) => {
-          const senderTrack = sender.track;
-          if (!senderTrack) return;
-          if (pendingTrackIDs.has(senderTrack.id)) {
-            pendingTrackIDs.delete(senderTrack.id);
-            return;
-          }
-          try {
-            peer.connection.removeTrack(sender);
-            rtcLog("video.sender.remove", {
-              serverId,
-              channelId,
-              participantId,
-              signalingState: peer.connection.signalingState,
-              trackId: senderTrack.id
-            });
-          } catch (_error) {
-            // No-op
-          }
-        });
+      const pendingTrackIDs = new Set(desiredTracks.map((entry) => entry.track.id));
+      peer.connection.getSenders().forEach((sender) => {
+        const senderTrack = sender.track;
+        if (!senderTrack) return;
+        if (senderTrack.kind !== "audio" && senderTrack.kind !== "video") return;
+        if (pendingTrackIDs.has(senderTrack.id)) {
+          pendingTrackIDs.delete(senderTrack.id);
+          return;
+        }
+        try {
+          peer.connection.removeTrack(sender);
+          rtcLog("media.sender.remove", {
+            serverId,
+            channelId,
+            direction,
+            signalingState: peer.connection.signalingState,
+            kind: senderTrack.kind,
+            trackId: senderTrack.id
+          });
+        } catch (_error) {
+          // No-op
+        }
+      });
 
-      desiredVideoTracks.forEach((entry) => {
+      desiredTracks.forEach((entry) => {
         if (!pendingTrackIDs.has(entry.track.id)) return;
         peer.connection.addTrack(entry.track, entry.stream);
-        rtcLog("video.sender.add", {
+        rtcLog("media.sender.add", {
           serverId,
           channelId,
-          participantId,
+          direction,
           signalingState: peer.connection.signalingState,
-          kind: entry.kind,
+          kind: entry.track.kind,
+          streamKind: entry.label,
           trackId: entry.track.id
         });
       });
     },
     async syncAllPeerVideoTracks(serverId: string, channelId: string): Promise<void> {
-      const key = sessionKey(serverId, channelId);
-      const peers = peerConnectionsByKey.get(key);
-      if (!peers || peers.size === 0) return;
-      await Promise.all(
-        Array.from(peers.values()).map(async (peer) => {
-          await this.syncPeerVideoTracks(serverId, channelId, peer.participantId);
-        })
-      );
+      if (!this.hasLocalPublishableTrack(serverId, channelId)) return;
+      const publishPeer = this.ensurePeerConnection(serverId, channelId, RTC_SFU_PUBLISH_PEER_ID);
+      if (!publishPeer) return;
+      await this.syncPeerVideoTracks(serverId, channelId, publishPeer.peerId);
+      if (publishPeer.connection.signalingState === "stable") {
+        void this.createAndSendOffer(serverId, channelId, publishPeer.peerId, "sync-all-video");
+      }
     },
-    async createAndSendOffer(
-      serverId: string,
-      channelId: string,
-      participantId: string,
-      reason = "unspecified"
-    ): Promise<void> {
+    async createAndSendOffer(serverId: string, channelId: string, peerId: string, reason = "unspecified"): Promise<void> {
       const key = sessionKey(serverId, channelId);
       const peers = peerConnectionsByKey.get(key);
-      const peer = peers?.get(participantId);
+      const peer = peers?.get(peerId);
       if (!peer) return;
+      if (peer.direction === RTC_DIRECTION_PUBLISH && !this.hasLocalPublishableTrack(serverId, channelId)) {
+        rtcLog("offer.skip.no-publishable-tracks", {
+          serverId,
+          channelId,
+          peerId,
+          reason
+        });
+        return;
+      }
       const session = this.sessionsByKey[key];
       if (!session || session.state !== "active") return;
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (peer.connection.signalingState === "closed") return;
-      if (peer.makingOffer || peer.connection.signalingState !== "stable" || peer.isSettingRemoteAnswerPending) {
+      if (peer.direction === RTC_DIRECTION_SUBSCRIBE) {
+        subscribeSyncFollowUpReasonByKey.delete(key);
+        const followUpTimer = subscribeSyncFollowUpTimerByKey.get(key);
+        if (followUpTimer) {
+          clearTimeout(followUpTimer);
+          subscribeSyncFollowUpTimerByKey.delete(key);
+        }
+        this.ensureSubscribeRecvonlyTransceivers(serverId, channelId, peer, `offer:${reason}`);
+      }
+      if (
+        shouldDeferOffer({
+          makingOffer: peer.makingOffer,
+          signalingState: peer.connection.signalingState,
+          isSettingRemoteAnswerPending: peer.isSettingRemoteAnswerPending
+        })
+      ) {
         peer.pendingNegotiation = true;
         peer.pendingNegotiationReason = reason;
         rtcLog("offer.defer", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction: peer.direction,
           reason,
           signalingState: peer.connection.signalingState,
           makingOffer: peer.makingOffer,
@@ -884,37 +1996,87 @@ export const useCallStore = defineStore("call", {
         rtcLog("offer.start", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction: peer.direction,
           reason,
           signalingState: peer.connection.signalingState
         });
-        await peer.connection.setLocalDescription();
-        const localDescription = peer.connection.localDescription;
-        if (!localDescription || localDescription.type !== "offer") {
+        const createdOffer = await peer.connection.createOffer();
+        if (!createdOffer.sdp || createdOffer.sdp.trim().length === 0) {
+          rtcLog("offer.skip.empty-created-sdp", {
+            serverId,
+            channelId,
+            peerId,
+            direction: peer.direction,
+            reason
+          });
+          return;
+        }
+        const createdOfferSDP = createdOffer.sdp.trim();
+        if (!createdOfferSDP.startsWith("v=0") || !createdOfferSDP.includes("\nm=")) {
+          rtcLog("offer.skip.malformed-created-sdp", {
+            serverId,
+            channelId,
+            peerId,
+            direction: peer.direction,
+            reason,
+            prefix: createdOfferSDP.slice(0, 16),
+            length: createdOfferSDP.length
+          });
+          return;
+        }
+        await peer.connection.setLocalDescription(createdOffer);
+        const localDescription = peer.connection.localDescription ?? createdOffer;
+        if (localDescription.type !== "offer") {
           rtcLog("offer.skip", {
             serverId,
             channelId,
-            participantId,
+            peerId,
+            direction: peer.direction,
             reason,
             signalingState: peer.connection.signalingState,
             localDescriptionType: localDescription?.type ?? null
           });
           return;
         }
+        if (!localDescription.sdp || localDescription.sdp.trim().length === 0) {
+          rtcLog("offer.skip.empty-sdp", {
+            serverId,
+            channelId,
+            peerId,
+            direction: peer.direction,
+            reason
+          });
+          return;
+        }
+        const finalOfferSDP = localDescription.sdp.trim();
+        if (!finalOfferSDP.startsWith("v=0") || !finalOfferSDP.includes("\nm=")) {
+          rtcLog("offer.skip.malformed-sdp", {
+            serverId,
+            channelId,
+            peerId,
+            direction: peer.direction,
+            reason,
+            prefix: finalOfferSDP.slice(0, 16),
+            length: finalOfferSDP.length
+          });
+          return;
+        }
         sendSignal(socket, {
-          type: "rtc.offer.publish",
-          request_id: `offer_${Date.now()}_${participantId}`,
+          type: offerTypeForDirection(peer.direction),
+          request_id: `offer_${Date.now()}_${peer.direction}`,
           channel_id: channelId,
           payload: {
-            target_participant_id: participantId,
-            description_type: localDescription.type,
-            sdp: localDescription.sdp
+            type: localDescription.type,
+            sdp: localDescription.sdp,
+            direction: peer.direction
           }
         });
         rtcLog("offer.sent", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction: peer.direction,
           reason,
           signalingState: peer.connection.signalingState
         });
@@ -923,7 +2085,8 @@ export const useCallStore = defineStore("call", {
         rtcLog("offer.error", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction: peer.direction,
           reason,
           signalingState: peer.connection.signalingState,
           message: (error as Error).message
@@ -939,57 +2102,93 @@ export const useCallStore = defineStore("call", {
           const pendingReason = peer.pendingNegotiationReason ?? "pending";
           peer.pendingNegotiation = false;
           peer.pendingNegotiationReason = null;
-          void Promise.resolve().then(() =>
-            this.createAndSendOffer(serverId, channelId, participantId, `flush:${pendingReason}`)
-          );
+          void Promise.resolve().then(() => this.createAndSendOffer(serverId, channelId, peerId, `flush:${pendingReason}`));
         }
       }
     },
-    ensurePeerConnection(serverId: string, channelId: string, participantId: string): PeerConnectionEntry | null {
+    async flushPendingRemoteICECandidates(serverId: string, channelId: string, peer: PeerConnectionEntry): Promise<void> {
+      if (peer.pendingRemoteCandidates.length === 0) return;
+      const pending = [...peer.pendingRemoteCandidates];
+      peer.pendingRemoteCandidates = [];
+      for (const candidate of pending) {
+        try {
+          await peer.connection.addIceCandidate(candidate);
+          rtcLog("ice.remote.flush", {
+            serverId,
+            channelId,
+            peerId: peer.peerId,
+            direction: peer.direction,
+            sdpMid: candidate.sdpMid ?? null,
+            sdpMLineIndex: candidate.sdpMLineIndex ?? null
+          });
+        } catch (error) {
+          rtcLog("ice.remote.flush.error", {
+            serverId,
+            channelId,
+            peerId: peer.peerId,
+            direction: peer.direction,
+            message: (error as Error).message
+          });
+        }
+      }
+    },
+    ensurePeerConnection(serverId: string, channelId: string, peerId: string): PeerConnectionEntry | null {
+      const direction = directionForPeerId(peerId);
+      if (!direction) return null;
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
-      if (!session || !participantId || session.localParticipantId === participantId) return null;
+      if (!session) return null;
 
       const peers = this.peerConnectionsForSession(key);
-      const existing = peers.get(participantId);
+      const existing = peers.get(peerId);
       if (existing) return existing;
 
-      const localParticipantID = session.localParticipantId ?? "";
-      const polite = localParticipantID ? localParticipantID.localeCompare(participantId) > 0 : true;
       const connection = new RTCPeerConnection({
         iceServers: iceServersByKey.get(key) ?? []
       });
       const entry: PeerConnectionEntry = {
         connection,
-        participantId,
+        peerId,
         channelId,
-        polite,
+        direction,
         makingOffer: false,
-        ignoreOffer: false,
         isSettingRemoteAnswerPending: false,
         pendingNegotiation: false,
-        pendingNegotiationReason: null
+        pendingNegotiationReason: null,
+        pendingRemoteCandidates: []
       };
-      peers.set(participantId, entry);
+      peers.set(peerId, entry);
       rtcLog("peer.create", {
         serverId,
         channelId,
-        participantId,
-        polite
+        peerId,
+        direction
       });
+
+      if (direction === RTC_DIRECTION_SUBSCRIBE) {
+        this.ensureSubscribeRecvonlyTransceivers(serverId, channelId, entry, "peer-create");
+      }
 
       connection.onicecandidate = (event) => {
         if (!event.candidate) return;
         const socket = socketsByKey.get(key);
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        const candidate = event.candidate.toJSON();
+        const payload: Record<string, unknown> = {
+          candidate: candidate.candidate,
+          direction
+        };
+        if (candidate.sdpMid != null) {
+          payload.sdp_mid = candidate.sdpMid;
+        }
+        if (candidate.sdpMLineIndex != null) {
+          payload.sdp_mline_index = candidate.sdpMLineIndex;
+        }
         sendSignal(socket, {
           type: "rtc.ice.candidate",
-          request_id: `ice_${Date.now()}_${participantId}`,
+          request_id: `ice_${Date.now()}_${direction}`,
           channel_id: channelId,
-          payload: {
-            target_participant_id: participantId,
-            candidate: event.candidate.toJSON()
-          }
+          payload
         });
       };
 
@@ -997,30 +2196,92 @@ export const useCallStore = defineStore("call", {
         rtcLog("negotiation.needed", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction,
           signalingState: connection.signalingState
         });
-        void this.createAndSendOffer(serverId, channelId, participantId, "onnegotiationneeded");
+        void this.createAndSendOffer(serverId, channelId, peerId, "onnegotiationneeded");
       };
 
       connection.ontrack = (event) => {
-        if (event.track.kind !== "video") return;
+        if (direction !== RTC_DIRECTION_SUBSCRIBE) return;
         const mediaStream = event.streams[0] ?? new MediaStream([event.track]);
-        rtcLog("track.received", {
-          serverId,
-          channelId,
-          participantId,
-          streamId: mediaStream.id,
-          trackId: event.track.id,
-          trackLabel: event.track.label,
-          muted: event.track.muted,
-          readyState: event.track.readyState,
-          mid: event.transceiver?.mid ?? null
+        const observedTrackId = event.track.id;
+        const observedMediaKind =
+          event.track.kind === "audio" ? RTC_MEDIA_KIND_AUDIO : RTC_MEDIA_KIND_VIDEO;
+        const metaMap = this.remoteTrackMetaForSession(key);
+        const metaResolution = resolveRemoteMetaForObservedTrack({
+          metas: uniqueRemoteTrackMetas(metaMap),
+          observedTrackId,
+          observedStreamId: mediaStream.id,
+          observedMediaKind
         });
+        const meta = metaResolution?.meta ?? null;
+        if (!meta) {
+          const pendingMap = this.pendingRemoteTracksForSession(key);
+          pendingMap.set(observedTrackId, {
+            connection,
+            mediaStream,
+            track: event.track,
+            observedTrackId,
+            observedStreamId: mediaStream.id,
+            mediaKind: observedMediaKind
+          });
+          this.requestSubscribeSync(serverId, channelId, "track-meta-missing", 1_000);
+          rtcLog("track.meta.unresolved", {
+            serverId,
+            channelId,
+            peerId,
+            direction,
+            observedTrackId,
+            observedStreamId: mediaStream.id,
+            observedMediaKind: event.track.kind,
+            label: event.track.label
+          });
+          event.track.onended = () => {
+            const pendingEntry = pendingMap.get(observedTrackId);
+            if (pendingEntry?.track === event.track) {
+              pendingMap.delete(observedTrackId);
+            }
+          };
+          return;
+        }
+        if (metaResolution?.strategy === "stream") {
+          rtcLog("track.meta.resolve.by_stream", {
+            serverId,
+            channelId,
+            peerId,
+            direction,
+            participantId: meta.participantId,
+            mediaKind: meta.mediaKind,
+            signaledTrackId: meta.trackId,
+            signaledStreamId: meta.streamId || null,
+            observedTrackId,
+            observedStreamId: mediaStream.id
+          });
+        }
+        if (observedTrackId && observedTrackId !== meta.trackId) {
+          metaMap.set(observedTrackId, meta);
+        }
+
+        if (meta.mediaKind === RTC_MEDIA_KIND_AUDIO || event.track.kind === "audio") {
+          this.handleRemoteAudioTrack({
+            serverId,
+            channelId,
+            participantId: meta.participantId,
+            streamId: meta.streamId || mediaStream.id,
+            trackId: observedTrackId,
+            mediaStream,
+            track: event.track
+          });
+          return;
+        }
         this.handleRemoteVideoTrack({
           serverId,
           channelId,
-          participantId,
+          participantId: meta.participantId,
+          signalStreamID: meta.streamId || mediaStream.id,
+          connection,
           mediaStream,
           track: event.track
         });
@@ -1030,22 +2291,37 @@ export const useCallStore = defineStore("call", {
         rtcLog("signaling.state", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction,
           signalingState: connection.signalingState,
           pendingNegotiation: entry.pendingNegotiation
         });
         if (connection.signalingState !== "stable" || !entry.pendingNegotiation) return;
         const pendingReason = entry.pendingNegotiationReason ?? "signaling-stable";
+        if (pendingReason.includes("onnegotiationneeded")) {
+          entry.pendingNegotiation = false;
+          entry.pendingNegotiationReason = null;
+          rtcLog("offer.skip.pending.onnegotiationneeded", {
+            serverId,
+            channelId,
+            peerId,
+            direction,
+            reason: pendingReason,
+            signalingState: connection.signalingState
+          });
+          return;
+        }
         entry.pendingNegotiation = false;
         entry.pendingNegotiationReason = null;
-        void this.createAndSendOffer(serverId, channelId, participantId, `stable:${pendingReason}`);
+        void this.createAndSendOffer(serverId, channelId, peerId, `stable:${pendingReason}`);
       };
 
       connection.oniceconnectionstatechange = () => {
         rtcLog("ice.state", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction,
           iceConnectionState: connection.iceConnectionState
         });
       };
@@ -1061,7 +2337,8 @@ export const useCallStore = defineStore("call", {
         rtcLog("ice.candidate.error", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction,
           errorCode: iceEvent.errorCode ?? null,
           errorText: iceEvent.errorText ?? null,
           address: iceEvent.address ?? null,
@@ -1074,20 +2351,29 @@ export const useCallStore = defineStore("call", {
         rtcLog("connection.state", {
           serverId,
           channelId,
-          participantId,
+          peerId,
+          direction,
           connectionState: connection.connectionState
         });
         if (connection.connectionState !== "failed" && connection.connectionState !== "closed") return;
-        this.removeVideoStreamsForParticipant(serverId, channelId, participantId);
+        if (direction === RTC_DIRECTION_SUBSCRIBE) {
+          const localSession = this.sessionsByKey[key];
+          if (localSession) {
+            localSession.videoStreams = localSession.videoStreams.filter((entry) => entry.isLocal);
+          }
+          this.clearRemoteAudioForSession(serverId, channelId);
+        }
       };
 
-      void this.syncPeerVideoTracks(serverId, channelId, participantId);
+      if (direction === RTC_DIRECTION_PUBLISH) {
+        void this.syncPeerVideoTracks(serverId, channelId, peerId);
+      }
       return entry;
     },
-    closePeerConnection(serverId: string, channelId: string, participantId: string): void {
+    closePeerConnection(serverId: string, channelId: string, peerId: string): void {
       const key = sessionKey(serverId, channelId);
       const peers = peerConnectionsByKey.get(key);
-      const peer = peers?.get(participantId);
+      const peer = peers?.get(peerId);
       if (!peer) return;
       peer.connection.onicecandidate = null;
       peer.connection.onnegotiationneeded = null;
@@ -1099,48 +2385,153 @@ export const useCallStore = defineStore("call", {
       if (peer.connection.signalingState !== "closed") {
         peer.connection.close();
       }
-      peers?.delete(participantId);
+      peers?.delete(peerId);
       if (peers && peers.size === 0) {
         peerConnectionsByKey.delete(key);
       }
-      this.deleteVideoHintsForParticipant(serverId, channelId, participantId);
     },
     closePeerConnectionsForSession(serverId: string, channelId: string): void {
       const key = sessionKey(serverId, channelId);
       const peers = peerConnectionsByKey.get(key);
       if (peers) {
-        for (const participantId of peers.keys()) {
-          this.closePeerConnection(serverId, channelId, participantId);
+        for (const peerId of peers.keys()) {
+          this.closePeerConnection(serverId, channelId, peerId);
         }
       }
       peerConnectionsByKey.delete(key);
       iceServersByKey.delete(key);
       videoHintByKey.delete(key);
+      videoTrackOwnerByKey.delete(key);
+      videoStreamOwnerByKey.delete(key);
+      videoStreamKindByKey.delete(key);
+      remoteTrackMetaByKey.delete(key);
+      pendingRemoteTracksByKey.delete(key);
+      subscribeSyncCooldownByKey.delete(key);
+      subscribeSyncFollowUpReasonByKey.delete(key);
+      const followUpTimer = subscribeSyncFollowUpTimerByKey.get(key);
+      if (followUpTimer) {
+        clearTimeout(followUpTimer);
+        subscribeSyncFollowUpTimerByKey.delete(key);
+      }
+      subscribePeerResetCooldownByKey.delete(key);
+      subscribeReceivePolicyByKey.delete(key);
+      this.stopRemoteVideoStatsProbesForSession(serverId, channelId);
+      this.clearRemoteAudioForSession(serverId, channelId);
     },
     connectParticipantMesh(serverId: string, channelId: string): void {
       const key = sessionKey(serverId, channelId);
       const session = this.sessionsByKey[key];
-      if (!session || !session.localParticipantId) return;
-      const activeParticipantIDs = new Set(
-        session.participants.filter((participant) => participant.participantId !== session.localParticipantId).map((participant) => participant.participantId)
-      );
-
-      const peers = this.peerConnectionsForSession(key);
-      for (const participantId of peers.keys()) {
-        if (activeParticipantIDs.has(participantId)) continue;
-        this.closePeerConnection(serverId, channelId, participantId);
+      if (!session || !session.localParticipantId || session.state !== "active") return;
+      const subscribePeer = this.ensurePeerConnection(serverId, channelId, RTC_SFU_SUBSCRIBE_PEER_ID);
+      if (subscribePeer) {
+        void this.createAndSendOffer(serverId, channelId, subscribePeer.peerId, "sync-subscribe");
+      }
+      if (this.hasLocalPublishableTrack(serverId, channelId)) {
+        const publishPeer = this.ensurePeerConnection(serverId, channelId, RTC_SFU_PUBLISH_PEER_ID);
+        if (publishPeer) {
+          void this.createAndSendOffer(serverId, channelId, publishPeer.peerId, "sync-publish");
+        }
+      }
+    },
+    handleRemoteAudioTrack(params: {
+      serverId: string;
+      channelId: string;
+      participantId: string;
+      streamId: string;
+      trackId: string;
+      mediaStream: MediaStream;
+      track: MediaStreamTrack;
+    }): void {
+      const key = sessionKey(params.serverId, params.channelId);
+      const session = this.sessionsByKey[key];
+      if (!session) return;
+      const remoteEntries = audioEntriesForSession(key);
+      const entryKey = `${params.participantId}:${params.trackId}`;
+      const existing = remoteEntries.get(entryKey);
+      if (existing) {
+        existing.mediaStream = params.mediaStream;
+        if (existing.audioElement.srcObject !== params.mediaStream) {
+          existing.audioElement.srcObject = params.mediaStream;
+        }
+        applyAudioElementPlayback(existing.audioElement);
+      } else {
+        const audioElement = new Audio();
+        audioElement.autoplay = true;
+        audioElement.preload = "auto";
+        audioElement.srcObject = params.mediaStream;
+        applyAudioElementPlayback(audioElement);
+        remoteEntries.set(entryKey, {
+          entryKey,
+          participantId: params.participantId,
+          trackId: params.trackId,
+          streamId: params.streamId,
+          mediaStream: params.mediaStream,
+          audioElement
+        });
+      }
+      if (this.selectedOutputDeviceId) {
+        void setPlaybackSinkDevice(this.selectedOutputDeviceId).catch(() => {});
       }
 
-      session.participants.forEach((participant) => {
-        if (participant.participantId === session.localParticipantId) return;
-        if (!participant.participantId) return;
-        this.ensurePeerConnection(serverId, channelId, participant.participantId);
+      startAudioActivityProbe({
+        probeMap: remoteAudioProbeByKey,
+        probeKey: `${key}:${params.trackId}`,
+        mediaStream: params.mediaStream,
+        onSpeaking: () => {
+          this.markParticipantSpeaking(params.serverId, params.channelId, params.participantId);
+        }
       });
+
+      params.track.onended = () => {
+        this.removeRemoteAudioTrack(params.serverId, params.channelId, params.participantId, params.trackId);
+      };
+    },
+    removeRemoteAudioTrack(serverId: string, channelId: string, participantId: string, trackId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const entries = remoteAudioEntriesByKey.get(key);
+      if (!entries) return;
+      const entryKey = `${participantId}:${trackId}`;
+      const entry = entries.get(entryKey);
+      if (!entry) return;
+      entry.audioElement.srcObject = null;
+      entries.delete(entryKey);
+      if (entries.size === 0) {
+        remoteAudioEntriesByKey.delete(key);
+      }
+      stopAudioProbe(remoteAudioProbeByKey, `${key}:${trackId}`);
+    },
+    removeRemoteAudioByStreamID(serverId: string, channelId: string, participantId: string, streamId: string): void {
+      if (!streamId) return;
+      const key = sessionKey(serverId, channelId);
+      const entries = remoteAudioEntriesByKey.get(key);
+      if (!entries) return;
+      for (const [entryKey, entry] of entries.entries()) {
+        if (entry.participantId !== participantId || entry.streamId !== streamId) continue;
+        entry.audioElement.srcObject = null;
+        entries.delete(entryKey);
+        stopAudioProbe(remoteAudioProbeByKey, `${key}:${entry.trackId}`);
+      }
+      if (entries.size === 0) {
+        remoteAudioEntriesByKey.delete(key);
+      }
+    },
+    clearRemoteAudioForSession(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const entries = remoteAudioEntriesByKey.get(key);
+      if (entries) {
+        for (const entry of entries.values()) {
+          entry.audioElement.srcObject = null;
+          stopAudioProbe(remoteAudioProbeByKey, `${key}:${entry.trackId}`);
+        }
+      }
+      remoteAudioEntriesByKey.delete(key);
     },
     handleRemoteVideoTrack(params: {
       serverId: string;
       channelId: string;
       participantId: string;
+      signalStreamID: string;
+      connection: RTCPeerConnection;
       mediaStream: MediaStream;
       track: MediaStreamTrack;
     }): void {
@@ -1150,20 +2541,47 @@ export const useCallStore = defineStore("call", {
       const participant = session.participants.find((item) => item.participantId === params.participantId);
       const hintMap = this.videoHintsForSession(key);
       const hint = hintMap.get(videoHintKey(params.participantId, params.track.id));
-      const kind = hint ?? inferVideoKindFromTrackLabel(params.track.label);
+      const streamHint = this.resolveVideoKindForSignalStream(params.serverId, params.channelId, params.signalStreamID);
+      const kind = hint ?? streamHint ?? inferVideoKindFromTrackLabel(params.track.label);
+      this.updateVideoHint(
+        params.serverId,
+        params.channelId,
+        params.participantId,
+        params.track.id,
+        kind,
+        params.signalStreamID || params.mediaStream.id || undefined
+      );
       rtcLog("video.track.apply", {
         serverId: params.serverId,
         channelId: params.channelId,
         participantId: params.participantId,
+        signalStreamID: params.signalStreamID,
         streamId: params.mediaStream.id,
         trackId: params.track.id,
         inferredKind: kind,
         hintKind: hint ?? null,
-        hintSource: hint ? "signal" : "track_label",
+        hintSource: hint ? "track" : streamHint ? "stream" : "track_label",
         trackLabel: params.track.label,
         muted: params.track.muted,
         readyState: params.track.readyState
       });
+
+      const staleTrackBindings = session.videoStreams.filter(
+        (entry) => entry.trackId === params.track.id && entry.participantId !== params.participantId
+      );
+      for (const stale of staleTrackBindings) {
+        rtcLog("video.track.rebind.same-track-id", {
+          serverId: params.serverId,
+          channelId: params.channelId,
+          trackId: params.track.id,
+          fromParticipantId: stale.participantId,
+          toParticipantId: params.participantId,
+          fromSignalStreamID: stale.mediaStream.id,
+          toSignalStreamID: params.signalStreamID || params.mediaStream.id
+        });
+        this.removeVideoStream(params.serverId, params.channelId, stale.streamKey, { stopProbe: false });
+        this.deleteVideoHint(params.serverId, params.channelId, stale.participantId, stale.trackId);
+      }
 
       this.upsertVideoStream({
         serverId: params.serverId,
@@ -1176,6 +2594,15 @@ export const useCallStore = defineStore("call", {
         trackId: params.track.id,
         isLocal: session.localParticipantId === params.participantId
       });
+      this.startRemoteVideoStatsProbe({
+        serverId: params.serverId,
+        channelId: params.channelId,
+        participantId: params.participantId,
+        signalStreamID: params.signalStreamID,
+        kind,
+        connection: params.connection,
+        track: params.track
+      });
 
       params.track.onended = () => {
         rtcLog("video.track.ended", {
@@ -1185,94 +2612,60 @@ export const useCallStore = defineStore("call", {
           trackId: params.track.id,
           kind
         });
+        this.stopRemoteVideoStatsProbe(params.serverId, params.channelId, params.track.id);
         this.removeVideoStream(params.serverId, params.channelId, `${params.participantId}:${params.track.id}`);
         this.deleteVideoHint(params.serverId, params.channelId, params.participantId, params.track.id);
       };
     },
-    async handleOfferSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
-      const fromParticipantID = String(payload.from_participant_id ?? "").trim();
+    async handleOfferSignal(
+      serverId: string,
+      channelId: string,
+      signalType: "rtc.offer.publish" | "rtc.offer.subscribe",
+      payload: Record<string, unknown>
+    ): Promise<void> {
+      const directionFromSignal = signalType === "rtc.offer.subscribe" ? RTC_DIRECTION_SUBSCRIBE : RTC_DIRECTION_PUBLISH;
+      const direction = toSignalDirection(payload.direction) ?? directionFromSignal;
       const sdp = String(payload.sdp ?? "");
-      const descriptionType = toDescriptionType(payload.description_type ?? "offer");
-      if (!fromParticipantID || !sdp || descriptionType !== "offer") return;
+      const descriptionType = toDescriptionType(payload.type ?? payload.description_type ?? "offer");
+      if (!sdp || descriptionType !== "offer") return;
+
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
       if (!session) return;
-
-      const peer = this.ensurePeerConnection(serverId, channelId, fromParticipantID);
+      const peerId = peerIdForDirection(direction);
+      const peer = this.ensurePeerConnection(serverId, channelId, peerId);
       if (!peer) return;
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
-      const offerDescription: RTCSessionDescriptionInit = { type: "offer", sdp };
-      const offerCollision = peer.makingOffer || peer.connection.signalingState !== "stable";
-      peer.ignoreOffer = !peer.polite && offerCollision;
-      rtcLog("offer.received", {
-        serverId,
-        channelId,
-        participantId: fromParticipantID,
-        signalingState: peer.connection.signalingState,
-        makingOffer: peer.makingOffer,
-        polite: peer.polite,
-        isSettingRemoteAnswerPending: peer.isSettingRemoteAnswerPending,
-        offerCollision,
-        ignoreOffer: peer.ignoreOffer
-      });
-      if (peer.ignoreOffer) {
-        rtcLog("offer.ignored", {
-          serverId,
-          channelId,
-          participantId: fromParticipantID,
-          reason: "impolite_offer_collision",
-          signalingState: peer.connection.signalingState
-        });
-        return;
-      }
-
       try {
-        if (offerCollision) {
-          rtcLog("offer.rollback", {
-            serverId,
-            channelId,
-            participantId: fromParticipantID,
-            signalingState: peer.connection.signalingState
-          });
-          if (peer.connection.signalingState !== "stable") {
-            await Promise.all([
-              peer.connection.setLocalDescription({ type: "rollback" }),
-              peer.connection.setRemoteDescription(offerDescription)
-            ]);
-          } else {
-            await peer.connection.setRemoteDescription(offerDescription);
-          }
-        } else {
-          await peer.connection.setRemoteDescription(offerDescription);
+        if (peer.connection.signalingState !== "stable") {
+          await peer.connection.setLocalDescription({ type: "rollback" });
         }
-        rtcLog("offer.applied", {
-          serverId,
-          channelId,
-          participantId: fromParticipantID,
-          signalingState: peer.connection.signalingState
-        });
-        await this.syncPeerVideoTracks(serverId, channelId, fromParticipantID);
+        await peer.connection.setRemoteDescription({ type: "offer", sdp });
+        await this.flushPendingRemoteICECandidates(serverId, channelId, peer);
+        if (direction === RTC_DIRECTION_PUBLISH) {
+          await this.syncPeerVideoTracks(serverId, channelId, peerId);
+        }
         await peer.connection.setLocalDescription();
         const localDescription = peer.connection.localDescription;
         if (!localDescription || localDescription.type !== "answer") return;
 
         sendSignal(socket, {
-          type: "rtc.answer.publish",
-          request_id: `answer_${Date.now()}_${fromParticipantID}`,
+          type: answerTypeForDirection(direction),
+          request_id: `answer_${Date.now()}_${direction}`,
           channel_id: channelId,
           payload: {
-            target_participant_id: fromParticipantID,
-            description_type: localDescription.type,
-            sdp: localDescription.sdp
+            type: localDescription.type,
+            sdp: localDescription.sdp,
+            direction
           }
         });
-        peer.ignoreOffer = false;
-        rtcLog("answer.sent", {
+        rtcLog("offer.applied", {
           serverId,
           channelId,
-          participantId: fromParticipantID,
+          peerId,
+          direction,
           signalingState: peer.connection.signalingState
         });
       } catch (error) {
@@ -1280,28 +2673,36 @@ export const useCallStore = defineStore("call", {
         rtcLog("offer.error", {
           serverId,
           channelId,
-          participantId: fromParticipantID,
+          peerId,
+          direction,
           signalingState: peer.connection.signalingState,
           message: (error as Error).message
         });
       }
     },
-    async handleAnswerSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
-      const fromParticipantID = String(payload.from_participant_id ?? "").trim();
+    async handleAnswerSignal(
+      serverId: string,
+      channelId: string,
+      signalType: "rtc.answer.publish" | "rtc.answer.subscribe",
+      payload: Record<string, unknown>
+    ): Promise<void> {
+      const directionFromSignal = signalType === "rtc.answer.subscribe" ? RTC_DIRECTION_SUBSCRIBE : RTC_DIRECTION_PUBLISH;
+      const direction = toSignalDirection(payload.direction) ?? directionFromSignal;
       const sdp = String(payload.sdp ?? "");
-      const descriptionType = toDescriptionType(payload.description_type ?? "answer");
-      if (!fromParticipantID || !sdp || descriptionType !== "answer") return;
+      const descriptionType = toDescriptionType(payload.type ?? payload.description_type ?? "answer");
+      if (!sdp || descriptionType !== "answer") return;
+
       const key = sessionKey(serverId, channelId);
-      const peer = peerConnectionsByKey.get(key)?.get(fromParticipantID);
+      const peer = peerConnectionsByKey.get(key)?.get(peerIdForDirection(direction));
       if (!peer) return;
       const session = this.sessionsByKey[key];
       if (!session) return;
       rtcLog("answer.received", {
         serverId,
         channelId,
-        participantId: fromParticipantID,
-        signalingState: peer.connection.signalingState,
-        ignoreOffer: peer.ignoreOffer
+        peerId: peer.peerId,
+        direction,
+        signalingState: peer.connection.signalingState
       });
       peer.isSettingRemoteAnswerPending = true;
       try {
@@ -1309,11 +2710,12 @@ export const useCallStore = defineStore("call", {
           type: "answer",
           sdp
         });
-        peer.ignoreOffer = false;
+        await this.flushPendingRemoteICECandidates(serverId, channelId, peer);
         rtcLog("answer.applied", {
           serverId,
           channelId,
-          participantId: fromParticipantID,
+          peerId: peer.peerId,
+          direction,
           signalingState: peer.connection.signalingState
         });
       } catch (error) {
@@ -1321,7 +2723,8 @@ export const useCallStore = defineStore("call", {
         rtcLog("answer.error", {
           serverId,
           channelId,
-          participantId: fromParticipantID,
+          peerId: peer.peerId,
+          direction,
           signalingState: peer.connection.signalingState,
           message: (error as Error).message
         });
@@ -1332,51 +2735,97 @@ export const useCallStore = defineStore("call", {
           const pendingReason = peer.pendingNegotiationReason ?? "post-answer";
           peer.pendingNegotiation = false;
           peer.pendingNegotiationReason = null;
-          void this.createAndSendOffer(serverId, channelId, fromParticipantID, `answer:${pendingReason}`);
+          void this.createAndSendOffer(serverId, channelId, peer.peerId, `answer:${pendingReason}`);
         }
       }
     },
     async handleIceCandidateSignal(serverId: string, channelId: string, payload: Record<string, unknown>): Promise<void> {
-      const fromParticipantID = String(payload.from_participant_id ?? "").trim();
-      if (!fromParticipantID) return;
-      const key = sessionKey(serverId, channelId);
-      const peer = this.ensurePeerConnection(serverId, channelId, fromParticipantID);
-      if (!peer) return;
-      if (peer.ignoreOffer) {
-        rtcLog("ice.remote.ignore", {
-          serverId,
-          channelId,
-          participantId: fromParticipantID,
-          signalingState: peer.connection.signalingState
-        });
-        return;
-      }
-
       const candidatePayload = payload.candidate;
-      if (!candidatePayload || typeof candidatePayload !== "object") {
+      let candidate: RTCIceCandidateInit | null = null;
+      if (typeof candidatePayload === "string" && candidatePayload.trim()) {
+        candidate = {
+          candidate: candidatePayload,
+          sdpMid: payload.sdp_mid != null ? String(payload.sdp_mid) : undefined,
+          sdpMLineIndex:
+            payload.sdp_mline_index != null && Number.isFinite(Number(payload.sdp_mline_index))
+              ? Number(payload.sdp_mline_index)
+              : undefined
+        };
+      } else if (candidatePayload && typeof candidatePayload === "object") {
+        candidate = candidatePayload as RTCIceCandidateInit;
+      }
+      if (!candidate) return;
+      const addToPeer = async (
+        peer: PeerConnectionEntry,
+        direction: PeerSignalDirection,
+        sourceDirection: PeerSignalDirection | null
+      ): Promise<boolean> => {
+        if (!peer.connection.remoteDescription) {
+          peer.pendingRemoteCandidates.push(candidate as RTCIceCandidateInit);
+          rtcLog("ice.remote.queue", {
+            serverId,
+            channelId,
+            peerId: peer.peerId,
+            direction,
+            sourceDirection: sourceDirection ?? "missing",
+            queueSize: peer.pendingRemoteCandidates.length
+          });
+          return true;
+        }
+
+        try {
+          await peer.connection.addIceCandidate(candidate);
+          rtcLog("ice.remote.add", {
+            serverId,
+            channelId,
+            peerId: peer.peerId,
+            direction,
+            sourceDirection: sourceDirection ?? "missing",
+            signalingState: peer.connection.signalingState,
+            sdpMid: candidate.sdpMid ?? null,
+            sdpMLineIndex: candidate.sdpMLineIndex ?? null
+          });
+          return true;
+        } catch (error) {
+          rtcLog("ice.remote.error", {
+            serverId,
+            channelId,
+            peerId: peer.peerId,
+            direction,
+            sourceDirection: sourceDirection ?? "missing",
+            signalingState: peer.connection.signalingState,
+            message: (error as Error).message
+          });
+          return false;
+        }
+      };
+
+      const sourceDirection = toSignalDirection(payload.direction);
+      if (sourceDirection) {
+        const peer = this.ensurePeerConnection(serverId, channelId, peerIdForDirection(sourceDirection));
+        if (!peer) return;
+        await addToPeer(peer, sourceDirection, sourceDirection);
         return;
       }
 
-      try {
-        const candidate = candidatePayload as RTCIceCandidateInit;
-        await peer.connection.addIceCandidate(candidate);
-        rtcLog("ice.remote.add", {
-          serverId,
-          channelId,
-          participantId: fromParticipantID,
-          signalingState: peer.connection.signalingState,
-          sdpMid: candidate.sdpMid ?? null,
-          sdpMLineIndex: candidate.sdpMLineIndex ?? null
-        });
-      } catch (error) {
-        rtcLog("ice.remote.error", {
-          serverId,
-          channelId,
-          participantId: fromParticipantID,
-          signalingState: peer.connection.signalingState,
-          message: (error as Error).message
-        });
-        // Ignore transient candidate races while SDP syncs.
+      // If direction is absent, attempt both existing peers so we don't starve
+      // the subscribe PC due misrouted ICE metadata.
+      const key = sessionKey(serverId, channelId);
+      const peers = peerConnectionsByKey.get(key);
+      if (!peers || peers.size === 0) return;
+      rtcLog("ice.remote.direction.missing", {
+        serverId,
+        channelId,
+        sdpMid: candidate.sdpMid ?? null,
+        sdpMLineIndex: candidate.sdpMLineIndex ?? null
+      });
+      const subscribePeer = peers.get(RTC_SFU_SUBSCRIBE_PEER_ID);
+      const publishPeer = peers.get(RTC_SFU_PUBLISH_PEER_ID);
+      if (subscribePeer) {
+        await addToPeer(subscribePeer, RTC_DIRECTION_SUBSCRIBE, null);
+      }
+      if (publishPeer) {
+        await addToPeer(publishPeer, RTC_DIRECTION_PUBLISH, null);
       }
     },
     async enableCamera(serverId: string): Promise<void> {
@@ -1436,6 +2885,14 @@ export const useCallStore = defineStore("call", {
           streamId: mediaStream.id
         });
         track.onended = () => {
+          rtcLog("video.local.track.ended", {
+            serverId,
+            channelId,
+            kind: "camera",
+            trackId: track.id,
+            streamId: mediaStream.id,
+            readyState: track.readyState
+          });
           this.stopLocalVideoKind(serverId, channelId, "camera");
           void this.syncAllPeerVideoTracks(serverId, channelId);
         };
@@ -1519,6 +2976,14 @@ export const useCallStore = defineStore("call", {
           streamId: mediaStream.id
         });
         track.onended = () => {
+          rtcLog("video.local.track.ended", {
+            serverId,
+            channelId,
+            kind: "screen",
+            trackId: track.id,
+            streamId: mediaStream.id,
+            readyState: track.readyState
+          });
           this.stopLocalVideoKind(serverId, channelId, "screen");
           void this.syncAllPeerVideoTracks(serverId, channelId);
         };
@@ -1648,20 +3113,11 @@ export const useCallStore = defineStore("call", {
 
       try {
         const useCustomInputDevice = this.selectedInputDeviceId && this.selectedInputDeviceId !== DEFAULT_OUTPUT_DEVICE_ID;
-        const baseAudioConstraints: MediaTrackConstraints = {
-          channelCount: 1,
-          sampleRate: 48000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        };
+        const baseAudioConstraints = buildMicrophoneConstraints(this.selectedInputDeviceId, DEFAULT_OUTPUT_DEVICE_ID);
         let mediaStream: MediaStream;
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              ...baseAudioConstraints,
-              ...(useCustomInputDevice ? { deviceId: { exact: this.selectedInputDeviceId } } : {})
-            }
+            audio: baseAudioConstraints
           });
         } catch (firstError) {
           if (!useCustomInputDevice) {
@@ -1673,86 +3129,58 @@ export const useCallStore = defineStore("call", {
           this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
           this.inputDeviceError = "Selected input device was unavailable; using system default microphone.";
         }
-        const audioContext = new AudioContext({ sampleRate: 48000 });
-        if (audioContext.state === "suspended") {
-          await audioContext.resume();
-        }
-
         const activeSession = this.sessionsByKey[key];
         const activeSocket = socketsByKey.get(key);
         if (!activeSession || activeSession.state !== "active" || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
           mediaStream.getTracks().forEach((track) => {
             track.stop();
           });
-          if (audioContext.state !== "closed") {
-            void audioContext.close().catch(() => {});
-          }
           return;
         }
 
-        const sourceNode = audioContext.createMediaStreamSource(mediaStream);
-        const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
-        const sinkNode = audioContext.createGain();
-        sinkNode.gain.value = 0;
-
-        sourceNode.connect(processorNode);
-        processorNode.connect(sinkNode);
-        sinkNode.connect(audioContext.destination);
+        const track = mediaStream.getAudioTracks()[0];
+        if (!track) {
+          throw new Error("No microphone track available.");
+        }
+        track.enabled = !activeSession.micMuted && !activeSession.deafened;
 
         const uplink: MicUplink = {
           channelId,
           streamId: `mic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
           mediaStream,
-          audioContext,
-          sourceNode,
-          processorNode,
-          sinkNode,
-          chunkSeq: 0
+          track
         };
         micUplinksByKey.set(key, uplink);
+        localMicStreamsByKey.set(key, mediaStream);
         session.errorMessage = null;
 
-        processorNode.onaudioprocess = (event) => {
-          const activeSession = this.sessionsByKey[key];
-          if (!activeSession) return;
-          if (activeSession.state !== "active" || activeSession.micMuted) return;
-          const activeSocket = socketsByKey.get(key);
-          if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) return;
-
-          const input = event.inputBuffer.getChannelData(0);
-          if (input.length === 0) return;
-
-          const volumeScale = Math.max(0, this.inputVolume / 100);
-          const scaledInput = new Float32Array(input.length);
-          for (let index = 0; index < input.length; index += 1) {
-            scaledInput[index] = input[index] * volumeScale;
+        startAudioActivityProbe({
+          probeMap: localMicProbeByKey,
+          probeKey: key,
+          mediaStream,
+          onSpeaking: () => {
+            const localSession = this.sessionsByKey[key];
+            if (!localSession || localSession.micMuted || localSession.deafened) return;
+            const localParticipantId = localSession.localParticipantId;
+            if (!localParticipantId) return;
+            this.markParticipantSpeaking(serverId, channelId, localParticipantId);
           }
+        });
 
-          const activity = estimateFloat32Activity(scaledInput);
-          if (activity >= speakingActivityThreshold && activeSession.localParticipantId) {
-            this.markParticipantSpeaking(serverId, channelId, activeSession.localParticipantId);
+        sendSignal(activeSocket, {
+          type: "rtc.media.state",
+          request_id: `mic_start_${Date.now()}`,
+          channel_id: channelId,
+          payload: {
+            stream_id: mediaStream.id,
+            track_id: track.id,
+            stream_kind: RTC_AUDIO_MICROPHONE_KIND,
+            action: "start",
+            mic_muted: activeSession.micMuted,
+            deafened: activeSession.deafened
           }
-
-          const chunk = encodePCM16Mono(scaledInput);
-          const chunkB64 = encodeBase64(chunk);
-          const seq = uplink.chunkSeq;
-          uplink.chunkSeq += 1;
-
-          sendSignal(activeSocket, {
-            type: "rtc.media.state",
-            request_id: `pcm_${Date.now()}_${seq}`,
-            channel_id: uplink.channelId,
-            payload: {
-              stream_id: uplink.streamId,
-              stream_kind: "audio_pcm_s16le_48k_mono",
-              sample_rate_hz: event.inputBuffer.sampleRate,
-              channels: 1,
-              encoding: "pcm_s16le",
-              chunk_seq: seq,
-              chunk_b64: chunkB64
-            }
-          });
-        };
+        });
+        await this.syncAllPeerVideoTracks(serverId, channelId);
       } catch (error) {
         session.errorMessage = `Microphone unavailable: ${(error as Error).message}`;
       }
@@ -1761,30 +3189,27 @@ export const useCallStore = defineStore("call", {
       const key = sessionKey(serverId, channelId);
       const uplink = micUplinksByKey.get(key);
       if (!uplink) return;
-
-      uplink.processorNode.onaudioprocess = null;
-      try {
-        uplink.sourceNode.disconnect();
-      } catch (_error) {
-        // No-op
+      const socket = socketsByKey.get(key);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        sendSignal(socket, {
+          type: "rtc.media.state",
+          request_id: `mic_stop_${Date.now()}`,
+          channel_id: channelId,
+          payload: {
+            stream_id: uplink.mediaStream.id,
+            track_id: uplink.track.id,
+            stream_kind: RTC_AUDIO_MICROPHONE_KIND,
+            action: "stop"
+          }
+        });
       }
-      try {
-        uplink.processorNode.disconnect();
-      } catch (_error) {
-        // No-op
-      }
-      try {
-        uplink.sinkNode.disconnect();
-      } catch (_error) {
-        // No-op
-      }
+      stopAudioProbe(localMicProbeByKey, key);
       uplink.mediaStream.getTracks().forEach((track) => {
         track.stop();
       });
-      if (uplink.audioContext.state !== "closed") {
-        void uplink.audioContext.close().catch(() => {});
-      }
       micUplinksByKey.delete(key);
+      localMicStreamsByKey.delete(key);
+      void this.syncAllPeerVideoTracks(serverId, channelId);
     },
     async refreshOutputDevices(): Promise<void> {
       try {
@@ -1861,7 +3286,7 @@ export const useCallStore = defineStore("call", {
       this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
       this.closePeerConnectionsForSession(params.serverId, params.channelId);
       this.stopMicUplink(params.serverId, params.channelId);
-      session.state = "joining";
+      session.state = transitionCallState(session.state, "join_requested");
       session.errorMessage = null;
       session.participants = [];
       session.localParticipantId = null;
@@ -1875,6 +3300,16 @@ export const useCallStore = defineStore("call", {
       this.clearSpeakingForSession(params.serverId, params.channelId);
       session.joinedAt = null;
       session.lastEventAt = new Date().toISOString();
+      joinContextByKey.set(key, {
+        backendUrl: params.backendUrl,
+        userUID: params.userUID,
+        deviceID: params.deviceID
+      });
+      const pendingReconnect = reconnectTimerByKey.get(key);
+      if (pendingReconnect) {
+        clearTimeout(pendingReconnect);
+        reconnectTimerByKey.delete(key);
+      }
       localJoinIdentityByKey.set(key, {
         userUID: params.userUID,
         deviceID: params.deviceID
@@ -1887,6 +3322,10 @@ export const useCallStore = defineStore("call", {
         if (!capabilities.rtc) {
           throw new Error("Server does not advertise RTC support");
         }
+        const defaultSubscribeReceivePolicy = resolveSubscribeReceivePolicy({
+          capabilitiesPolicy: capabilities.rtc.subscribeReceivePolicy
+        });
+        subscribeReceivePolicyByServer.set(params.serverId, defaultSubscribeReceivePolicy);
         const joinTicket = await requestJoinTicket({
           backendUrl: params.backendUrl,
           channelId: params.channelId,
@@ -1894,6 +3333,11 @@ export const useCallStore = defineStore("call", {
           deviceID: params.deviceID,
           serverID: params.serverId
         });
+        const effectiveSubscribeReceivePolicy = resolveSubscribeReceivePolicy({
+          capabilitiesPolicy: defaultSubscribeReceivePolicy,
+          joinTicketPolicy: joinTicket.subscribe_receive_policy
+        });
+        subscribeReceivePolicyByKey.set(key, effectiveSubscribeReceivePolicy);
         iceServersByKey.set(key, toRTCIceServers(joinTicket.ice_servers));
         session.canSendVideo = Boolean(joinTicket.permissions.video);
         session.canShareScreen = Boolean(joinTicket.permissions.screenshare);
@@ -1904,6 +3348,7 @@ export const useCallStore = defineStore("call", {
         this.activeVoiceChannelByServer[params.serverId] = params.channelId;
 
         socket.addEventListener("open", () => {
+          reconnectAttemptByKey.delete(key);
           sendSignal(socket, {
             type: "rtc.join",
             request_id: `join_${Date.now()}`,
@@ -1924,17 +3369,26 @@ export const useCallStore = defineStore("call", {
           });
         });
 
-        socket.addEventListener("close", () => {
+        socket.addEventListener("close", (event: CloseEvent) => {
+          rtcLog("signaling.socket.close", {
+            serverId: params.serverId,
+            channelId: params.channelId,
+            code: event.code,
+            reason: event.reason || null,
+            wasClean: event.wasClean
+          });
+          const activeSocket = socketsByKey.get(key);
+          if (activeSocket === socket) {
+            socketsByKey.delete(key);
+          }
           this.stopMicUplink(params.serverId, params.channelId);
-          this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
-          this.closePeerConnectionsForSession(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
-          localJoinIdentityByKey.delete(key);
           if (!localSession) return;
           localSession.lastEventAt = new Date().toISOString();
           if (intentionallyClosed.has(key)) {
             intentionallyClosed.delete(key);
-            localSession.state = "idle";
+            this.clearReconnectState(params.serverId, params.channelId);
+            localSession.state = transitionCallState(localSession.state, "left");
             localSession.participants = [];
             localSession.localParticipantId = null;
             localSession.videoStreams = [];
@@ -1944,42 +3398,38 @@ export const useCallStore = defineStore("call", {
             localSession.errorMessage = null;
             return;
           }
-          localSession.state = "error";
-          localSession.errorMessage = "Call signaling disconnected.";
-          localSession.participants = [];
-          localSession.localParticipantId = null;
-          localSession.videoStreams = [];
-          localSession.cameraEnabled = false;
-          localSession.screenShareEnabled = false;
-          this.clearSpeakingForSession(params.serverId, params.channelId);
-          this.activeVoiceChannelByServer[params.serverId] = null;
+          this.scheduleSignalingReconnect(params.serverId, params.channelId, `close:${event.code}`);
         });
 
         socket.addEventListener("error", () => {
+          rtcLog("signaling.socket.error", {
+            serverId: params.serverId,
+            channelId: params.channelId
+          });
           this.stopMicUplink(params.serverId, params.channelId);
-          this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
-          this.closePeerConnectionsForSession(params.serverId, params.channelId);
           const localSession = this.sessionsByKey[key];
-          localJoinIdentityByKey.delete(key);
           if (!localSession) return;
-          localSession.state = "error";
-          localSession.errorMessage = "Call signaling transport failed.";
-          localSession.videoStreams = [];
-          localSession.cameraEnabled = false;
-          localSession.screenShareEnabled = false;
-          this.clearSpeakingForSession(params.serverId, params.channelId);
           localSession.lastEventAt = new Date().toISOString();
+          this.scheduleSignalingReconnect(params.serverId, params.channelId, "socket-error");
         });
       } catch (error) {
-        session.state = "error";
+        session.state = transitionCallState(session.state, "join_failed");
         session.errorMessage = (error as Error).message;
         session.videoStreams = [];
         session.cameraEnabled = false;
         session.screenShareEnabled = false;
         this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
         this.closePeerConnectionsForSession(params.serverId, params.channelId);
+        const shouldReconnect =
+          !intentionallyClosed.has(key) && this.activeVoiceChannelByServer[params.serverId] === params.channelId;
+        if (shouldReconnect) {
+          this.scheduleSignalingReconnect(params.serverId, params.channelId, "join-failed");
+          return;
+        }
         this.activeVoiceChannelByServer[params.serverId] = null;
+        this.clearReconnectState(params.serverId, params.channelId);
         localJoinIdentityByKey.delete(key);
+        joinContextByKey.delete(key);
       }
     },
     handleSignalEnvelope(params: { serverId: string; channelId: string; envelope: SignalEnvelope }): void {
@@ -2026,11 +3476,38 @@ export const useCallStore = defineStore("call", {
               )
             );
           }
-          session.state = "active";
+          const participantSignature = [...participants]
+            .map((item) => item.participantId)
+            .sort()
+            .join("|");
+          const existingParticipantSignature = [...session.participants]
+            .map((item) => item.participantId)
+            .sort()
+            .join("|");
+          const duplicateJoinedEvent =
+            session.state === "active" &&
+            (session.localParticipantId ?? "") === (localParticipantID || "") &&
+            participantSignature === existingParticipantSignature;
+          if (duplicateJoinedEvent) {
+            session.participants = participants;
+            session.localParticipantId = localParticipantID || null;
+            setPlaybackMuted(session.deafened);
+            rtcLog("joined.duplicate", {
+              serverId: params.serverId,
+              channelId: params.channelId,
+              localParticipantId: localParticipantID || null,
+              participants: participants.length
+            });
+            return;
+          }
+          session.state = transitionCallState(session.state, "join_succeeded");
           session.participants = participants;
           session.localParticipantId = localParticipantID || null;
           session.activeSpeakerParticipantIds = [];
           session.videoStreams = session.videoStreams.filter((entry) => entry.isLocal);
+          this.clearRemoteAudioForSession(params.serverId, params.channelId);
+          remoteTrackMetaByKey.delete(key);
+          pendingRemoteTracksByKey.delete(key);
           setPlaybackMuted(session.deafened);
           session.joinedAt = new Date().toISOString();
           this.connectParticipantMesh(params.serverId, params.channelId);
@@ -2042,31 +3519,99 @@ export const useCallStore = defineStore("call", {
           const participantPayload = payload.participant as Record<string, unknown> | undefined;
           if (!participantPayload) return;
           const participant = toParticipant(participantPayload, false);
-          if (!session.participants.some((item) => item.participantId === participant.participantId)) {
+          const alreadyPresent = session.participants.some((item) => item.participantId === participant.participantId);
+          if (!alreadyPresent) {
             session.participants.push(participant);
+            this.connectParticipantMesh(params.serverId, params.channelId);
           }
-          this.connectParticipantMesh(params.serverId, params.channelId);
           return;
         }
         case "rtc.participant.left": {
           const participantPayload = payload.participant as Record<string, unknown> | undefined;
           if (!participantPayload) return;
           const leavingParticipantID = String(participantPayload.participant_id ?? "");
+          const hadParticipant = session.participants.some((item) => item.participantId === leavingParticipantID);
+          if (!hadParticipant) return;
           session.participants = session.participants.filter((item) => item.participantId !== leavingParticipantID);
-          this.closePeerConnection(params.serverId, params.channelId, leavingParticipantID);
           this.removeVideoStreamsForParticipant(params.serverId, params.channelId, leavingParticipantID);
+          this.removeRemoteTrackMetaByParticipant(params.serverId, params.channelId, leavingParticipantID);
           this.clearParticipantSpeaking(params.serverId, params.channelId, leavingParticipantID);
+          this.deleteVideoHintsForParticipant(params.serverId, params.channelId, leavingParticipantID);
+          this.connectParticipantMesh(params.serverId, params.channelId);
+          return;
+        }
+        case "rtc.subscribe.refresh": {
+          rtcLog("subscribe.refresh.received", {
+            serverId: params.serverId,
+            channelId: params.channelId,
+            reason: String(payload.reason ?? "unspecified")
+          });
+          this.requestSubscribeSync(params.serverId, params.channelId, "subscribe-refresh", 800);
+          return;
+        }
+        case "rtc.track.published": {
+          const parsed = parseRemoteTrackLifecyclePayload(payload);
+          if (!parsed) return;
+          const mediaKind = toRemoteTrackMediaKind(parsed.mediaKind);
+          if (!mediaKind) return;
+          const participantID = parsed.participantId;
+          if (session.localParticipantId && participantID === session.localParticipantId) {
+            return;
+          }
+          const streamKind = parsed.streamKind || (mediaKind === RTC_MEDIA_KIND_AUDIO ? RTC_AUDIO_MICROPHONE_KIND : RTC_VIDEO_CAMERA_KIND);
+          const participant = session.participants.find((item) => item.participantId === participantID);
+          this.upsertRemoteTrackMeta(params.serverId, params.channelId, {
+            participantId: participantID,
+            userUID: participant?.userUID ?? parsed.userUID,
+            deviceID: participant?.deviceID ?? parsed.deviceID,
+            trackId: parsed.trackId,
+            streamId: parsed.streamId,
+            mediaKind,
+            streamKind
+          });
+          this.requestSubscribeSync(params.serverId, params.channelId, "track-published", 800);
+          return;
+        }
+        case "rtc.track.unpublished": {
+          const parsed = parseRemoteTrackLifecyclePayload(payload);
+          if (!parsed) return;
+          this.removeRemoteTrackMeta({
+            serverId: params.serverId,
+            channelId: params.channelId,
+            trackId: parsed.trackId,
+            streamId: parsed.streamId,
+            mediaKind: parsed.mediaKind
+          });
           return;
         }
         case "rtc.error": {
-          session.state = "error";
-          session.errorMessage = String(payload.message ?? "Signaling error");
+          const code = String(payload.code ?? "").trim().toLowerCase();
+          const message = String(payload.message ?? "Signaling error");
+          const retryable = Boolean(payload.retryable);
+          const isClosedPeerNegotiationError =
+            code === "rtc_negotiation_failed" && message.toLowerCase().includes("connection closed");
+          if (retryable && isClosedPeerNegotiationError && session.state === "active") {
+            rtcLog("rtc.error.transient", {
+              serverId: params.serverId,
+              channelId: params.channelId,
+              code,
+              message
+            });
+            this.requestSubscribeSync(params.serverId, params.channelId, "rtc-error-closed-peer", 2_000);
+            return;
+          }
+          session.state = transitionCallState(session.state, "fatal_error");
+          session.errorMessage = message;
           return;
         }
         case "rtc.media.state": {
           const streamKind = String(payload.stream_kind ?? "");
           const participantID = String(payload.participant_id ?? "");
           if (!participantID) return;
+          if (!streamKind.trim()) {
+            // Ignore presence-only rtc.media.state packets for video mapping.
+            return;
+          }
 
           const streamKindVideo = toVideoKindFromSignal(streamKind);
           if (streamKindVideo) {
@@ -2076,54 +3621,114 @@ export const useCallStore = defineStore("call", {
 
             const action = String(payload.action ?? "start").trim().toLowerCase();
             const trackID = String(payload.track_id ?? "");
+            const signalStreamID = String(payload.stream_id ?? "");
             if (action === "stop") {
               if (trackID) {
                 this.removeVideoStream(params.serverId, params.channelId, `${participantID}:${trackID}`);
+                this.removeVideoStream(params.serverId, params.channelId, `participant_unknown:${trackID}`);
                 this.deleteVideoHint(params.serverId, params.channelId, participantID, trackID);
+              } else if (signalStreamID) {
+                this.removeVideoStreamsBySignalStreamID(params.serverId, params.channelId, signalStreamID);
               } else {
                 this.removeVideoStreamsForParticipant(params.serverId, params.channelId, participantID, streamKindVideo);
               }
               return;
             }
 
+            if (action === "start") {
+              const staleEntries = session.videoStreams.filter((entry) => {
+                if (entry.participantId !== participantID || entry.kind !== streamKindVideo) return false;
+                if (trackID && entry.trackId !== trackID) return true;
+                if (signalStreamID && entry.mediaStream.id !== signalStreamID) return true;
+                return false;
+              });
+              for (const stale of staleEntries) {
+                rtcLog("video.stream.stale.remove", {
+                  serverId: params.serverId,
+                  channelId: params.channelId,
+                  participantId: participantID,
+                  kind: streamKindVideo,
+                  staleTrackId: stale.trackId,
+                  staleSignalStreamID: stale.mediaStream.id,
+                  nextTrackId: trackID || null,
+                  nextSignalStreamID: signalStreamID || null
+                });
+                this.removeVideoStream(params.serverId, params.channelId, stale.streamKey);
+                this.deleteVideoHint(params.serverId, params.channelId, participantID, stale.trackId);
+              }
+              const hasExactTrackBinding =
+                !!trackID &&
+                session.videoStreams.some(
+                  (entry) => entry.participantId === participantID && entry.trackId === trackID
+                );
+              const hasExactStreamBinding =
+                !!signalStreamID &&
+                session.videoStreams.some(
+                  (entry) => entry.participantId === participantID && entry.mediaStream.id === signalStreamID
+                );
+              const shouldSyncSubscribe = !(hasExactTrackBinding || hasExactStreamBinding);
+              rtcLog("subscribe.sync.requested", {
+                serverId: params.serverId,
+                channelId: params.channelId,
+                participantId: participantID,
+                trackId: trackID || null,
+                signalStreamID: signalStreamID || null,
+                streamKind: streamKindVideo,
+                shouldSyncSubscribe
+              });
+              if (shouldSyncSubscribe) {
+                this.requestSubscribeSync(params.serverId, params.channelId, "media-state-start", 3_500);
+              }
+            }
+
+            if (trackID || signalStreamID) {
+              this.updateVideoHint(
+                params.serverId,
+                params.channelId,
+                participantID,
+                trackID,
+                streamKindVideo,
+                signalStreamID || undefined
+              );
+              this.reclassifyBoundVideoStreamKind(
+                params.serverId,
+                params.channelId,
+                participantID,
+                trackID,
+                signalStreamID
+              );
+              if (signalStreamID) {
+                this.rebindVideoStreamsBySignalStreamID(params.serverId, params.channelId, signalStreamID, participantID);
+              }
+            }
             if (trackID) {
-              this.updateVideoHint(params.serverId, params.channelId, participantID, trackID, streamKindVideo);
+              this.rebindVideoStreamParticipant(params.serverId, params.channelId, trackID, participantID);
+            } else {
+              this.rebindUnknownVideoStreamByKind(params.serverId, params.channelId, participantID, streamKindVideo);
             }
             return;
           }
 
-          const chunkB64 = String(payload.chunk_b64 ?? "");
-          if (streamKind !== "audio_pcm_s16le_48k_mono" || !chunkB64) {
-            return;
-          }
-          const chunkBytes = decodeBase64Chunk(chunkB64);
-          if (chunkBytes) {
-            const activity = estimatePCM16Activity(chunkBytes);
-            if (activity >= speakingActivityThreshold) {
-              this.markParticipantSpeaking(params.serverId, params.channelId, participantID);
-            }
-          }
-          if (session.localParticipantId && participantID === session.localParticipantId) {
-            return;
-          }
-          if (session.deafened) return;
-          const streamID = String(payload.stream_id ?? "default");
-          const sampleRate = toNumber(payload.sample_rate_hz, 48000);
-          const channels = toNumber(payload.channels, 1);
-          schedulePCMPlayback({
-            streamKey: `${params.serverId}:${params.channelId}:${participantID}:${streamID}`,
-            chunkB64,
-            sampleRate,
-            channels
-          });
           return;
         }
-        case "rtc.offer.publish": {
-          void this.handleOfferSignal(params.serverId, params.channelId, payload);
+        case "rtc.offer.publish":
+        case "rtc.offer.subscribe": {
+          void this.handleOfferSignal(
+            params.serverId,
+            params.channelId,
+            params.envelope.type as "rtc.offer.publish" | "rtc.offer.subscribe",
+            payload
+          );
           return;
         }
-        case "rtc.answer.publish": {
-          void this.handleAnswerSignal(params.serverId, params.channelId, payload);
+        case "rtc.answer.publish":
+        case "rtc.answer.subscribe": {
+          void this.handleAnswerSignal(
+            params.serverId,
+            params.channelId,
+            params.envelope.type as "rtc.answer.publish" | "rtc.answer.subscribe",
+            payload
+          );
           return;
         }
         case "rtc.ice.candidate": {
@@ -2165,18 +3770,31 @@ export const useCallStore = defineStore("call", {
         session.micMuted = !session.micMuted;
         audioPrefs.micMuted = session.micMuted;
       }
+      const micTrack = localMicStreamsByKey.get(key)?.getAudioTracks()[0];
+      if (micTrack) {
+        micTrack.enabled = !session.micMuted && !session.deafened;
+      }
       if (!session.micMuted && session.state === "active") {
         void this.startMicUplink(serverId, channelId);
       }
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      const micStream = localMicStreamsByKey.get(key);
+      const activeMicTrack = micStream?.getAudioTracks()[0];
       sendSignal(socket, {
         type: "rtc.media.state",
         request_id: `media_${Date.now()}`,
         channel_id: channelId,
         payload: {
           mic_muted: session.micMuted,
-          deafened: session.deafened
+          deafened: session.deafened,
+          ...(activeMicTrack
+            ? {
+                stream_id: micStream?.id ?? "",
+                track_id: activeMicTrack.id,
+                stream_kind: RTC_AUDIO_MICROPHONE_KIND
+              }
+            : {})
         }
       });
     },
@@ -2196,27 +3814,42 @@ export const useCallStore = defineStore("call", {
       if (session.deafened) {
         session.micMuted = true;
       }
+      const micTrack = localMicStreamsByKey.get(key)?.getAudioTracks()[0];
+      if (micTrack) {
+        micTrack.enabled = !session.micMuted && !session.deafened;
+      }
       audioPrefs.deafened = session.deafened;
       audioPrefs.micMuted = session.micMuted;
       setPlaybackMuted(session.deafened);
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      const micStream = localMicStreamsByKey.get(key);
+      const activeMicTrack = micStream?.getAudioTracks()[0];
       sendSignal(socket, {
         type: "rtc.media.state",
         request_id: `media_${Date.now()}`,
         channel_id: channelId,
         payload: {
           mic_muted: session.micMuted,
-          deafened: session.deafened
+          deafened: session.deafened,
+          ...(activeMicTrack
+            ? {
+                stream_id: micStream?.id ?? "",
+                track_id: activeMicTrack.id,
+                stream_kind: RTC_AUDIO_MICROPHONE_KIND
+              }
+            : {})
         }
       });
     },
     leaveChannel(serverId: string, channelId: string, options?: { reason?: string }): void {
       const key = sessionKey(serverId, channelId);
+      this.clearReconnectState(serverId, channelId);
       this.stopMicUplink(serverId, channelId);
       this.stopAllLocalVideo(serverId, channelId);
       this.closePeerConnectionsForSession(serverId, channelId);
       localJoinIdentityByKey.delete(key);
+      joinContextByKey.delete(key);
       this.clearSpeakingForSession(serverId, channelId);
       const socket = socketsByKey.get(key);
       if (socket) {
@@ -2232,7 +3865,9 @@ export const useCallStore = defineStore("call", {
       }
       const session = this.sessionsByKey[key];
       if (session) {
-        session.state = options?.reason ? "error" : "idle";
+        session.state = options?.reason
+          ? transitionCallState(session.state, "fatal_error")
+          : transitionCallState(session.state, "left");
         session.participants = [];
         session.localParticipantId = null;
         session.activeSpeakerParticipantIds = [];
@@ -2259,10 +3894,12 @@ export const useCallStore = defineStore("call", {
       Object.keys(this.sessionsByKey).forEach((key) => {
         if (!key.startsWith(keyPrefix)) return;
         const channelId = key.slice(keyPrefix.length);
+        this.clearReconnectState(serverId, channelId);
         this.stopMicUplink(serverId, channelId);
         this.stopAllLocalVideo(serverId, channelId, { notify: false });
         this.closePeerConnectionsForSession(serverId, channelId);
         localJoinIdentityByKey.delete(key);
+        joinContextByKey.delete(key);
         this.clearSpeakingForSession(serverId, channelId);
         const socket = socketsByKey.get(key);
         if (socket) {
@@ -2276,6 +3913,7 @@ export const useCallStore = defineStore("call", {
 
       delete this.activeVoiceChannelByServer[serverId];
       delete this.audioPrefsByServer[serverId];
+      subscribeReceivePolicyByServer.delete(serverId);
       clearPlaybackState();
     },
     disconnectAll(): void {
