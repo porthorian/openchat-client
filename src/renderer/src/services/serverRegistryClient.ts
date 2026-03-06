@@ -1,6 +1,7 @@
 import type { ServerProfile } from "@renderer/types/models";
 
-export const DEFAULT_BACKEND_URL = (import.meta.env.VITE_OPENCHAT_BACKEND_URL as string | undefined)?.trim() || "https://openchat.marone.us";
+export const DEFAULT_BACKEND_URL =
+  (import.meta.env.VITE_OPENCHAT_BACKEND_URL as string | undefined)?.trim() || "https://chat.pennylabs.com";
 
 export class ServerRegistryRequestError extends Error {
   status: number;
