@@ -18,6 +18,10 @@ import {
   type RemoteTrackLifecyclePayload,
   type RemoteTrackPendingCandidate
 } from "@renderer/stores/call/remoteMedia";
+import {
+  parsePersistedCallMediaPreferences,
+  type PersistedCallMediaPreferences
+} from "@renderer/stores/call/preferences";
 import { parseSignalEnvelopeMessage } from "@renderer/stores/call/signaling";
 
 export type CallConnectionState = "idle" | "joining" | "active" | "reconnecting" | "error";
@@ -73,6 +77,11 @@ export type AudioInputDevice = {
   label: string;
 };
 
+export type VideoInputDevice = {
+  deviceId: string;
+  label: string;
+};
+
 type CallState = {
   activeVoiceChannelByServer: Record<string, string | null>;
   sessionsByKey: Record<string, ChannelCallSession>;
@@ -87,15 +96,27 @@ type CallState = {
   selectedInputDeviceId: string;
   inputVolume: number;
   inputDeviceError: string | null;
+  videoInputDevices: VideoInputDevice[];
+  selectedCameraDeviceId: string;
+  cameraDeviceError: string | null;
   outputDevices: AudioOutputDevice[];
   selectedOutputDeviceId: string;
   outputVolume: number;
   outputSelectionSupported: boolean;
   outputDeviceError: string | null;
+  micTestActive: boolean;
+  micTestLevel: number;
+  micTestError: string | null;
+  cameraTestActive: boolean;
+  cameraTestStream: MediaStream | null;
+  cameraTestError: string | null;
 };
 
 const DEFAULT_OUTPUT_DEVICE_ID = "default";
 const DEFAULT_OUTPUT_DEVICE_LABEL = "System Default";
+const DEFAULT_CAMERA_DEVICE_ID = "default";
+const DEFAULT_CAMERA_DEVICE_LABEL = "System Default (Camera)";
+const CALL_MEDIA_PREFERENCES_STORAGE_KEY = "openchat:call-media-preferences:v1";
 const RTC_AUDIO_MICROPHONE_KIND = "audio_microphone";
 const RTC_VIDEO_CAMERA_KIND = "video_camera";
 const RTC_VIDEO_SCREEN_KIND = "video_screen";
@@ -138,6 +159,15 @@ const localMicProbeByKey = new Map<string, LocalAudioProbe>();
 const remoteAudioProbeByKey = new Map<string, LocalAudioProbe>();
 let playbackMuted = false;
 let playbackVolume = 0.5;
+let micTestStream: MediaStream | null = null;
+let micTestAudioElement: AudioElementWithSink | null = null;
+let micTestAudioContext: AudioContext | null = null;
+let micTestSourceNode: MediaStreamAudioSourceNode | null = null;
+let micTestGainNode: GainNode | null = null;
+let micTestAnalyserNode: AnalyserNode | null = null;
+let micTestDestinationNode: MediaStreamAudioDestinationNode | null = null;
+let micTestMeterTimer: ReturnType<typeof setInterval> | null = null;
+let cameraTestStream: MediaStream | null = null;
 const speakingIndicatorHoldMS = 450;
 const speakingActivityThreshold = 0.018;
 const rtcLogPrefix = "[openchat:rtc]";
@@ -559,6 +589,191 @@ async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
   });
 }
 
+async function listVideoInputDevices(): Promise<VideoInputDevice[]> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+    return [
+      {
+        deviceId: DEFAULT_CAMERA_DEVICE_ID,
+        label: DEFAULT_CAMERA_DEVICE_LABEL
+      }
+    ];
+  }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const inputs = devices.filter((device) => device.kind === "videoinput");
+  const deduped = new Map<string, VideoInputDevice>();
+  inputs.forEach((device, index) => {
+    const deviceId = device.deviceId || DEFAULT_CAMERA_DEVICE_ID;
+    const fallbackLabel = deviceId === DEFAULT_CAMERA_DEVICE_ID ? DEFAULT_CAMERA_DEVICE_LABEL : `Camera ${index + 1}`;
+    deduped.set(deviceId, {
+      deviceId,
+      label: device.label.trim() || fallbackLabel
+    });
+  });
+
+  if (!deduped.has(DEFAULT_CAMERA_DEVICE_ID)) {
+    deduped.set(DEFAULT_CAMERA_DEVICE_ID, {
+      deviceId: DEFAULT_CAMERA_DEVICE_ID,
+      label: DEFAULT_CAMERA_DEVICE_LABEL
+    });
+  }
+
+  return Array.from(deduped.values()).sort((left, right) => {
+    if (left.deviceId === DEFAULT_CAMERA_DEVICE_ID) return -1;
+    if (right.deviceId === DEFAULT_CAMERA_DEVICE_ID) return 1;
+    return left.label.localeCompare(right.label);
+  });
+}
+
+function callMediaPreferenceDefaults(): {
+  defaultInputDeviceId: string;
+  defaultOutputDeviceId: string;
+  defaultCameraDeviceId: string;
+  defaultInputVolume: number;
+  defaultOutputVolume: number;
+} {
+  return {
+    defaultInputDeviceId: DEFAULT_OUTPUT_DEVICE_ID,
+    defaultOutputDeviceId: DEFAULT_OUTPUT_DEVICE_ID,
+    defaultCameraDeviceId: DEFAULT_CAMERA_DEVICE_ID,
+    defaultInputVolume: 100,
+    defaultOutputVolume: 50
+  };
+}
+
+function readPersistedCallMediaPreferences(): PersistedCallMediaPreferences | null {
+  if (typeof window === "undefined") return null;
+  let rawPayload: string | null = null;
+  try {
+    rawPayload = window.localStorage.getItem(CALL_MEDIA_PREFERENCES_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+  return parsePersistedCallMediaPreferences(rawPayload, callMediaPreferenceDefaults());
+}
+
+function writePersistedCallMediaPreferences(state: {
+  selectedInputDeviceId: string;
+  selectedOutputDeviceId: string;
+  selectedCameraDeviceId: string;
+  inputVolume: number;
+  outputVolume: number;
+}): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      CALL_MEDIA_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        selectedInputDeviceId: state.selectedInputDeviceId,
+        selectedOutputDeviceId: state.selectedOutputDeviceId,
+        selectedCameraDeviceId: state.selectedCameraDeviceId,
+        inputVolume: state.inputVolume,
+        outputVolume: state.outputVolume
+      })
+    );
+  } catch (_error) {
+    // Preferences persistence is best-effort.
+  }
+}
+
+async function applySinkToAudioElement(audioElement: AudioElementWithSink, deviceId: string): Promise<boolean> {
+  const mediaElementProto = HTMLMediaElement.prototype as AudioElementWithSink;
+  if (typeof mediaElementProto.setSinkId !== "function") {
+    return false;
+  }
+  if (typeof audioElement.setSinkId !== "function") {
+    return false;
+  }
+  await audioElement.setSinkId(deviceId || DEFAULT_OUTPUT_DEVICE_ID);
+  return true;
+}
+
+function computeMicTestLevel(samples: Uint8Array): number {
+  if (samples.length === 0) return 0;
+  let total = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const centered = (samples[index] - 128) / 128;
+    total += Math.abs(centered);
+  }
+  const activity = total / samples.length;
+  return Math.max(0, Math.min(1, activity * 3.6));
+}
+
+function buildCameraConstraints(deviceId: string): MediaTrackConstraints {
+  const normalizedDeviceID = deviceId.trim();
+  const useSpecificDevice = normalizedDeviceID && normalizedDeviceID !== DEFAULT_CAMERA_DEVICE_ID;
+  return {
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
+    frameRate: { ideal: 24, max: 30 },
+    ...(useSpecificDevice ? { deviceId: { exact: normalizedDeviceID } } : {})
+  };
+}
+
+function clearMicTestResources(): void {
+  if (micTestMeterTimer) {
+    clearInterval(micTestMeterTimer);
+    micTestMeterTimer = null;
+  }
+  if (micTestSourceNode) {
+    try {
+      micTestSourceNode.disconnect();
+    } catch (_error) {
+      // No-op.
+    }
+    micTestSourceNode = null;
+  }
+  if (micTestGainNode) {
+    try {
+      micTestGainNode.disconnect();
+    } catch (_error) {
+      // No-op.
+    }
+    micTestGainNode = null;
+  }
+  if (micTestAnalyserNode) {
+    try {
+      micTestAnalyserNode.disconnect();
+    } catch (_error) {
+      // No-op.
+    }
+    micTestAnalyserNode = null;
+  }
+  if (micTestDestinationNode) {
+    try {
+      micTestDestinationNode.disconnect();
+    } catch (_error) {
+      // No-op.
+    }
+    micTestDestinationNode = null;
+  }
+  if (micTestAudioContext) {
+    if (micTestAudioContext.state !== "closed") {
+      void micTestAudioContext.close().catch(() => {});
+    }
+    micTestAudioContext = null;
+  }
+  if (micTestAudioElement) {
+    micTestAudioElement.pause();
+    micTestAudioElement.srcObject = null;
+    micTestAudioElement = null;
+  }
+  if (micTestStream) {
+    micTestStream.getTracks().forEach((track) => track.stop());
+    micTestStream = null;
+  }
+}
+
+function clearCameraTestResources(): void {
+  if (cameraTestStream) {
+    cameraTestStream.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+    cameraTestStream = null;
+  }
+}
+
 function clearPlaybackState(): void {
   for (const [key, entries] of remoteAudioEntriesByKey.entries()) {
     for (const [entryKey, entry] of entries.entries()) {
@@ -615,6 +830,14 @@ export const useCallStore = defineStore("call", {
     selectedInputDeviceId: DEFAULT_OUTPUT_DEVICE_ID,
     inputVolume: 100,
     inputDeviceError: null,
+    videoInputDevices: [
+      {
+        deviceId: DEFAULT_CAMERA_DEVICE_ID,
+        label: DEFAULT_CAMERA_DEVICE_LABEL
+      }
+    ],
+    selectedCameraDeviceId: DEFAULT_CAMERA_DEVICE_ID,
+    cameraDeviceError: null,
     outputDevices: [
       {
         deviceId: DEFAULT_OUTPUT_DEVICE_ID,
@@ -624,7 +847,13 @@ export const useCallStore = defineStore("call", {
     selectedOutputDeviceId: DEFAULT_OUTPUT_DEVICE_ID,
     outputVolume: 50,
     outputSelectionSupported: supportsOutputSelection(),
-    outputDeviceError: null
+    outputDeviceError: null,
+    micTestActive: false,
+    micTestLevel: 0,
+    micTestError: null,
+    cameraTestActive: false,
+    cameraTestStream: null,
+    cameraTestError: null
   }),
   getters: {
     sessionFor: (state) => (serverId: string, channelId: string): ChannelCallSession => {
@@ -672,6 +901,199 @@ export const useCallStore = defineStore("call", {
         this.sessionsByKey[key] = createEmptySession();
       }
       return key;
+    },
+    hydrateMediaPreferences(): void {
+      const persisted = readPersistedCallMediaPreferences();
+      if (!persisted) {
+        setPlaybackVolume(this.outputVolume / 100);
+        return;
+      }
+      this.selectedInputDeviceId = persisted.selectedInputDeviceId;
+      this.selectedOutputDeviceId = persisted.selectedOutputDeviceId;
+      this.selectedCameraDeviceId = persisted.selectedCameraDeviceId;
+      this.inputVolume = persisted.inputVolume;
+      this.outputVolume = persisted.outputVolume;
+      setPlaybackVolume(this.outputVolume / 100);
+    },
+    persistMediaPreferences(): void {
+      writePersistedCallMediaPreferences({
+        selectedInputDeviceId: this.selectedInputDeviceId,
+        selectedOutputDeviceId: this.selectedOutputDeviceId,
+        selectedCameraDeviceId: this.selectedCameraDeviceId,
+        inputVolume: this.inputVolume,
+        outputVolume: this.outputVolume
+      });
+    },
+    stopMediaTests(): void {
+      this.stopMicTest();
+      this.stopCameraTest();
+    },
+    async refreshVideoInputDevices(): Promise<void> {
+      try {
+        this.videoInputDevices = await listVideoInputDevices();
+        if (!this.videoInputDevices.some((device) => device.deviceId === this.selectedCameraDeviceId)) {
+          this.selectedCameraDeviceId = DEFAULT_CAMERA_DEVICE_ID;
+          this.persistMediaPreferences();
+        }
+        this.cameraDeviceError = null;
+      } catch (error) {
+        this.videoInputDevices = [
+          {
+            deviceId: DEFAULT_CAMERA_DEVICE_ID,
+            label: DEFAULT_CAMERA_DEVICE_LABEL
+          }
+        ];
+        this.selectedCameraDeviceId = DEFAULT_CAMERA_DEVICE_ID;
+        this.cameraDeviceError = (error as Error).message;
+        this.persistMediaPreferences();
+      }
+    },
+    async selectCameraDevice(deviceId: string): Promise<void> {
+      const nextDeviceID = deviceId.trim() || DEFAULT_CAMERA_DEVICE_ID;
+      this.selectedCameraDeviceId = nextDeviceID;
+      this.cameraDeviceError = null;
+      this.persistMediaPreferences();
+      if (this.cameraTestActive) {
+        await this.startCameraTest();
+      }
+    },
+    async startMicTest(): Promise<void> {
+      this.stopMicTest();
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        this.micTestError = "Microphone testing is not supported in this runtime.";
+        return;
+      }
+
+      this.micTestError = null;
+      this.micTestLevel = 0;
+      try {
+        const selectedDeviceID = this.selectedInputDeviceId;
+        const useCustomInputDevice = selectedDeviceID && selectedDeviceID !== DEFAULT_OUTPUT_DEVICE_ID;
+        let mediaStream: MediaStream;
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: buildMicrophoneConstraints(selectedDeviceID, DEFAULT_OUTPUT_DEVICE_ID)
+          });
+        } catch (firstError) {
+          if (!useCustomInputDevice) {
+            throw firstError;
+          }
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: buildMicrophoneConstraints(DEFAULT_OUTPUT_DEVICE_ID, DEFAULT_OUTPUT_DEVICE_ID)
+          });
+          this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+          this.inputDeviceError = "Selected input device was unavailable; using system default microphone.";
+          this.persistMediaPreferences();
+        }
+
+        const context = new AudioContext();
+        const sourceNode = context.createMediaStreamSource(mediaStream);
+        const gainNode = context.createGain();
+        gainNode.gain.value = Math.max(0, this.inputVolume / 100);
+        const analyserNode = context.createAnalyser();
+        analyserNode.fftSize = 2048;
+        const destinationNode = context.createMediaStreamDestination();
+        sourceNode.connect(gainNode);
+        gainNode.connect(analyserNode);
+        analyserNode.connect(destinationNode);
+
+        const audioElement = new Audio() as AudioElementWithSink;
+        audioElement.autoplay = true;
+        audioElement.preload = "auto";
+        audioElement.srcObject = destinationNode.stream;
+        audioElement.volume = playbackMuted ? 0 : this.outputVolume / 100;
+        if (this.selectedOutputDeviceId) {
+          try {
+            await applySinkToAudioElement(audioElement, this.selectedOutputDeviceId);
+          } catch (error) {
+            this.outputDeviceError = (error as Error).message;
+          }
+        }
+        void audioElement.play().catch(() => {});
+
+        const samples = new Uint8Array(analyserNode.fftSize);
+        micTestMeterTimer = setInterval(() => {
+          analyserNode.getByteTimeDomainData(samples);
+          this.micTestLevel = computeMicTestLevel(samples);
+        }, 90);
+
+        micTestStream = mediaStream;
+        micTestAudioContext = context;
+        micTestSourceNode = sourceNode;
+        micTestGainNode = gainNode;
+        micTestAnalyserNode = analyserNode;
+        micTestDestinationNode = destinationNode;
+        micTestAudioElement = audioElement;
+
+        mediaStream.getAudioTracks().forEach((track) => {
+          track.onended = () => {
+            if (!this.micTestActive) return;
+            this.stopMicTest();
+            this.micTestError = "Microphone test stopped because the input device ended.";
+          };
+        });
+
+        this.micTestActive = true;
+      } catch (error) {
+        this.stopMicTest();
+        this.micTestError = `Microphone test failed: ${(error as Error).message}`;
+      }
+    },
+    stopMicTest(): void {
+      clearMicTestResources();
+      this.micTestActive = false;
+      this.micTestLevel = 0;
+      this.micTestError = null;
+    },
+    async startCameraTest(): Promise<void> {
+      this.stopCameraTest();
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        this.cameraTestError = "Camera testing is not supported in this runtime.";
+        return;
+      }
+      this.cameraTestError = null;
+      try {
+        const selectedDeviceID = this.selectedCameraDeviceId;
+        const useCustomCamera = selectedDeviceID && selectedDeviceID !== DEFAULT_CAMERA_DEVICE_ID;
+        let mediaStream: MediaStream;
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: buildCameraConstraints(selectedDeviceID)
+          });
+        } catch (firstError) {
+          if (!useCustomCamera) {
+            throw firstError;
+          }
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: buildCameraConstraints(DEFAULT_CAMERA_DEVICE_ID)
+          });
+          this.selectedCameraDeviceId = DEFAULT_CAMERA_DEVICE_ID;
+          this.cameraDeviceError = "Selected camera was unavailable; using system default camera.";
+          this.persistMediaPreferences();
+        }
+
+        cameraTestStream = mediaStream;
+        this.cameraTestStream = mediaStream;
+        this.cameraTestActive = true;
+        mediaStream.getVideoTracks().forEach((track) => {
+          track.onended = () => {
+            if (!this.cameraTestActive) return;
+            this.stopCameraTest();
+            this.cameraTestError = "Camera test stopped because the camera track ended.";
+          };
+        });
+      } catch (error) {
+        this.stopCameraTest();
+        this.cameraTestError = `Camera test failed: ${(error as Error).message}`;
+      }
+    },
+    stopCameraTest(): void {
+      clearCameraTestResources();
+      this.cameraTestActive = false;
+      this.cameraTestStream = null;
+      this.cameraTestError = null;
     },
     clearReconnectState(serverId: string, channelId: string): void {
       const key = sessionKey(serverId, channelId);
@@ -2848,18 +3270,31 @@ export const useCallStore = defineStore("call", {
 
       try {
         this.stopLocalVideoKind(serverId, channelId, "camera", { notify: false });
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            frameRate: { ideal: 24, max: 30 }
+        const selectedDeviceID = this.selectedCameraDeviceId;
+        const useCustomCamera = selectedDeviceID && selectedDeviceID !== DEFAULT_CAMERA_DEVICE_ID;
+        let mediaStream: MediaStream;
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: buildCameraConstraints(selectedDeviceID)
+          });
+        } catch (firstError) {
+          if (!useCustomCamera) {
+            throw firstError;
           }
-        });
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: buildCameraConstraints(DEFAULT_CAMERA_DEVICE_ID)
+          });
+          this.selectedCameraDeviceId = DEFAULT_CAMERA_DEVICE_ID;
+          this.cameraDeviceError = "Selected camera was unavailable; using system default camera.";
+          this.persistMediaPreferences();
+        }
         const track = mediaStream.getVideoTracks()[0];
         if (!track) {
           throw new Error("No camera track available.");
         }
+        this.cameraDeviceError = null;
 
         const localParticipant = session.participants.find((item) => item.participantId === session.localParticipantId);
         localCameraStreamsByKey.set(key, mediaStream);
@@ -3067,6 +3502,7 @@ export const useCallStore = defineStore("call", {
         this.inputDevices = await listAudioInputDevices();
         if (!this.inputDevices.some((device) => device.deviceId === this.selectedInputDeviceId)) {
           this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+          this.persistMediaPreferences();
         }
         this.inputDeviceError = null;
       } catch (error) {
@@ -3078,12 +3514,18 @@ export const useCallStore = defineStore("call", {
         ];
         this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
         this.inputDeviceError = (error as Error).message;
+        this.persistMediaPreferences();
       }
     },
     async selectInputDevice(deviceId: string): Promise<void> {
       const nextDeviceId = deviceId.trim() || DEFAULT_OUTPUT_DEVICE_ID;
       this.selectedInputDeviceId = nextDeviceId;
       this.inputDeviceError = null;
+      this.persistMediaPreferences();
+
+      if (this.micTestActive) {
+        await this.startMicTest();
+      }
 
       for (const [serverId, channelId] of Object.entries(this.activeVoiceChannelByServer)) {
         if (!channelId) continue;
@@ -3096,6 +3538,10 @@ export const useCallStore = defineStore("call", {
     },
     setInputVolume(volume: number): void {
       this.inputVolume = Math.max(0, Math.min(200, Math.round(volume)));
+      if (micTestGainNode) {
+        micTestGainNode.gain.value = Math.max(0, this.inputVolume / 100);
+      }
+      this.persistMediaPreferences();
     },
     async startMicUplink(serverId: string, channelId: string): Promise<void> {
       const key = this.ensureSession(serverId, channelId);
@@ -3113,21 +3559,22 @@ export const useCallStore = defineStore("call", {
 
       try {
         const useCustomInputDevice = this.selectedInputDeviceId && this.selectedInputDeviceId !== DEFAULT_OUTPUT_DEVICE_ID;
-        const baseAudioConstraints = buildMicrophoneConstraints(this.selectedInputDeviceId, DEFAULT_OUTPUT_DEVICE_ID);
+        const selectedAudioConstraints = buildMicrophoneConstraints(this.selectedInputDeviceId, DEFAULT_OUTPUT_DEVICE_ID);
         let mediaStream: MediaStream;
         try {
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: baseAudioConstraints
+            audio: selectedAudioConstraints
           });
         } catch (firstError) {
           if (!useCustomInputDevice) {
             throw firstError;
           }
           mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: baseAudioConstraints
+            audio: buildMicrophoneConstraints(DEFAULT_OUTPUT_DEVICE_ID, DEFAULT_OUTPUT_DEVICE_ID)
           });
           this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
           this.inputDeviceError = "Selected input device was unavailable; using system default microphone.";
+          this.persistMediaPreferences();
         }
         const activeSession = this.sessionsByKey[key];
         const activeSocket = socketsByKey.get(key);
@@ -3216,6 +3663,7 @@ export const useCallStore = defineStore("call", {
         this.outputDevices = await listAudioOutputDevices();
         if (!this.outputDevices.some((device) => device.deviceId === this.selectedOutputDeviceId)) {
           this.selectedOutputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+          this.persistMediaPreferences();
         }
         this.outputDeviceError = null;
       } catch (error) {
@@ -3227,6 +3675,7 @@ export const useCallStore = defineStore("call", {
         ];
         this.selectedOutputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
         this.outputDeviceError = (error as Error).message;
+        this.persistMediaPreferences();
       }
     },
     async selectOutputDevice(deviceId: string): Promise<void> {
@@ -3238,8 +3687,12 @@ export const useCallStore = defineStore("call", {
           this.outputDeviceError = "Output device switching is not supported on this runtime.";
           return;
         }
+        if (micTestAudioElement) {
+          await applySinkToAudioElement(micTestAudioElement, nextDeviceID);
+        }
         this.selectedOutputDeviceId = nextDeviceID;
         this.outputDeviceError = null;
+        this.persistMediaPreferences();
       } catch (error) {
         this.outputDeviceError = (error as Error).message;
       }
@@ -3248,6 +3701,10 @@ export const useCallStore = defineStore("call", {
       const normalized = Math.max(0, Math.min(100, Math.round(volume)));
       this.outputVolume = normalized;
       setPlaybackVolume(normalized / 100);
+      if (micTestAudioElement) {
+        micTestAudioElement.volume = playbackMuted ? 0 : normalized / 100;
+      }
+      this.persistMediaPreferences();
     },
     async toggleVoiceChannel(params: {
       serverId: string;
@@ -3277,6 +3734,7 @@ export const useCallStore = defineStore("call", {
       setPlaybackVolume(this.outputVolume / 100);
       void this.refreshInputDevices();
       void this.refreshOutputDevices();
+      void this.refreshVideoInputDevices();
       void this.selectOutputDevice(this.selectedOutputDeviceId);
       const key = this.ensureSession(params.serverId, params.channelId);
       const audioPrefs = this.ensureAudioPrefs(params.serverId);
@@ -3845,6 +4303,7 @@ export const useCallStore = defineStore("call", {
     leaveChannel(serverId: string, channelId: string, options?: { reason?: string }): void {
       const key = sessionKey(serverId, channelId);
       this.clearReconnectState(serverId, channelId);
+      this.stopMediaTests();
       this.stopMicUplink(serverId, channelId);
       this.stopAllLocalVideo(serverId, channelId);
       this.closePeerConnectionsForSession(serverId, channelId);
@@ -3885,6 +4344,7 @@ export const useCallStore = defineStore("call", {
       }
     },
     clearServerState(serverId: string): void {
+      this.stopMediaTests();
       const activeChannelId = this.activeVoiceChannelByServer[serverId];
       if (activeChannelId) {
         this.leaveChannel(serverId, activeChannelId);
@@ -3917,6 +4377,7 @@ export const useCallStore = defineStore("call", {
       clearPlaybackState();
     },
     disconnectAll(): void {
+      this.stopMediaTests();
       Object.entries(this.activeVoiceChannelByServer).forEach(([serverId, channelId]) => {
         if (channelId) {
           this.leaveChannel(serverId, channelId);

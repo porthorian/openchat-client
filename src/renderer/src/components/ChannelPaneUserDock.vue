@@ -9,7 +9,7 @@ import {
   mdiMicrophone,
   mdiMicrophoneOff
 } from "@mdi/js";
-import type { AvatarMode, UIDMode } from "@renderer/types/models";
+import type { AvatarMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import AppIcon from "./AppIcon.vue";
 import ChannelVoiceConnectedCard from "./ChannelVoiceConnectedCard.vue";
@@ -51,13 +51,9 @@ const props = defineProps<{
   profileAvatarMode: AvatarMode;
   profileAvatarPresetId: string;
   profileAvatarImageDataUrl: string | null;
-  uidMode: UIDMode;
-  disclosureMessage: string;
-  startupError?: string | null;
 }>();
 
 const emit = defineEmits<{
-  toggleUidMode: [];
   toggleMic: [];
   toggleDeafen: [];
   toggleCamera: [];
@@ -69,6 +65,8 @@ const emit = defineEmits<{
   openOutputOptions: [];
   selectOutputDevice: [deviceId: string];
   updateOutputVolume: [value: number];
+  openUserSettings: [];
+  openVoiceSettings: [];
 }>();
 
 const profileCardOpen = ref(false);
@@ -269,6 +267,20 @@ function chooseInputDevice(deviceId: string): void {
   inputDeviceListOpen.value = false;
 }
 
+function openVoiceSettings(): void {
+  closeInputSettingsMenu();
+  closeOutputSettingsMenu();
+  closeProfileCard();
+  emit("openVoiceSettings");
+}
+
+function openUserSettings(): void {
+  closeInputSettingsMenu();
+  closeOutputSettingsMenu();
+  closeProfileCard();
+  emit("openUserSettings");
+}
+
 onMounted(() => {
   window.addEventListener("pointerdown", onWindowPointerDown);
   window.addEventListener("keydown", onWindowKeydown);
@@ -408,7 +420,7 @@ onBeforeUnmount(() => {
 
               <div class="input-settings-divider" />
 
-              <button type="button" class="input-settings-row is-settings">
+              <button type="button" class="input-settings-row is-settings" @click="openVoiceSettings">
                 <span class="input-settings-copy">
                   <strong>Voice Settings</strong>
                 </span>
@@ -511,7 +523,7 @@ onBeforeUnmount(() => {
 
               <div class="output-settings-divider" />
 
-              <button type="button" class="output-settings-row is-settings">
+              <button type="button" class="output-settings-row is-settings" @click="openVoiceSettings">
                 <span class="output-settings-copy">
                   <strong>Voice Settings</strong>
                 </span>
@@ -522,7 +534,7 @@ onBeforeUnmount(() => {
             </section>
           </div>
 
-          <button type="button" class="user-settings-btn">
+          <button type="button" class="user-settings-btn" @click="openUserSettings">
             <AppIcon :path="mdiCogOutline" :size="16" />
           </button>
         </div>
@@ -537,12 +549,8 @@ onBeforeUnmount(() => {
       :profile-avatar-mode="profileAvatarMode"
       :profile-avatar-preset-id="profileAvatarPresetId"
       :profile-avatar-image-data-url="profileAvatarImageDataUrl"
-      :uid-mode="uidMode"
-      :disclosure-message="disclosureMessage"
-      :startup-error="startupError"
       :presence-status="presenceStatus"
       @update:presence-status="setPresenceStatus"
-      @toggle-uid-mode="emit('toggleUidMode')"
     />
   </footer>
 </template>

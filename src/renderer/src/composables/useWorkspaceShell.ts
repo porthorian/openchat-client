@@ -98,6 +98,13 @@ type ServerSettingsFormState = {
   bannerPreset: string;
 };
 
+type UserSettingsTabID = "my_account" | "voice_video";
+
+type UserSettingsFormState = {
+  isOpen: boolean;
+  initialTab: UserSettingsTabID;
+};
+
 type CallStageParticipantCard = {
   participantId: string;
   name: string;
@@ -171,6 +178,10 @@ export function useWorkspaceShell() {
     displayName: "",
     description: "",
     bannerPreset: "ocean"
+  });
+  const userSettingsForm = ref<UserSettingsFormState>({
+    isOpen: false,
+    initialTab: "my_account"
   });
 
   const moodCatalog: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -669,8 +680,10 @@ export function useWorkspaceShell() {
     identity.initializeIdentity();
     chat.hydrateNotificationPreferences();
     registry.hydrateFromStorage();
+    call.hydrateMediaPreferences();
     void call.refreshInputDevices();
     void call.refreshOutputDevices();
+    void call.refreshVideoInputDevices();
 
     try {
       await clientUpdate.initialize();
@@ -714,6 +727,7 @@ export function useWorkspaceShell() {
     closeCreateCategoryModal();
     closeRenameCategoryModal();
     closeServerSettingsModal();
+    closeUserSettingsModal();
     closeScreenSharePicker();
     call.disconnectAll();
     chat.disconnectAllRealtime();
@@ -757,6 +771,7 @@ export function useWorkspaceShell() {
     closeCreateCategoryModal();
     closeRenameCategoryModal();
     closeServerSettingsModal();
+    closeUserSettingsModal();
     closeScreenSharePicker();
     const currentActiveVoice = activeVoiceChannelId.value;
     if (currentActiveVoice) {
@@ -1092,6 +1107,35 @@ export function useWorkspaceShell() {
     }
   }
 
+  function openUserSettings(initialTab: UserSettingsTabID): void {
+    userSettingsForm.value = {
+      isOpen: true,
+      initialTab
+    };
+    if (initialTab === "voice_video") {
+      void call.refreshInputDevices();
+      void call.refreshOutputDevices();
+      void call.refreshVideoInputDevices();
+    }
+  }
+
+  function openUserSettingsFromDock(): void {
+    openUserSettings("my_account");
+  }
+
+  function openVoiceSettingsFromDock(): void {
+    openUserSettings("voice_video");
+  }
+
+  function closeUserSettingsModal(): void {
+    if (!userSettingsForm.value.isOpen) return;
+    call.stopMediaTests();
+    userSettingsForm.value = {
+      isOpen: false,
+      initialTab: "my_account"
+    };
+  }
+
   function cycleUIDMode(): void {
     identity.setUIDMode(identity.uidMode === "server_scoped" ? "global" : "server_scoped");
     registry.servers.forEach((server) => {
@@ -1199,6 +1243,10 @@ export function useWorkspaceShell() {
     void call.refreshInputDevices();
   }
 
+  function openVideoInputOptions(): void {
+    void call.refreshVideoInputDevices();
+  }
+
   function selectInputDevice(deviceId: string): void {
     void call.selectInputDevice(deviceId);
   }
@@ -1213,6 +1261,26 @@ export function useWorkspaceShell() {
 
   function updateOutputVolume(volume: number): void {
     call.setOutputVolume(volume);
+  }
+
+  function selectCameraDevice(deviceId: string): void {
+    void call.selectCameraDevice(deviceId);
+  }
+
+  function startMicTest(): void {
+    void call.startMicTest();
+  }
+
+  function stopMicTest(): void {
+    call.stopMicTest();
+  }
+
+  function startCameraTest(): void {
+    void call.startCameraTest();
+  }
+
+  function stopCameraTest(): void {
+    call.stopCameraTest();
   }
 
   async function sendMessage(payload: { body: string; attachments: File[]; replyToMessageId?: string | null }): Promise<void> {
@@ -1880,10 +1948,7 @@ export function useWorkspaceShell() {
     profileDisplayName: identity.profileDisplayName,
     profileAvatarMode: identity.avatarMode,
     profileAvatarPresetId: identity.avatarPresetId,
-    profileAvatarImageDataUrl: identity.avatarImageDataUrl,
-    uidMode: identity.uidMode,
-    disclosureMessage: identity.disclosureMessage,
-    startupError: startupError.value
+    profileAvatarImageDataUrl: identity.avatarImageDataUrl
   }));
 
   const callStageProps = computed(() => ({
@@ -2005,6 +2070,34 @@ export function useWorkspaceShell() {
     bannerPreset: serverSettingsForm.value.bannerPreset
   }));
 
+  const userSettingsModalProps = computed(() => ({
+    isOpen: userSettingsForm.value.isOpen,
+    initialTab: userSettingsForm.value.initialTab,
+    displayName: identity.profileDisplayName,
+    userUID: activeSession.value?.userUID ?? "uid_unbound",
+    uidMode: identity.uidMode,
+    disclosureMessage: identity.disclosureMessage,
+    startupError: startupError.value,
+    inputDevices: call.inputDevices,
+    selectedInputDeviceId: call.selectedInputDeviceId,
+    inputVolume: call.inputVolume,
+    inputDeviceError: call.inputDeviceError,
+    outputDevices: call.outputDevices,
+    selectedOutputDeviceId: call.selectedOutputDeviceId,
+    outputVolume: call.outputVolume,
+    outputSelectionSupported: call.outputSelectionSupported,
+    outputDeviceError: call.outputDeviceError,
+    videoInputDevices: call.videoInputDevices,
+    selectedCameraDeviceId: call.selectedCameraDeviceId,
+    cameraDeviceError: call.cameraDeviceError,
+    micTestActive: call.micTestActive,
+    micTestLevel: call.micTestLevel,
+    micTestError: call.micTestError,
+    cameraTestActive: call.cameraTestActive,
+    cameraTestStream: call.cameraTestStream,
+    cameraTestError: call.cameraTestError
+  }));
+
   const serverRailListeners = {
     selectServer,
     addServer: openAddServerDialog,
@@ -2027,7 +2120,6 @@ export function useWorkspaceShell() {
   };
 
   const userDockListeners = {
-    toggleUidMode: cycleUIDMode,
     toggleMic,
     toggleDeafen,
     toggleCamera,
@@ -2038,7 +2130,9 @@ export function useWorkspaceShell() {
     updateInputVolume,
     openOutputOptions,
     selectOutputDevice,
-    updateOutputVolume
+    updateOutputVolume,
+    openUserSettings: openUserSettingsFromDock,
+    openVoiceSettings: openVoiceSettingsFromDock
   };
 
   const workspaceToolbarListeners = {
@@ -2089,6 +2183,23 @@ export function useWorkspaceShell() {
     submit: submitServerSettings
   };
 
+  const userSettingsModalListeners = {
+    close: closeUserSettingsModal,
+    refreshInputDevices: openInputOptions,
+    refreshOutputDevices: openOutputOptions,
+    refreshVideoInputDevices: openVideoInputOptions,
+    selectInputDevice,
+    selectOutputDevice,
+    selectCameraDevice,
+    updateInputVolume,
+    updateOutputVolume,
+    startMicTest,
+    stopMicTest,
+    startCameraTest,
+    stopCameraTest,
+    toggleUidMode: cycleUIDMode
+  };
+
   const screenSharePickerListeners = {
     close: closeScreenSharePicker,
     selectSource: selectScreenShareSource
@@ -2135,6 +2246,7 @@ export function useWorkspaceShell() {
     createCategoryModalProps,
     renameCategoryModalProps,
     serverSettingsModalProps,
+    userSettingsModalProps,
     taskbarListeners,
     versionInfoModalListeners,
     updateProgressModalListeners,
@@ -2150,6 +2262,7 @@ export function useWorkspaceShell() {
     createCategoryModalListeners,
     renameCategoryModalListeners,
     serverSettingsModalListeners,
+    userSettingsModalListeners,
     screenSharePickerListeners
   };
 }

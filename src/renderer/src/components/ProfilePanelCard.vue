@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { mdiChevronRight, mdiPencilOutline, mdiPlusCircleOutline } from "@mdi/js";
-import type { AvatarMode, UIDMode } from "@renderer/types/models";
+import type { AvatarMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import AppIcon from "./AppIcon.vue";
 
@@ -20,15 +20,11 @@ const props = defineProps<{
   profileAvatarMode: AvatarMode;
   profileAvatarPresetId: string;
   profileAvatarImageDataUrl: string | null;
-  uidMode: UIDMode;
-  disclosureMessage: string;
-  startupError?: string | null;
   presenceStatus: PresenceStatus;
 }>();
 
 const emit = defineEmits<{
   "update:presenceStatus": [status: PresenceStatus];
-  toggleUidMode: [];
 }>();
 
 const presenceOptions: PresenceOption[] = [
@@ -77,9 +73,7 @@ const profileAvatarStyle = computed(() => {
   };
 });
 const profileHandle = computed(() => `@${props.currentUid.trim() || "uid_unbound"}`);
-const profileNote = computed(() => {
-  return props.uidMode === "server_scoped" ? "Server-scoped identity active" : "Global identity active";
-});
+const profileNote = computed(() => "Profile");
 const profileBio = computed(() => {
   return `Active on ${props.serverName}.`;
 });
@@ -242,19 +236,6 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="profile-divider" />
-
-      <section class="profile-disclosure-panel" aria-label="Identity disclosure">
-        <p class="profile-disclosure-title">Identity Disclosure</p>
-        <p v-if="startupError" class="profile-disclosure-error">{{ startupError }}</p>
-        <p class="profile-disclosure-copy">{{ disclosureMessage }}</p>
-        <p class="profile-disclosure-uid">
-          current UID:
-          <code>{{ currentUid }}</code>
-        </p>
-        <button type="button" class="profile-disclosure-btn" @click="emit('toggleUidMode')">
-          Switch UID mode ({{ uidMode }})
-        </button>
-      </section>
     </div>
   </section>
 </template>

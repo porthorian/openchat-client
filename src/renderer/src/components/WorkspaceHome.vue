@@ -14,6 +14,7 @@ import RenameCategoryModal from "./RenameCategoryModal.vue";
 import ScreenShareSourcePickerModal from "./ScreenShareSourcePickerModal.vue";
 import ServerSettingsModal from "./ServerSettingsModal.vue";
 import ServerRail from "./ServerRail.vue";
+import UserSettingsModal from "./UserSettingsModal.vue";
 import WorkspaceToolbar from "./WorkspaceToolbar.vue";
 import { useWorkspaceShell } from "@renderer/composables/useWorkspaceShell";
 
@@ -50,6 +51,7 @@ const shell = useWorkspaceShell();
       <CreateCategoryModal v-bind="shell.createCategoryModalProps.value" v-on="shell.createCategoryModalListeners" />
       <RenameCategoryModal v-bind="shell.renameCategoryModalProps.value" v-on="shell.renameCategoryModalListeners" />
       <ServerSettingsModal v-bind="shell.serverSettingsModalProps.value" v-on="shell.serverSettingsModalListeners" />
+      <UserSettingsModal v-bind="shell.userSettingsModalProps.value" v-on="shell.userSettingsModalListeners" />
     </div>
 
     <ClientUpdateProgressModal v-bind="shell.updateProgressModalProps.value" v-on="shell.updateProgressModalListeners" />
