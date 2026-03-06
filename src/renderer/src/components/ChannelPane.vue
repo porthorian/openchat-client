@@ -55,6 +55,7 @@ const emit = defineEmits<{
   selectVoiceChannel: [channelId: string];
   updateFilter: [value: string];
   markChannelsRead: [channelIds: string[]];
+  createChannel: [groupId: string | null];
 }>();
 
 type ChannelPaneMenuState = {
@@ -174,11 +175,17 @@ function toggleGuildHeaderMenu(event: MouseEvent): void {
   };
 }
 
-function runGuildHeaderAction(): void {
+function runGuildHeaderAction(_event?: Event, action: "create-channel" | "noop" = "noop"): void {
+  if (action === "create-channel") {
+    emit("createChannel", null);
+  }
   closeGuildHeaderMenu();
 }
 
-function runChannelPaneAction(): void {
+function runChannelPaneAction(_event?: Event, action: "create-channel" | "noop" = "noop"): void {
+  if (action === "create-channel") {
+    emit("createChannel", channelPaneMenu.value.categoryId ?? null);
+  }
   closeChannelPaneMenu();
 }
 
@@ -320,7 +327,12 @@ onBeforeUnmount(() => {
           <AppIcon :path="mdiCogOutline" :size="17" />
         </span>
       </button>
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+      <button
+        type="button"
+        class="guild-menu-item"
+        role="menuitem"
+        @click="($event) => runGuildHeaderAction($event, 'create-channel')"
+      >
         Create Channel
         <span class="guild-menu-icon">
           <AppIcon :path="mdiPlus" :size="17" />
@@ -497,7 +509,12 @@ onBeforeUnmount(() => {
 
         <div class="channel-pane-menu-divider" />
 
-        <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
+        <button
+          type="button"
+          class="channel-pane-menu-item"
+          role="menuitem"
+          @click="($event) => runChannelPaneAction($event, 'create-channel')"
+        >
           Create Channel
         </button>
         <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">

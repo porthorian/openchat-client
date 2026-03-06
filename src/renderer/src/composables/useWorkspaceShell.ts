@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { DesktopCaptureSource, RuntimeInfo } from "@shared/ipc";
-import type { Channel, ChannelGroup, MentionCandidate } from "@renderer/types/chat";
+import type { Channel, ChannelGroup, ChannelType, MentionCandidate } from "@renderer/types/chat";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
 import type { SyncedUserProfile } from "@renderer/services/chatClient";
@@ -69,6 +69,13 @@ type ScreenSharePickerState = {
   sources: DesktopCaptureSource[];
 };
 
+type CreateChannelFormState = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  initialGroupId: string | null;
+};
+
 type CallStageParticipantCard = {
   participantId: string;
   name: string;
@@ -112,6 +119,12 @@ export function useWorkspaceShell() {
     isLoading: false,
     errorMessage: null,
     sources: []
+  });
+  const createChannelForm = ref<CreateChannelFormState>({
+    isOpen: false,
+    isSubmitting: false,
+    errorMessage: null,
+    initialGroupId: null
   });
 
   const moodCatalog: VoiceMood[] = ["chilling", "gaming", "studying", "brb", "watching stuff"];
@@ -657,6 +670,7 @@ export function useWorkspaceShell() {
   });
 
   onBeforeUnmount(() => {
+    closeCreateChannelModal();
     closeScreenSharePicker();
     call.disconnectAll();
     chat.disconnectAllRealtime();
@@ -696,6 +710,7 @@ export function useWorkspaceShell() {
     if (serverId === appUI.activeServerId) {
       return;
     }
+    closeCreateChannelModal();
     closeScreenSharePicker();
     const currentActiveVoice = activeVoiceChannelId.value;
     if (currentActiveVoice) {
@@ -781,6 +796,58 @@ export function useWorkspaceShell() {
 
   function setChannelFilter(value: string): void {
     appUI.setChannelFilter(value);
+  }
+
+  function openCreateChannelModal(groupId: string | null): void {
+    createChannelForm.value = {
+      isOpen: true,
+      isSubmitting: false,
+      errorMessage: null,
+      initialGroupId: groupId?.trim() || null
+    };
+  }
+
+  function closeCreateChannelModal(): void {
+    createChannelForm.value = {
+      isOpen: false,
+      isSubmitting: false,
+      errorMessage: null,
+      initialGroupId: null
+    };
+  }
+
+  async function submitCreateChannel(payload: { name: string; type: ChannelType; groupId: string }): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    if (!server || !currentUID) return;
+
+    createChannelForm.value.isSubmitting = true;
+    createChannelForm.value.errorMessage = null;
+    try {
+      const created = await chat.createChannel({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        groupId: payload.groupId,
+        name: payload.name,
+        type: payload.type,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+      closeCreateChannelModal();
+      if (created.channel.type === "text") {
+        await selectChannel(created.channel.id);
+        return;
+      }
+
+      if (appUI.activeChannelId && appUI.activeChannelId !== created.channel.id) {
+        chat.unsubscribeFromChannel(appUI.activeServerId, appUI.activeChannelId);
+      }
+      appUI.setActiveChannel(created.channel.id);
+    } catch (error) {
+      createChannelForm.value.errorMessage = (error as Error).message;
+    } finally {
+      createChannelForm.value.isSubmitting = false;
+    }
   }
 
   function cycleUIDMode(): void {
@@ -1599,6 +1666,15 @@ export function useWorkspaceShell() {
     probeSummary: addServerForm.value.probeSummary
   }));
 
+  const createChannelModalProps = computed(() => ({
+    isOpen: createChannelForm.value.isOpen,
+    isSubmitting: createChannelForm.value.isSubmitting,
+    errorMessage: createChannelForm.value.errorMessage,
+    initialGroupId: createChannelForm.value.initialGroupId,
+    serverName: activeServer.value?.displayName ?? "",
+    groups: rawChannelGroups.value
+  }));
+
   const serverRailListeners = {
     selectServer,
     addServer: openAddServerDialog,
@@ -1611,6 +1687,7 @@ export function useWorkspaceShell() {
   const channelPaneListeners = {
     selectChannel,
     selectVoiceChannel,
+    createChannel: openCreateChannelModal,
     updateFilter: setChannelFilter,
     markChannelsRead
   };
@@ -1656,6 +1733,11 @@ export function useWorkspaceShell() {
     "update:displayName": setAddServerDisplayName
   };
 
+  const createChannelModalListeners = {
+    close: closeCreateChannelModal,
+    submit: submitCreateChannel
+  };
+
   const screenSharePickerListeners = {
     close: closeScreenSharePicker,
     selectSource: selectScreenShareSource
@@ -1698,6 +1780,7 @@ export function useWorkspaceShell() {
     userDockProps,
     membersPaneProps,
     addServerDialogProps,
+    createChannelModalProps,
     taskbarListeners,
     versionInfoModalListeners,
     updateProgressModalListeners,
@@ -1709,6 +1792,7 @@ export function useWorkspaceShell() {
     chatPaneListeners,
     membersPaneListeners,
     addServerDialogListeners,
+    createChannelModalListeners,
     screenSharePickerListeners
   };
 }

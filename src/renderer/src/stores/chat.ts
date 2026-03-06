@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import type { OpenGraphMetadata } from "@shared/ipc";
 import {
+  createChannel as createChannelRequest,
   createMessage,
   fetchChannelReadAck,
   deleteMessage as deleteMessageRequest,
@@ -13,6 +14,7 @@ import {
   ProfileRequestError,
   resolveMentionCandidates,
   sendRealtime,
+  type CreatedChannelResponse,
   type SyncedUserProfile,
   updateChannelReadAck,
   updateMyProfile,
@@ -35,6 +37,7 @@ import type {
   MessageReplyReference
 } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
+import { applyChannelCreatedToGroups } from "./chat/channelGroups.ts";
 
 type ServerRealtimeState = {
   connected: boolean;
@@ -602,6 +605,33 @@ function normalizePresenceMember(input: unknown): ChannelPresenceMember | null {
   };
 }
 
+function normalizeChannelCreatedPayload(input: unknown): CreatedChannelResponse | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const serverId = String(payload.server_id ?? "").trim();
+  const groupId = String(payload.group_id ?? "").trim();
+  const channelPayload = typeof payload.channel === "object" && payload.channel !== null ? (payload.channel as Record<string, unknown>) : null;
+  if (!serverId || !groupId || !channelPayload) return null;
+
+  const channelID = String(channelPayload.id ?? "").trim();
+  const channelName = String(channelPayload.name ?? "").trim();
+  const channelTypeRaw = String(channelPayload.type ?? "").trim().toLowerCase();
+  if (!channelID || !channelName) return null;
+  if (channelTypeRaw !== "text" && channelTypeRaw !== "voice") return null;
+
+  return {
+    serverId,
+    groupId,
+    createdByUID: String(payload.created_by_uid ?? "").trim(),
+    createdAt: String(payload.created_at ?? new Date().toISOString()),
+    channel: {
+      id: channelID,
+      name: channelName,
+      type: channelTypeRaw
+    }
+  };
+}
+
 function normalizeRealtimeProfile(input: unknown): SyncedUserProfile | null {
   if (typeof input !== "object" || input === null) return null;
   const payload = input as Record<string, unknown>;
@@ -972,6 +1002,45 @@ export const useChatStore = defineStore("chat", {
         this.loadingByServer[params.serverId] = false;
       }
     },
+    applyCreatedChannel(serverId: string, created: CreatedChannelResponse): boolean {
+      const groups = this.groupsByServer[serverId] ?? [];
+      if (groups.length === 0) return false;
+      const result = applyChannelCreatedToGroups(groups, {
+        groupId: created.groupId,
+        channel: created.channel
+      });
+      if (!result.inserted) {
+        return false;
+      }
+      this.groupsByServer[serverId] = result.groups;
+      if (created.channel.type === "text") {
+        this.unreadByChannel[created.channel.id] = created.channel.unreadCount ?? this.unreadByChannel[created.channel.id] ?? 0;
+        this.mentionUnreadByChannel[created.channel.id] =
+          created.channel.mentionCount ?? this.mentionUnreadByChannel[created.channel.id] ?? 0;
+      }
+      return true;
+    },
+    async createChannel(params: {
+      serverId: string;
+      backendUrl: string;
+      groupId: string;
+      name: string;
+      type: "text" | "voice";
+      userUID: string;
+      deviceID: string;
+    }): Promise<CreatedChannelResponse> {
+      const created = await createChannelRequest({
+        backendUrl: params.backendUrl,
+        serverId: params.serverId,
+        groupId: params.groupId,
+        name: params.name,
+        type: params.type,
+        userUID: params.userUID,
+        deviceID: params.deviceID
+      });
+      this.applyCreatedChannel(params.serverId, created);
+      return created;
+    },
     async loadMessages(params: {
       serverId: string;
       backendUrl: string;
@@ -1279,7 +1348,7 @@ export const useChatStore = defineStore("chat", {
       clearReconnectTimer(params.serverId);
       this.currentUserUIDByServer[params.serverId] = params.userUID;
       realtimeConnectParamsByServer.set(params.serverId, params);
-      const url = getRealtimeURL(params.backendUrl, params.userUID, params.deviceID);
+      const url = getRealtimeURL(params.backendUrl, params.serverId, params.userUID, params.deviceID);
       const socket = new WebSocket(url);
       socketsByServer.set(params.serverId, socket);
       intentionallyClosedSockets.delete(params.serverId);
@@ -1378,6 +1447,13 @@ export const useChatStore = defineStore("chat", {
         if (!profile) return;
         this.upsertProfiles(serverId, [profile]);
         this.setProfileSyncAvailability(serverId, true);
+        return;
+      }
+      if (envelope.type === "chat.channel.created") {
+        const created = normalizeChannelCreatedPayload(envelope.payload);
+        if (!created) return;
+        if (created.serverId !== serverId) return;
+        this.applyCreatedChannel(serverId, created);
         return;
       }
       if (envelope.type === "chat.message.created") {

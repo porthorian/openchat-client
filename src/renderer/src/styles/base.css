@@ -4410,8 +4410,57 @@ button {
   outline: none;
 }
 
+.server-modal-field select {
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #353b4e;
+  background: #121521;
+  color: #e8edf9;
+  padding: 0 10px;
+  outline: none;
+}
+
 .server-modal-field input:focus {
   border-color: #4c5c84;
+}
+
+.server-modal-field select:focus {
+  border-color: #4c5c84;
+}
+
+.create-channel-modal {
+  width: min(480px, 100%);
+}
+
+.create-channel-server {
+  margin: 0;
+  color: #a8b4d0;
+  font-size: 0.86rem;
+}
+
+.create-channel-type-row {
+  display: flex;
+  gap: 8px;
+}
+
+.create-channel-type-btn {
+  flex: 1;
+  min-height: 36px;
+  border-radius: 8px;
+  border: 1px solid #454d63;
+  background: #222a3b;
+  color: #e4ebff;
+  font-weight: 600;
+}
+
+.create-channel-type-btn.is-active {
+  border-color: #6882c0;
+  background: #2f3c5b;
+}
+
+.create-channel-type-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .server-modal-actions {

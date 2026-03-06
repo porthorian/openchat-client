@@ -7,6 +7,7 @@ import ChannelPaneUserDock from "./ChannelPaneUserDock.vue";
 import ChatPane from "./ChatPane.vue";
 import ClientUpdateProgressModal from "./ClientUpdateProgressModal.vue";
 import ClientVersionInfoModal from "./ClientVersionInfoModal.vue";
+import CreateChannelModal from "./CreateChannelModal.vue";
 import MembersPane from "./MembersPane.vue";
 import ScreenShareSourcePickerModal from "./ScreenShareSourcePickerModal.vue";
 import ServerRail from "./ServerRail.vue";
@@ -42,6 +43,7 @@ const shell = useWorkspaceShell();
       </section>
 
       <AddServerDialog v-bind="shell.addServerDialogProps.value" v-on="shell.addServerDialogListeners" />
+      <CreateChannelModal v-bind="shell.createChannelModalProps.value" v-on="shell.createChannelModalListeners" />
     </div>
 
     <ClientUpdateProgressModal v-bind="shell.updateProgressModalProps.value" v-on="shell.updateProgressModalListeners" />

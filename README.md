@@ -33,6 +33,7 @@ Details: `docs/release/milestones.md`
 | Server discovery/join + trust probe | Implemented |
 | Multi-server switching/isolation | Implemented |
 | Text channels + message timeline/composer | Implemented |
+| Text/voice channel creation (owner-gated) | Implemented baseline |
 | Realtime messaging + typing + presence | Implemented |
 | Mentions + read-ack badge clearing | Implemented baseline (policy hardening in progress) |
 | Voice channel join + audio relay controls | Implemented baseline (hardening in progress) |

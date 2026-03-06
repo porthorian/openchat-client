@@ -1,6 +1,8 @@
 import type {
+  Channel,
   ChannelReadAck,
   ChannelGroup,
+  ChannelType,
   ChatMessage,
   LinkPreview,
   MentionCandidate,
@@ -43,6 +45,14 @@ export type UploadedAvatarAsset = {
   height: number;
   contentType: string;
   bytes: number;
+};
+
+export type CreatedChannelResponse = {
+  serverId: string;
+  groupId: string;
+  channel: Channel;
+  createdByUID: string;
+  createdAt: string;
 };
 
 export class ProfileRequestError extends Error {
@@ -423,6 +433,23 @@ function normalizeMessagePayload(input: unknown): ChatMessage | null {
   };
 }
 
+function normalizeChannelPayload(input: unknown): Channel | null {
+  if (typeof input !== "object" || input === null) return null;
+  const payload = input as Record<string, unknown>;
+  const id = String(payload.id ?? "").trim();
+  const name = String(payload.name ?? "").trim();
+  const type = String(payload.type ?? "").trim().toLowerCase();
+  if (!id || !name) return null;
+  if (type !== "text" && type !== "voice") return null;
+  return {
+    id,
+    name,
+    type: type as ChannelType,
+    unreadCount: Number.isFinite(Number(payload.unread_count)) ? Number(payload.unread_count) : undefined,
+    mentionCount: Number.isFinite(Number(payload.mention_count)) ? Number(payload.mention_count) : undefined
+  };
+}
+
 function hasLimit(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -463,6 +490,47 @@ export async function fetchMembers(backendUrl: string, serverId: string): Promis
   }
   const payload = (await response.json()) as { members?: MemberItem[] };
   return payload.members ?? [];
+}
+
+export async function createChannel(params: {
+  backendUrl: string;
+  serverId: string;
+  groupId: string;
+  name: string;
+  type: ChannelType;
+  userUID: string;
+  deviceID: string;
+}): Promise<CreatedChannelResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/channels`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      ...authHeaders(params.userUID, params.deviceID),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: params.name,
+      type: params.type,
+      group_id: params.groupId
+    })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to create channel (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const channel = normalizeChannelPayload(payload.channel);
+  if (!channel) {
+    throw new Error("Failed to create channel: server returned an invalid channel payload.");
+  }
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    groupId: String(payload.group_id ?? params.groupId),
+    channel,
+    createdByUID: String(payload.created_by_uid ?? params.userUID),
+    createdAt: String(payload.created_at ?? new Date().toISOString())
+  };
 }
 
 export async function fetchMessages(backendUrl: string, channelId: string, limit = 100): Promise<ChatMessage[]> {
@@ -780,11 +848,12 @@ export async function fetchProfilesBatch(params: {
   return (payload.profiles ?? []).map((profile) => normalizeProfile(profile));
 }
 
-export function getRealtimeURL(backendUrl: string, userUID: string, deviceID: string): string {
+export function getRealtimeURL(backendUrl: string, serverId: string, userUID: string, deviceID: string): string {
   const base = new URL(backendUrl);
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   base.pathname = "/v1/realtime";
   base.search = "";
+  base.searchParams.set("server_id", serverId);
   base.searchParams.set("user_uid", userUID);
   base.searchParams.set("device_id", deviceID);
   return base.toString();
