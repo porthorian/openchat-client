@@ -23,6 +23,10 @@ export type CategoryRenamePatch = {
   label: string;
 };
 
+export type CategoryDeletePatch = {
+  groupId: string;
+};
+
 export type ChannelLayoutUpdatedPatch = {
   groups: ChannelGroup[];
 };
@@ -159,6 +163,26 @@ export function applyCategoryRenamedToGroups(
   return {
     groups: nextGroups,
     updated: true
+  };
+}
+
+export function applyCategoryDeletedToGroups(
+  groups: ChannelGroup[],
+  patch: CategoryDeletePatch
+): { groups: ChannelGroup[]; deleted: boolean } {
+  const groupID = patch.groupId.trim();
+  if (!groupID) {
+    return { groups, deleted: false };
+  }
+
+  const target = groups.find((group) => group.id === groupID) ?? null;
+  if (!target || target.channels.length > 0) {
+    return { groups, deleted: false };
+  }
+
+  return {
+    groups: groups.filter((group) => group.id !== groupID),
+    deleted: true
   };
 }
 

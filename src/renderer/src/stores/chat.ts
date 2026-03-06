@@ -4,6 +4,7 @@ import {
   createCategory as createCategoryRequest,
   createChannel as createChannelRequest,
   createMessage,
+  deleteCategory as deleteCategoryRequest,
   fetchChannelReadAck,
   fetchServerSettings as fetchServerSettingsRequest,
   deleteMessage as deleteMessageRequest,
@@ -50,6 +51,7 @@ import { extractMessageURLs } from "@renderer/utils/linkify";
 import { useServerRegistryStore } from "./serverRegistry";
 import {
   applyCategoryCreatedToGroups,
+  applyCategoryDeletedToGroups,
   applyCategoryRenamedToGroups,
   applyCategoryUpdatedToGroups,
   applyChannelCreatedToGroups,
@@ -1252,6 +1254,42 @@ export const useChatStore = defineStore("chat", {
           deviceID: params.deviceID
         });
         this.applyUpdatedCategory(params.serverId, updated);
+        return updated;
+      } catch (error) {
+        this.groupsByServer[params.serverId] = previousGroups;
+        try {
+          const refreshed = await fetchChannelGroups(params.backendUrl, params.serverId);
+          this.groupsByServer[params.serverId] = refreshed;
+        } catch (_refreshError) {
+          // Keep optimistic rollback when refetch fails.
+        }
+        throw error;
+      }
+    },
+    async deleteCategory(params: {
+      serverId: string;
+      backendUrl: string;
+      groupId: string;
+      userUID: string;
+      deviceID: string;
+    }): Promise<UpdatedChannelLayoutResponse> {
+      const previousGroups = cloneChannelGroups(this.groupsByServer[params.serverId] ?? []);
+      const optimistic = applyCategoryDeletedToGroups(previousGroups, {
+        groupId: params.groupId
+      });
+      if (optimistic.deleted) {
+        this.groupsByServer[params.serverId] = optimistic.groups;
+      }
+
+      try {
+        const updated = await deleteCategoryRequest({
+          backendUrl: params.backendUrl,
+          serverId: params.serverId,
+          groupId: params.groupId,
+          userUID: params.userUID,
+          deviceID: params.deviceID
+        });
+        this.applyUpdatedChannelLayout(params.serverId, updated);
         return updated;
       } catch (error) {
         this.groupsByServer[params.serverId] = previousGroups;

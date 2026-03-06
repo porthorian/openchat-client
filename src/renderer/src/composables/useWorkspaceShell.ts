@@ -88,6 +88,14 @@ type RenameCategoryFormState = {
   initialName: string;
 };
 
+type DeleteCategoryFormState = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  errorMessage: string | null;
+  groupId: string | null;
+  categoryName: string;
+};
+
 type ServerSettingsFormState = {
   isOpen: boolean;
   isLoading: boolean;
@@ -169,6 +177,13 @@ export function useWorkspaceShell() {
     errorMessage: null,
     groupId: null,
     initialName: ""
+  });
+  const deleteCategoryForm = ref<DeleteCategoryFormState>({
+    isOpen: false,
+    isSubmitting: false,
+    errorMessage: null,
+    groupId: null,
+    categoryName: ""
   });
   const serverSettingsForm = ref<ServerSettingsFormState>({
     isOpen: false,
@@ -1001,6 +1016,56 @@ export function useWorkspaceShell() {
       renameCategoryForm.value.errorMessage = (error as Error).message;
     } finally {
       renameCategoryForm.value.isSubmitting = false;
+    }
+  }
+
+  function openDeleteCategoryModal(groupId: string): void {
+    const normalizedGroupID = groupId.trim();
+    if (!normalizedGroupID) return;
+    const group = rawChannelGroups.value.find((item) => item.id === normalizedGroupID);
+    if (!group || group.channels.length > 0) return;
+
+    deleteCategoryForm.value = {
+      isOpen: true,
+      isSubmitting: false,
+      errorMessage: null,
+      groupId: normalizedGroupID,
+      categoryName: group.label
+    };
+  }
+
+  function closeDeleteCategoryModal(force = false): void {
+    if (deleteCategoryForm.value.isSubmitting && !force) return;
+    deleteCategoryForm.value = {
+      isOpen: false,
+      isSubmitting: false,
+      errorMessage: null,
+      groupId: null,
+      categoryName: ""
+    };
+  }
+
+  async function submitDeleteCategory(): Promise<void> {
+    const server = activeServer.value;
+    const currentUID = activeSession.value?.userUID;
+    const normalizedGroupID = deleteCategoryForm.value.groupId?.trim() ?? "";
+    if (!server || !currentUID || !normalizedGroupID) return;
+
+    deleteCategoryForm.value.isSubmitting = true;
+    deleteCategoryForm.value.errorMessage = null;
+    try {
+      await chat.deleteCategory({
+        serverId: appUI.activeServerId,
+        backendUrl: server.backendUrl,
+        groupId: normalizedGroupID,
+        userUID: currentUID,
+        deviceID: localDeviceID.value
+      });
+      closeDeleteCategoryModal(true);
+    } catch (error) {
+      deleteCategoryForm.value.errorMessage = (error as Error).message;
+    } finally {
+      deleteCategoryForm.value.isSubmitting = false;
     }
   }
 
@@ -2059,6 +2124,14 @@ export function useWorkspaceShell() {
     serverName: activeServer.value?.displayName ?? ""
   }));
 
+  const deleteCategoryModalProps = computed(() => ({
+    isOpen: deleteCategoryForm.value.isOpen,
+    isSubmitting: deleteCategoryForm.value.isSubmitting,
+    errorMessage: deleteCategoryForm.value.errorMessage,
+    categoryName: deleteCategoryForm.value.categoryName,
+    serverName: activeServer.value?.displayName ?? ""
+  }));
+
   const serverSettingsModalProps = computed(() => ({
     isOpen: serverSettingsForm.value.isOpen,
     isLoading: serverSettingsForm.value.isLoading,
@@ -2113,6 +2186,7 @@ export function useWorkspaceShell() {
     createChannel: openCreateChannelModal,
     createCategory: openCreateCategoryModal,
     renameCategory: openRenameCategoryModal,
+    deleteCategory: openDeleteCategoryModal,
     reorderChannelTree: submitChannelTreeLayout,
     openServerSettings: openServerSettingsModal,
     updateFilter: setChannelFilter,
@@ -2176,6 +2250,11 @@ export function useWorkspaceShell() {
   const renameCategoryModalListeners = {
     close: closeRenameCategoryModal,
     submit: submitRenameCategory
+  };
+
+  const deleteCategoryModalListeners = {
+    close: closeDeleteCategoryModal,
+    submit: submitDeleteCategory
   };
 
   const serverSettingsModalListeners = {
@@ -2245,6 +2324,7 @@ export function useWorkspaceShell() {
     createChannelModalProps,
     createCategoryModalProps,
     renameCategoryModalProps,
+    deleteCategoryModalProps,
     serverSettingsModalProps,
     userSettingsModalProps,
     taskbarListeners,
@@ -2261,6 +2341,7 @@ export function useWorkspaceShell() {
     createChannelModalListeners,
     createCategoryModalListeners,
     renameCategoryModalListeners,
+    deleteCategoryModalListeners,
     serverSettingsModalListeners,
     userSettingsModalListeners,
     screenSharePickerListeners

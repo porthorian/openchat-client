@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ChannelGroup } from "../../types/chat.ts";
 import {
   applyCategoryCreatedToGroups,
+  applyCategoryDeletedToGroups,
   applyCategoryUpdatedToGroups,
   applyChannelCreatedToGroups,
   applyChannelLayoutUpdatedToGroups,
@@ -118,6 +119,30 @@ test("applyCategoryUpdatedToGroups updates name and preserves channels when payl
   assert.equal(target.label, "Renamed");
   assert.equal(target.channels.length, 1);
   assert.equal(target.channels[0]?.id, "ch_general");
+});
+
+test("applyCategoryDeletedToGroups removes empty categories only", () => {
+  const withEmpty: ChannelGroup[] = [
+    ...groupsFixture,
+    {
+      id: "grp_empty",
+      label: "Empty",
+      kind: "text",
+      channels: []
+    }
+  ];
+
+  const deleted = applyCategoryDeletedToGroups(withEmpty, {
+    groupId: "grp_empty"
+  });
+  assert.equal(deleted.deleted, true);
+  assert.equal(deleted.groups.some((group) => group.id === "grp_empty"), false);
+
+  const blocked = applyCategoryDeletedToGroups(groupsFixture, {
+    groupId: "grp_text"
+  });
+  assert.equal(blocked.deleted, false);
+  assert.equal(blocked.groups, groupsFixture);
 });
 
 test("applyChannelLayoutUpdatedToGroups accepts authoritative groups and rejects duplicate channel ids", () => {
@@ -239,6 +264,30 @@ test("moveChannelInGroups supports cross-category and same-category moves", () =
     sameGroup.groups[0]?.channels.map((channel) => channel.id),
     ["ch_two", "ch_three", "ch_one"]
   );
+
+  const intoEmpty = moveChannelInGroups(
+    [
+      {
+        id: "grp_source",
+        label: "Source",
+        kind: "text",
+        channels: [{ id: "ch_source", name: "source", type: "text" }]
+      },
+      {
+        id: "grp_empty",
+        label: "Empty",
+        kind: "text",
+        channels: []
+      }
+    ],
+    {
+      channelId: "ch_source",
+      targetGroupId: "grp_empty",
+      targetIndex: 0
+    }
+  );
+  assert.equal(intoEmpty.moved, true);
+  assert.deepEqual(intoEmpty.groups[1]?.channels.map((channel) => channel.id), ["ch_source"]);
 });
 
 test("toChannelLayoutInput maps groups to API payload shape", () => {

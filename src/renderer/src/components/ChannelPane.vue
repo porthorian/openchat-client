@@ -59,6 +59,7 @@ const emit = defineEmits<{
   createChannel: [groupId: string | null];
   createCategory: [groupId: string | null, suggestedKind: "text" | "voice" | null];
   renameCategory: [groupId: string];
+  deleteCategory: [groupId: string];
   reorderChannelTree: [groups: ChannelGroup[]];
   openServerSettings: [];
 }>();
@@ -116,6 +117,10 @@ const voicePresencePopover = ref<VoicePresencePopoverState>({
 const channelPaneRef = ref<HTMLElement | null>(null);
 const dragPayload = ref<DragPayload | null>(null);
 const isDragEnabled = computed(() => props.filterValue.trim().length === 0);
+const selectedCategoryForMenu = computed(() => categoryForID(channelPaneMenu.value.categoryId));
+const canDeleteSelectedCategory = computed(() => {
+  return Boolean(selectedCategoryForMenu.value && selectedCategoryForMenu.value.channels.length === 0);
+});
 
 let voicePopoverCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const serverBuildLabel = computed(() => {
@@ -193,9 +198,13 @@ function toggleGuildHeaderMenu(event: MouseEvent): void {
   };
 }
 
-function categoryKindForID(categoryId: string | null): "text" | "voice" | null {
+function categoryForID(categoryId: string | null): ChannelGroup | null {
   if (!categoryId) return null;
-  const group = props.groups.find((item) => item.id === categoryId) ?? null;
+  return props.groups.find((item) => item.id === categoryId) ?? null;
+}
+
+function categoryKindForID(categoryId: string | null): "text" | "voice" | null {
+  const group = categoryForID(categoryId);
   if (!group) return null;
   return group.kind;
 }
@@ -218,7 +227,7 @@ function runGuildHeaderAction(
 
 function runChannelPaneAction(
   _event?: Event,
-  action: "create-channel" | "create-category" | "rename-category" | "noop" = "noop"
+  action: "create-channel" | "create-category" | "rename-category" | "delete-category" | "noop" = "noop"
 ): void {
   if (action === "create-channel") {
     emit("createChannel", channelPaneMenu.value.categoryId ?? null);
@@ -230,6 +239,12 @@ function runChannelPaneAction(
     const categoryId = channelPaneMenu.value.categoryId ?? "";
     if (categoryId) {
       emit("renameCategory", categoryId);
+    }
+  }
+  if (action === "delete-category") {
+    const categoryId = channelPaneMenu.value.categoryId ?? "";
+    if (categoryId && canDeleteSelectedCategory.value) {
+      emit("deleteCategory", categoryId);
     }
   }
   closeChannelPaneMenu();
@@ -265,36 +280,65 @@ function onGroupDragStart(event: DragEvent, groupId: string): void {
 
 function onGroupDragOver(event: DragEvent, groupId: string): void {
   if (!isDragEnabled.value) return;
-  if (!dragPayload.value || dragPayload.value.kind !== "group") return;
-  if (dragPayload.value.groupId === groupId) return;
-  event.preventDefault();
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = "move";
+  if (!dragPayload.value) return;
+  if (dragPayload.value.kind === "group") {
+    if (dragPayload.value.groupId === groupId) return;
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    return;
+  }
+  if (dragPayload.value.kind === "channel") {
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
   }
 }
 
 function onGroupDrop(event: DragEvent, targetGroupId: string): void {
   if (!isDragEnabled.value) return;
-  if (!dragPayload.value || dragPayload.value.kind !== "group") return;
-  const sourceGroupId = dragPayload.value.groupId;
-  if (sourceGroupId === targetGroupId) {
+  if (!dragPayload.value) return;
+  if (dragPayload.value.kind === "group") {
+    const sourceGroupId = dragPayload.value.groupId;
+    if (sourceGroupId === targetGroupId) {
+      onDragEnd();
+      return;
+    }
+    const targetIndex = props.groups.findIndex((group) => group.id === targetGroupId);
+    if (targetIndex < 0) {
+      onDragEnd();
+      return;
+    }
+    event.preventDefault();
+    const moved = moveCategoryInGroups(props.groups, {
+      groupId: sourceGroupId,
+      targetIndex
+    });
+    if (moved.moved) {
+      emitUpdatedLayout(moved.groups);
+    }
     onDragEnd();
     return;
   }
-  const targetIndex = props.groups.findIndex((group) => group.id === targetGroupId);
-  if (targetIndex < 0) {
+  if (dragPayload.value.kind === "channel") {
+    const targetGroup = props.groups.find((group) => group.id === targetGroupId) ?? null;
+    if (!targetGroup) {
+      onDragEnd();
+      return;
+    }
+    event.preventDefault();
+    const moved = moveChannelInGroups(props.groups, {
+      channelId: dragPayload.value.channelId,
+      targetGroupId: targetGroupId,
+      targetIndex: targetGroup.channels.length
+    });
+    if (moved.moved) {
+      emitUpdatedLayout(moved.groups);
+    }
     onDragEnd();
-    return;
   }
-  event.preventDefault();
-  const moved = moveCategoryInGroups(props.groups, {
-    groupId: sourceGroupId,
-    targetIndex
-  });
-  if (moved.moved) {
-    emitUpdatedLayout(moved.groups);
-  }
-  onDragEnd();
 }
 
 function onChannelDragStart(event: DragEvent, groupId: string, channelId: string): void {
@@ -599,11 +643,12 @@ onBeforeUnmount(() => {
           >
             <button
               type="button"
-              class="channel-row"
-              :class="{
+            class="channel-row"
+            :class="{
                 'is-active': channel.id === activeChannelId,
                 'is-voice': channel.type === 'voice',
-                'is-connected': channel.type === 'voice' && channel.id === activeVoiceChannelId
+                'is-connected': channel.type === 'voice' && channel.id === activeVoiceChannelId,
+                'is-dragging': dragPayload?.kind === 'channel' && dragPayload.channelId === channel.id
               }"
               :draggable="isDragEnabled"
               @dragstart="onChannelDragStart($event, group.id, channel.id)"
@@ -655,6 +700,14 @@ onBeforeUnmount(() => {
                 <span v-if="participant.badgeEmoji" class="voice-member-badge">{{ participant.badgeEmoji }}</span>
               </article>
             </div>
+          </div>
+          <div
+            v-if="isDragEnabled && group.channels.length === 0"
+            class="channel-empty-drop-zone"
+            @dragover="onChannelDragOver($event, group.id)"
+            @drop="onChannelDrop($event, group.id, 0)"
+          >
+            Drop channels here
           </div>
           <div
             v-if="isDragEnabled"
@@ -710,6 +763,22 @@ onBeforeUnmount(() => {
         >
           Edit Category
         </button>
+        <div
+          v-if="channelPaneMenu.categoryId"
+          class="channel-pane-menu-item-wrap"
+          :class="{ 'has-disabled-tooltip': !canDeleteSelectedCategory }"
+          :data-tooltip="!canDeleteSelectedCategory ? 'Category must be empty before deletion.' : ''"
+        >
+          <button
+            type="button"
+            class="channel-pane-menu-item is-danger"
+            role="menuitem"
+            :disabled="!canDeleteSelectedCategory"
+            @click="($event) => runChannelPaneAction($event, 'delete-category')"
+          >
+            Delete Category
+          </button>
+        </div>
         <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
           Invite to Server
         </button>

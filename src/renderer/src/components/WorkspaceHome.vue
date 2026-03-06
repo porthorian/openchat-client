@@ -9,6 +9,7 @@ import ClientUpdateProgressModal from "./ClientUpdateProgressModal.vue";
 import ClientVersionInfoModal from "./ClientVersionInfoModal.vue";
 import CreateCategoryModal from "./CreateCategoryModal.vue";
 import CreateChannelModal from "./CreateChannelModal.vue";
+import DeleteCategoryModal from "./DeleteCategoryModal.vue";
 import MembersPane from "./MembersPane.vue";
 import RenameCategoryModal from "./RenameCategoryModal.vue";
 import ScreenShareSourcePickerModal from "./ScreenShareSourcePickerModal.vue";
@@ -50,6 +51,7 @@ const shell = useWorkspaceShell();
       <CreateChannelModal v-bind="shell.createChannelModalProps.value" v-on="shell.createChannelModalListeners" />
       <CreateCategoryModal v-bind="shell.createCategoryModalProps.value" v-on="shell.createCategoryModalListeners" />
       <RenameCategoryModal v-bind="shell.renameCategoryModalProps.value" v-on="shell.renameCategoryModalListeners" />
+      <DeleteCategoryModal v-bind="shell.deleteCategoryModalProps.value" v-on="shell.deleteCategoryModalListeners" />
       <ServerSettingsModal v-bind="shell.serverSettingsModalProps.value" v-on="shell.serverSettingsModalListeners" />
       <UserSettingsModal v-bind="shell.userSettingsModalProps.value" v-on="shell.userSettingsModalListeners" />
     </div>

@@ -660,6 +660,40 @@ export async function updateCategory(params: {
   };
 }
 
+export async function deleteCategory(params: {
+  backendUrl: string;
+  serverId: string;
+  groupId: string;
+  userUID: string;
+  deviceID: string;
+}): Promise<UpdatedChannelLayoutResponse> {
+  const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/categories/${encodeURIComponent(params.groupId)}`;
+  const response = await fetch(endpoint, {
+    method: "DELETE",
+    headers: authHeaders(params.userUID, params.deviceID)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to delete category (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as Record<string, unknown>;
+  const groupsRaw = Array.isArray(payload.groups) ? payload.groups : [];
+  const groups = groupsRaw
+    .map((group) => normalizeChannelGroupPayload(group))
+    .filter((group): group is ChannelGroup => group !== null);
+  if (groups.length === 0 && groupsRaw.length > 0) {
+    throw new Error("Failed to delete category: server returned an invalid groups payload.");
+  }
+
+  return {
+    serverId: String(payload.server_id ?? params.serverId),
+    groups,
+    updatedByUID: String(payload.updated_by_uid ?? params.userUID),
+    updatedAt: String(payload.updated_at ?? new Date().toISOString())
+  };
+}
+
 export async function updateChannelLayout(params: {
   backendUrl: string;
   serverId: string;
