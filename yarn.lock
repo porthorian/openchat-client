@@ -961,12 +961,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:^25.3.3":
-  version: 25.3.3
-  resolution: "@types/node@npm:25.3.3"
+"@types/node@npm:^25.3.5":
+  version: 25.3.5
+  resolution: "@types/node@npm:25.3.5"
   dependencies:
     undici-types: "npm:~7.18.0"
-  checksum: 10/883e8942b0ddf89f9aae56c4205af8d9a368acd6cab83aa052447a6c5e69ce2bc8ab3f54e549233ada160ba9216dad7f30c62c35867c584fe844ae99f7dea2e0
+  checksum: 10/bca6dafa72a0fdc51f4832be89bb7fe6f22a8b68c73722cb78ebb94f5bee9c1049416e73b6776886083a72941ee2235eea363dfc9678a78077d24a090b35a01d
   languageName: node
   linkType: hard
 
@@ -1500,16 +1500,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^40.6.1":
-  version: 40.6.1
-  resolution: "electron@npm:40.6.1"
+"electron@npm:^40.8.0":
+  version: 40.8.0
+  resolution: "electron@npm:40.8.0"
   dependencies:
     "@electron/get": "npm:^2.0.0"
     "@types/node": "npm:^24.9.0"
     extract-zip: "npm:^2.0.1"
   bin:
     electron: cli.js
-  checksum: 10/d3a9cbce8c95b4e6e7a4fe0c78772722fe3b9678ce3b4566c87a051559c65c6a8b23d46b2b8bd45f9e99ed7af4754f54653dda1c7f2fd672f38dc5bf9eaaaeee
+  checksum: 10/d5b5c81bb4062501cdded0e4bdb00aee968b0bcfed071b3d8e797d1482077e336bfc3f9e9832836bcada59c1bc9d98c201fc13786eb13660735dd6d4c425bb23
   languageName: node
   linkType: hard
 
@@ -2408,9 +2408,9 @@ __metadata:
   resolution: "openchat-client@workspace:."
   dependencies:
     "@mdi/js": "npm:^7.4.47"
-    "@types/node": "npm:^25.3.3"
+    "@types/node": "npm:^25.3.5"
     "@vitejs/plugin-vue": "npm:^6.0.4"
-    electron: "npm:^40.6.1"
+    electron: "npm:^40.8.0"
     electron-updater: "npm:^6.6.2"
     electron-vite: "npm:^5.0.0"
     pinia: "npm:^3.0.4"
