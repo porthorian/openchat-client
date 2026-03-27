@@ -10,7 +10,7 @@ coverage/
 *.tsbuildinfo
 
 .yarn
-release
+/release
 .env
 .env.development
 build/package.json

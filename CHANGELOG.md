@@ -4,12 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-03-27
+
 ### Added
-- Mention rendering in message rows with mention-pill styling and current-user mention highlight treatment.
+- Mentions support in chat, including mention-pill rendering and current-user mention highlighting.
+- Channel/category management improvements, including create channel and create/rename/reorder/delete category flows.
+- Audio/video device test options in user settings.
 
 ### Changed
-- Mention/profile hydration now includes mention target UIDs so mention pills resolve to display names when profile data is available.
-- Documentation status and contracts were aligned with implemented mentions/read-ack behavior.
+- Voice, video, and screen share negotiation behavior was improved, including STUN/TURN-backed signaling paths and codec handling.
+- Default server target now points to `chat.pennylabs.com`.
+- Runtime and tooling dependencies were refreshed to improve reliability and security posture.
+
+### Fixed
+- OpenGraph text escaping/unescaping behavior now avoids double-escaping.
+- Temporary identity randomness issue was resolved.
+- Release/CI flow now avoids uploading excessive release assets and resolves related failing CI checks.
 
 ## [0.0.6] - 2026-02-20
 
@@ -102,7 +112,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - CI workflow and lockfile maintenance fixes leading into the first `v*` tagged release.
 
-[Unreleased]: https://github.com/porthorian/openchat-client/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/porthorian/openchat-client/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/porthorian/openchat-client/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/porthorian/openchat-client/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/porthorian/openchat-client/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/porthorian/openchat-client/compare/v0.0.3...v0.0.4

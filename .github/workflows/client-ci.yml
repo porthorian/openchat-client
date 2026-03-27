@@ -3,6 +3,7 @@ name: Client CI
 on:
   push:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: client-ci-${{ github.ref }}
