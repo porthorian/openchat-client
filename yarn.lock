@@ -548,7 +548,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@primeuix/styles@npm:2.0.3, @primeuix/styles@npm:^2.0.2":
+"@primeuix/styles@npm:2.0.3, @primeuix/styles@npm:^2.0.3":
   version: 2.0.3
   resolution: "@primeuix/styles@npm:2.0.3"
   dependencies:
@@ -564,25 +564,25 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@primevue/core@npm:4.5.4":
-  version: 4.5.4
-  resolution: "@primevue/core@npm:4.5.4"
+"@primevue/core@npm:4.5.5":
+  version: 4.5.5
+  resolution: "@primevue/core@npm:4.5.5"
   dependencies:
     "@primeuix/styled": "npm:^0.7.4"
     "@primeuix/utils": "npm:^0.6.2"
   peerDependencies:
     vue: ^3.5.0
-  checksum: 10/197f4df41950843f6a613033ffa71afb90f1c4e7b2ea97d506bea198ed391352813e00c47230b71d965bf517339e12911734c6ffa15bf24c9032a44ee921c9d1
+  checksum: 10/f91907aceff87bda8477853dfce11c26aec9f7f26c6260571786c8af56e5de23d8958987519792e2c2e5e17abc438d251c76bafd69e2e444b0d71bb574e7a8c8
   languageName: node
   linkType: hard
 
-"@primevue/icons@npm:4.5.4":
-  version: 4.5.4
-  resolution: "@primevue/icons@npm:4.5.4"
+"@primevue/icons@npm:4.5.5":
+  version: 4.5.5
+  resolution: "@primevue/icons@npm:4.5.5"
   dependencies:
     "@primeuix/utils": "npm:^0.6.2"
-    "@primevue/core": "npm:4.5.4"
-  checksum: 10/5a3465587d675154a88c0b001c9e1e85c0cf5d2a058b286819138a3b6bb78f758916e4dbf19a60cf0b0efe7894c3174d28305da33f25253d266f9cb5fe4bcc59
+    "@primevue/core": "npm:4.5.5"
+  checksum: 10/d7481b25f0fb1f8549c27ea93a76f8ceb5d8d5d7af26b923fd0e72a32ff4efe194c3660f65bb8fc9a764639ffffda00c63d08fb0113257c58f4e67e5d3e95adf
   languageName: node
   linkType: hard
 
@@ -2271,7 +2271,7 @@ __metadata:
     electron-updater: "npm:^6.6.2"
     electron-vite: "npm:^5.0.0"
     pinia: "npm:^3.0.4"
-    primevue: "npm:^4.0.0"
+    primevue: "npm:^4.5.5"
     typescript: "npm:^6.0.2"
     vite: "npm:^8.0.8"
     vue: "npm:^3.5.32"
@@ -2364,16 +2364,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"primevue@npm:^4.0.0":
-  version: 4.5.4
-  resolution: "primevue@npm:4.5.4"
+"primevue@npm:^4.5.5":
+  version: 4.5.5
+  resolution: "primevue@npm:4.5.5"
   dependencies:
     "@primeuix/styled": "npm:^0.7.4"
-    "@primeuix/styles": "npm:^2.0.2"
+    "@primeuix/styles": "npm:^2.0.3"
     "@primeuix/utils": "npm:^0.6.2"
-    "@primevue/core": "npm:4.5.4"
-    "@primevue/icons": "npm:4.5.4"
-  checksum: 10/5c7ef0e0049b2ed2e78d31d7f1d7e770612f4b140b1e5f20912a3c09f54887eca881b38a2f7608345f98f4221b7b023c53c5dcb3940531c9b6b5c28730374c0e
+    "@primevue/core": "npm:4.5.5"
+    "@primevue/icons": "npm:4.5.5"
+  checksum: 10/c46aa21877debf129c39d5df00dc2b9157751fe213d0a92a7a92a466db61e5b3e57f8c7b73f152e82b5db87aefadcaef0361614da2d2ea50211542094b62de7c
   languageName: node
   linkType: hard
 
