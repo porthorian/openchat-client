@@ -32,10 +32,10 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@vitejs/plugin-vue": "^6.0.6",
-    "electron": "^41.2.0",
+    "electron": "^41.2.1",
     "electron-vite": "^5.0.0",
-    "typescript": "^6.0.2",
-    "vite": "^8.0.8",
-    "vue-tsc": "^3.2.6"
+    "typescript": "^6.0.3",
+    "vite": "^8.0.9",
+    "vue-tsc": "^3.2.7"
   }
 }
