@@ -56,7 +56,7 @@ jobs:
           fi
 
       - name: Import Apple code signing certificate
-        uses: apple-actions/import-codesign-certs@v6
+        uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ env.MACOS_CERT_P12_BASE64 }}
           p12-password: ${{ env.MACOS_CERT_PASSWORD }}
