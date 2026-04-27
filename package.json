@@ -27,7 +27,7 @@
     "electron-updater": "^6.6.2",
     "pinia": "^3.0.4",
     "primevue": "^4.5.5",
-    "vue": "^3.5.32"
+    "vue": "^3.5.33"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
