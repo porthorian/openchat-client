@@ -726,12 +726,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/node@npm:^25.9.3":
-  version: 25.9.3
-  resolution: "@types/node@npm:25.9.3"
+"@types/node@npm:^26.0.0":
+  version: 26.0.0
+  resolution: "@types/node@npm:26.0.0"
   dependencies:
-    undici-types: "npm:>=7.24.0 <7.24.7"
-  checksum: 10/40c5f5c91450689b255dbf8cbd6cf0bb05e1013a353830b15eb9b5c9cda6448510be572d1ecadc38c8a4ac472e61381de9ae28df82094abece59f4c1eccffbc5
+    undici-types: "npm:~8.3.0"
+  checksum: 10/ed23034d159b58541de1f59d2ae3988d64124f94a50fb9f1825a217b38f034fc9846e2117770a2bc9372e87de1b0d2b3c6f5ec953b4da4ac943b9a6008b2cc2b
   languageName: node
   linkType: hard
 
@@ -1164,9 +1164,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"electron@npm:^42.4.0":
-  version: 42.4.0
-  resolution: "electron@npm:42.4.0"
+"electron@npm:^42.4.1":
+  version: 42.4.1
+  resolution: "electron@npm:42.4.1"
   dependencies:
     "@electron-internal/extract-zip": "npm:^1.0.1"
     "@electron/get": "npm:^5.0.0"
@@ -1174,7 +1174,7 @@ __metadata:
   bin:
     electron: cli.js
     install-electron: install.js
-  checksum: 10/70fbe3b297e2c621d47580623a6fb3777df22fba77710bc965870f1247d3d56211673a2a8a579a69ef509718f657541504a75e80aefced733054ca3743f93cc5
+  checksum: 10/4e12bf8936dd5f36f5240b3e0a08d762a34dc58e3dacadfe087b94a36583becacbb408d70e50d164563b8cc00110c01402867154e6ed03ab97e91a718ded485d
   languageName: node
   linkType: hard
 
@@ -1871,9 +1871,9 @@ __metadata:
   resolution: "openchat-client@workspace:."
   dependencies:
     "@mdi/js": "npm:^7.4.47"
-    "@types/node": "npm:^25.9.3"
+    "@types/node": "npm:^26.0.0"
     "@vitejs/plugin-vue": "npm:^6.0.7"
-    electron: "npm:^42.4.0"
+    electron: "npm:^42.4.1"
     electron-updater: "npm:^6.8.9"
     electron-vite: "npm:^5.0.0"
     pinia: "npm:^3.0.4"
@@ -2242,17 +2242,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"undici-types@npm:>=7.24.0 <7.24.7":
-  version: 7.24.6
-  resolution: "undici-types@npm:7.24.6"
-  checksum: 10/defc9538b952e3c15b8526596c591f7c1f0c7605ad27a2b7feddbea7ef2e3003f3eda2cdb051a3cb1a2185e3893100fd9cb925c799db99d48131ea63b5233d10
-  languageName: node
-  linkType: hard
-
 "undici-types@npm:~7.16.0":
   version: 7.16.0
   resolution: "undici-types@npm:7.16.0"
   checksum: 10/db43439f69c2d94cc29f75cbfe9de86df87061d6b0c577ebe9bb3255f49b22c50162a7d7eb413b0458b6510b8ca299ac7cff38c3a29fbd31af9f504bcf7fbc0d
+  languageName: node
+  linkType: hard
+
+"undici-types@npm:~8.3.0":
+  version: 8.3.0
+  resolution: "undici-types@npm:8.3.0"
+  checksum: 10/6681d2837ac75a75ac1cc46090aa2b8ddc7c6b8ecc295a6cdb06838752a730da3d8afeecf05e5ab7903160eafad3a8b6ffa1927e5ded260590f4d4fef18646d5
   languageName: node
   linkType: hard
 
