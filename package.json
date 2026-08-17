@@ -25,9 +25,9 @@
   "dependencies": {
     "@mdi/js": "^7.4.47",
     "electron-updater": "^6.8.9",
-    "pinia": "^4.0.2",
-    "primevue": "^5.0.0",
-    "vue": "^3.5.40"
+    "pinia": "^4.0.3",
+    "primevue": "^5.0.1",
+    "vue": "^3.5.41"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
