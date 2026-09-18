@@ -27,7 +27,6 @@
     "@vue/devtools-api": "^8.1.5",
     "electron-updater": "^6.8.9",
     "pinia": "^4.0.2",
-    "primevue": "^5.0.0",
     "vue": "^3.5.40"
   },
   "devDependencies": {

@@ -1,28 +1,26 @@
 # Design System Architecture
 
-This document defines how the renderer UI is built with Vue 3, PrimeVue (unstyled), and local design-system wrappers.
+This document defines how the renderer UI is built with Vue 3, native HTML controls, local components, and tokenized CSS.
 
-Current implementation snapshot (2026-02-17):
-- Renderer surfaces are currently built with local Vue components plus tokenized CSS (`tokens.css`, `base.css`).
-- PrimeVue is configured as a dependency but wrapper primitives are still pending broader adoption.
-- This document remains the target model for upcoming design-system hardening work.
+Current implementation:
+- Renderer surfaces use local Vue components plus tokenized CSS (`tokens.css`, `base.css`).
+- Reusable primitives can be extracted from existing controls as the design system matures.
 
 ## 1) Goals
 - Deliver a Discord-like interaction model with a fully custom visual language.
 - Keep accessibility and interaction behavior predictable.
-- Prevent direct dependency on component-library default styling.
+- Keep visual styling and interaction behavior under client control.
 - Make privacy boundaries visible in UX, especially UID-only disclosure during server join and identity flows.
 
 ## 2) Layering Model
 - `tokens`: color, spacing, typography, radii, elevation, motion.
-- `primitives`: wrapped PrimeVue components and low-level custom controls.
+- `primitives`: local Vue components and native HTML controls.
 - `composites`: reusable app patterns (channel row, server item, message bubble).
 - `screens`: feature-specific assembly of composites.
 
-## 3) PrimeVue Usage Rules
-- PrimeVue runs in unstyled mode globally.
-- Product features should consume local wrappers, not raw PrimeVue components.
-- Wrapper components own:
+## 3) Local Component Rules
+- Product features should share local primitives where behavior is reused.
+- Reusable components own:
   - ARIA and keyboard defaults
   - class hooks for tokens
   - event normalization for app usage
@@ -43,13 +41,13 @@ Current implementation snapshot (2026-02-17):
 
 ## 5) Component Ownership
 
-### Core wrappers (initial set)
+### Core primitives (initial set)
 - Button
 - Input/Textarea
 - Dialog/Popover
 - Menu/Dropdown
 - Tooltip
-- VirtualScroller wrappers for timeline lists
+- Virtualized timeline list if needed
 
 ### Product composites (initial set)
 - Server rail item
@@ -71,12 +69,12 @@ Current implementation snapshot (2026-02-17):
 - No fixed dimensions for primary text surfaces.
 
 ## 8) Testing Requirements
-- Component tests for wrapper behavior and state classes.
+- Component tests for shared behavior and state classes.
 - Visual regression snapshots for core composites.
 - Accessibility checks for keyboard/focus/screen-reader semantics.
 
 ## 9) Documentation Requirements
-- Every new wrapper must be documented with:
+- Every new reusable component must be documented with:
   - intended use
   - props/events contract
   - accessibility behaviors

@@ -10,7 +10,7 @@ OpenChat Client is an open-source Electron desktop app with a Discord-like UX wh
 
 ## Project Snapshot
 What this repository is:
-- A desktop client built with `Electron`, `Vue 3`, `Pinia`, and `PrimeVue` (unstyled).
+- A desktop client built with `Electron`, `Vue 3`, `Pinia`, and local UI components.
 - A multi-server client with isolated server-scoped state and trust boundaries.
 - A frontend-first open-source project with ADRs, feature specs, and milestone tracking.
 

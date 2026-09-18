@@ -5,13 +5,6 @@ This document defines the implementation plan for an open-source Electron deskto
 
 This repository is **client-only**.
 
-## Agent Execution Rule
-- Do not run any `git` commands in this repository.
-- Do not run any commands unless they are explicitly approved by the user or explicitly allowed in this `AGENTS.md`.
-- Allowed without additional approval: `yarn build`, `yarn typecheck`, `yarn run build`, `yarn run typecheck`, `corepack yarn build`, `corepack yarn typecheck`.
-- Never reintroduce code/content that the user previously removed.
-- If an edit conflicts or patching fails, prefer minimal targeted edits; do not replace entire files unless the user explicitly asks for a full rewrite.
-
 ## 2) Scope and Boundaries
 
 ### In scope
@@ -66,10 +59,10 @@ This repository is **client-only**.
 
 ### Frontend stack decision
 - Renderer framework: `Vue 3`.
-- UI component layer: `PrimeVue` in **unstyled mode**.
+- UI component layer: local Vue components and native HTML controls; no general-purpose UI component library.
 - Styling system: custom design tokens + utility/component CSS to match Discord-like UX.
-- Component usage rule: PrimeVue components must be wrapped by local design-system components before broad app usage.
-- Goal: use PrimeVue for accessibility and behavior primitives while owning all visual presentation.
+- Component usage rule: reusable controls belong in the local design system before broad app usage.
+- Goal: own visual presentation and accessible interaction behavior in the client.
 
 ### State management decision
 - Primary client state store: `Pinia`.
@@ -202,11 +195,11 @@ This repository is **client-only**.
 - Linting, type checks, unit tests, and UI tests in CI.
 - Electron packaging for macOS/Windows/Linux artifacts.
 
-### UI library standards (PrimeVue unstyled)
-- Keep PrimeVue in unstyled mode globally.
+### Design-system standards (local components)
+- Use local Vue components and native HTML controls for renderer UI.
 - Theme through local tokens only (colors, spacing, radius, typography, motion).
-- Disallow direct app-wide use of PrimeVue default presets.
-- Document each wrapped PrimeVue component in `docs/features/` or `docs/architecture/design-system.md`.
+- Define and verify keyboard, focus, and screen-reader behavior for reusable controls.
+- Document each reusable control in `docs/features/` or `docs/architecture/design-system.md`.
 
 ### CI stages (proposed)
 1. `validate`:

@@ -13,7 +13,7 @@ This section defines the client architecture, major constraints, and accepted te
 
 ## Current Focus
 - Electron process boundaries and renderer safety model.
-- Vue 3 client architecture and PrimeVue unstyled design-system approach.
+- Vue 3 client architecture and a local-component design system.
 - Pinia-based state organization with server-scoped isolation.
 - Clear client/backend contract boundaries for this repository.
 - Mention/read-ack contract alignment across composer, timeline, and notification policy.

@@ -2,8 +2,8 @@
 
 - Status: Implemented (M2 baseline, M3 hardening in progress)
 - Owners: Maintainers
-- Last Updated: 2026-02-20
-- Related ADRs: `docs/architecture/adrs/0001-electron-vue-primevue-unstyled.md`, `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0005-user-owned-identity.md`
+- Last Updated: 2026-09-17
+- Related ADRs: `docs/architecture/adrs/0008-local-vue-components.md`, `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0005-user-owned-identity.md`
 - Related Issues: TBD
 
 ## Problem Statement

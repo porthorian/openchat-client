@@ -1,6 +1,6 @@
 # ADR-0001: Electron + Vue 3 + PrimeVue (Unstyled)
 
-- Status: Accepted
+- Status: Superseded by ADR-0008
 - Date: 2026-02-09
 - Deciders: OpenChat Client maintainers
 - Related: `AGENTS.md`, `docs/architecture/adrs/0002-pinia-state-architecture.md`

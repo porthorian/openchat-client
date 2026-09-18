@@ -500,20 +500,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@noble/ed25519@npm:2.3.0":
-  version: 2.3.0
-  resolution: "@noble/ed25519@npm:2.3.0"
-  checksum: 10/3b12a7ac401ac625c59ab4b597d415aea3b855cdfa2563529863c9848b6c143b29fb1f0e462acec947bd20ab4fac0d8cfe892231566cbdcf6bdd13532241191b
-  languageName: node
-  linkType: hard
-
-"@noble/hashes@npm:2.2.0":
-  version: 2.2.0
-  resolution: "@noble/hashes@npm:2.2.0"
-  checksum: 10/b1b78bedc2a01394be047429f3d888905015fe8a09f1b7e43e0b5736b54133df62f73dcc73ede43af38e96e86156afb45b86973fdeaa95d9f0880333c3fc0907
-  languageName: node
-  linkType: hard
-
 "@npmcli/agent@npm:^4.0.0":
   version: 4.0.0
   resolution: "@npmcli/agent@npm:4.0.0"
@@ -540,120 +526,6 @@ __metadata:
   version: 0.149.0
   resolution: "@oxc-project/types@npm:0.149.0"
   checksum: 10/6bd7b656ecdbfa96eea3ca0d79264ad367f941eaec1c47883b7c763a300ac81750de23862089b959b0c9a865abd171145d639368294a9daab0d47df07b1f8c6e
-  languageName: node
-  linkType: hard
-
-"@primeicons/core@npm:8.0.0":
-  version: 8.0.0
-  resolution: "@primeicons/core@npm:8.0.0"
-  dependencies:
-    "@primeuix/utils": "npm:^0.8.0"
-  checksum: 10/003e9c824cdb3eec1ec39eb2bfa5a4b1a2088951d887da58c0d384886190e7c6589c4cf9bca0bb43334228f4318049145a63a5813b75a100dc1d9aaa9b9aaa9f
-  languageName: node
-  linkType: hard
-
-"@primeicons/vue@npm:^8.0.0":
-  version: 8.0.0
-  resolution: "@primeicons/vue@npm:8.0.0"
-  dependencies:
-    "@primeicons/core": "npm:8.0.0"
-    "@primeuix/utils": "npm:^0.8.0"
-  peerDependencies:
-    vue: ^3
-  checksum: 10/e4c74a2693d292a730561d2e308e276578abacd0f45624f1c0d17d4420a23d883d9f3fd92116e2ad4357bc57e2b39e344894193361bd30c0f8626fc65143a4dd
-  languageName: node
-  linkType: hard
-
-"@primeui/license-manager@npm:^1.0.0":
-  version: 1.0.0
-  resolution: "@primeui/license-manager@npm:1.0.0"
-  dependencies:
-    "@noble/ed25519": "npm:2.3.0"
-    "@noble/hashes": "npm:2.2.0"
-  checksum: 10/32dfe9bf3acd784025cc57b57fda63105b66383e920236bfce087ad343f04e50adc571b1dc5ea1da84d6790c0f7e1575639c15e07e27e8571bb227f709533063
-  languageName: node
-  linkType: hard
-
-"@primeuix/motion@npm:^1.0.0":
-  version: 1.0.0
-  resolution: "@primeuix/motion@npm:1.0.0"
-  dependencies:
-    "@primeuix/utils": "npm:^0.8.0"
-  checksum: 10/e9d6228efa75b1e77ba2002f7e3d720afa779ee1c73efc386279342754d067c8824719bc87e4acc3465304383f80222fcc1b3b58cc8a71cab41d19d4c2e8f3e5
-  languageName: node
-  linkType: hard
-
-"@primeuix/styled@npm:^0.7.4":
-  version: 0.7.4
-  resolution: "@primeuix/styled@npm:0.7.4"
-  dependencies:
-    "@primeuix/utils": "npm:^0.6.1"
-  checksum: 10/55925b693b5bebcada94acb08d079583faa84537148a439fe6ce3c4f2358c94f2ff4a11086be81f9b208c6752a40743834e644f3283eec92705c88a43ab6f3fe
-  languageName: node
-  linkType: hard
-
-"@primeuix/styled@npm:^1.0.0":
-  version: 1.0.0
-  resolution: "@primeuix/styled@npm:1.0.0"
-  dependencies:
-    "@primeui/license-manager": "npm:^1.0.0"
-    "@primeuix/utils": "npm:^0.8.0"
-  checksum: 10/d7297906b25aaf1b1b79244fd42e06c12b951a9d7fe62039c5ca8860e2983b42d7e8783200766ac958518c034fb275c0a1701fec918e0fe33336946f375464b0
-  languageName: node
-  linkType: hard
-
-"@primeuix/styles@npm:2.0.3":
-  version: 2.0.3
-  resolution: "@primeuix/styles@npm:2.0.3"
-  dependencies:
-    "@primeuix/styled": "npm:^0.7.4"
-  checksum: 10/77bc17f87ae954d4a8fda7eb3a1300706e8db63bb4c6954b967860e85620bffa10b9aaf95cb8e9d03394f520051a96ebaefb299f75329d7876f19e90ecf6c587
-  languageName: node
-  linkType: hard
-
-"@primeuix/styles@npm:^3.0.0":
-  version: 3.0.0
-  resolution: "@primeuix/styles@npm:3.0.0"
-  dependencies:
-    "@primeuix/styled": "npm:^1.0.0"
-  checksum: 10/f97d359385911a7cfef02930e5f0c36cd9aa9992043e0d90ff348546001039abc3d4a2cac96719a7a5fe9f420edac167ba15974d5997fdf0694d6cef45d84c4d
-  languageName: node
-  linkType: hard
-
-"@primeuix/utils@npm:^0.6.1":
-  version: 0.6.4
-  resolution: "@primeuix/utils@npm:0.6.4"
-  checksum: 10/8a3d49e47d985eace8ca4aefaa306158f1bd0d5d923eb04d29619bd73401a1420d40fb42ef3fd3b61420832d922654728e0a6331ed25a64f9b1dc6b5f77c5baa
-  languageName: node
-  linkType: hard
-
-"@primeuix/utils@npm:^0.8.0":
-  version: 0.8.0
-  resolution: "@primeuix/utils@npm:0.8.0"
-  checksum: 10/86ae675dd69df81dd8dfa4536d0da1fc157da3ccd9967729abdaa2def45c40691dafc1f28ab2765ed5cb7fc09f88864abad06dbfdf249abb383c45b70fad2e1f
-  languageName: node
-  linkType: hard
-
-"@primevue/core@npm:5.0.0":
-  version: 5.0.0
-  resolution: "@primevue/core@npm:5.0.0"
-  dependencies:
-    "@primeui/license-manager": "npm:^1.0.0"
-    "@primeuix/styled": "npm:^1.0.0"
-    "@primeuix/utils": "npm:^0.8.0"
-  peerDependencies:
-    vue: ^3.5.0
-  checksum: 10/a568ecb8c5f064e138472bfa911927cc6d26c7ac2fead7f339af8a763147c5974829f79e0257bdfc1271b0c7293c8b6491f187e3767d66a212d77dc13e7a69af
-  languageName: node
-  linkType: hard
-
-"@primevue/icons@npm:5.0.0":
-  version: 5.0.0
-  resolution: "@primevue/icons@npm:5.0.0"
-  dependencies:
-    "@primeuix/utils": "npm:^0.8.0"
-    "@primevue/core": "npm:5.0.0"
-  checksum: 10/82f8ebb7f74993dbfa3bfb77a9301cb5937e73392678f6ab5e257bf2f14bf8227273204e4f435db95ab86ebfebf4f9adb883a0eb7e8722d6b9a548328ec2ac50
   languageName: node
   linkType: hard
 
@@ -1917,7 +1789,6 @@ __metadata:
     electron-updater: "npm:^6.8.9"
     electron-vite: "npm:^5.0.0"
     pinia: "npm:^4.0.2"
-    primevue: "npm:^5.0.0"
     typescript: "npm:^6.0.3"
     vite: "npm:^8.3.0"
     vue: "npm:^3.5.40"
@@ -2014,22 +1885,6 @@ __metadata:
     picocolors: "npm:^1.1.1"
     source-map-js: "npm:^1.2.1"
   checksum: 10/c34814c1da499f370cd3b02a085a2d866989a966629b7bd4025f4a2a10d538a2ec83dc3181e1008550edb4cf44e49a0c40ec82332b08d9600877e6841240ad05
-  languageName: node
-  linkType: hard
-
-"primevue@npm:^5.0.0":
-  version: 5.0.0
-  resolution: "primevue@npm:5.0.0"
-  dependencies:
-    "@primeicons/vue": "npm:^8.0.0"
-    "@primeui/license-manager": "npm:^1.0.0"
-    "@primeuix/motion": "npm:^1.0.0"
-    "@primeuix/styled": "npm:^1.0.0"
-    "@primeuix/styles": "npm:^3.0.0"
-    "@primeuix/utils": "npm:^0.8.0"
-    "@primevue/core": "npm:5.0.0"
-    "@primevue/icons": "npm:5.0.0"
-  checksum: 10/b0071be81f728b10c893d3a84b4899913a191ca9c5796701c7e04d1d6a44128536d3c8c7b3b4d576e8609d6ec879a3ab0de272b78e96d212d9da70766a8e174d
   languageName: node
   linkType: hard
 
