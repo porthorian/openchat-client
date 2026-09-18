@@ -1,0 +1,75 @@
+/* Cross-screen appearance roles. Keep new controls on semantic tokens. */
+body { background: var(--surface-page); color: var(--ink-primary); }
+:is(button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.modal-backdrop { background: var(--scrim); }
+.user-settings-modal { min-height: 0; max-height: calc(100vh - 24px); }
+.user-settings-content, .user-settings-nav { min-width: 0; }
+.user-settings-content > * { min-width: 0; }
+.settings-fieldset { border: 1px solid var(--edge-default); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 12px; }
+.settings-check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; }
+.settings-keybind-row { display: grid; grid-template-columns: minmax(8rem, 1fr) auto auto; gap: 8px; align-items: center; }
+.settings-avatar-preview { width: 72px; height: 72px; object-fit: cover; border-radius: 50%; }
+.user-settings-modal :is(input, select, textarea) { min-height: 2.5em; height: auto; }
+.user-settings-modal :is(button, .user-settings-nav-btn) { min-height: 2.25em; }
+.voice-control-caret { min-width: 26px; }
+
+:root[data-theme="light"] :is(.taskbar, .server-rail, .channel-pane, .workspace-toolbar, .chat-pane, .members-pane, .user-dock, .call-stage) {
+  background: var(--surface-panel);
+  color: var(--ink-primary);
+  border-color: var(--line-subtle);
+  box-shadow: none;
+}
+:root[data-theme="light"] .server-rail,
+:root[data-theme="light"] .channel-pane,
+:root[data-theme="light"] .members-pane { background: var(--bg-sidebar); }
+:root[data-theme="light"] .user-dock-panel { background: var(--surface-panel); border-color: var(--edge-default); }
+:root[data-theme="light"] .user-identity-btn:hover { background: var(--surface-hover); }
+:root[data-theme="light"] :is(.server-dot, .server-modal, .user-settings-nav, .user-settings-content, .voice-video-section, .user-settings-placeholder-card, .profile-card, .guild-menu, .server-context-menu, .channel-pane-menu, .message-context-menu, .composer, .composer-upload-preview, .call-stage-header, .call-stage-video-frame, .member-list-empty) {
+  background: var(--surface-panel);
+  color: var(--ink-primary);
+  border-color: var(--edge-default);
+  box-shadow: none;
+}
+:root[data-theme="light"] :is(.user-settings-nav, .voice-video-section, .user-settings-placeholder-card, .composer, .profile-card, .guild-menu, .server-context-menu) { background: var(--surface-raised); }
+:root[data-theme="light"] :is(.server-modal-field input, .server-modal-field select, .server-modal-field textarea, .guild-filter input, .composer textarea) {
+  background: var(--surface-control); color: var(--ink-primary); border-color: var(--edge-default);
+}
+:root[data-theme="light"] :is(.user-settings-profile strong, .user-settings-profile small, .user-settings-section-label, .user-settings-nav-btn, .voice-video-section h4, .voice-video-section p, .server-modal-field span, .user-settings-placeholder-card h4, .user-settings-placeholder-card p, .guild-menu-item, .server-context-item, .channel-pane-menu-item, .message-context-menu-item, .profile-row, .message-row, .call-stage-copy strong, .call-stage-copy small) {
+  color: var(--ink-primary);
+}
+:root[data-theme="light"] :is(.user-settings-nav-btn.is-active, .server-settings-tab.is-active) {
+  background: var(--surface-selected); color: var(--ink-primary); border-color: var(--brand);
+}
+:root[data-theme="light"] :is(.user-settings-nav-btn:hover, .guild-menu-item:hover, .server-context-item:hover, .channel-pane-menu-item:hover, .message-row:hover) { background: var(--surface-hover); }
+:root[data-theme="light"] :is(.server-modal-close, .server-modal-btn, .policy-action-btn) { background: var(--surface-raised); color: var(--ink-primary); border: 1px solid var(--edge-default); }
+:root[data-theme="light"] .server-modal-btn.is-primary { background: var(--brand); color: #fff; }
+:root[data-theme="light"] .voice-video-meter { background: var(--surface-control); border-color: var(--edge-default); }
+:root[data-theme="light"] .message-row.is-mentioned-current-user { background: #fff3d9; }
+:root[data-theme="light"] :is(.taskbar-center-copy strong, .guild-header-name, .user-meta strong) { color: var(--ink-primary); }
+:root[data-theme="light"] :is(.guild-header-build, .user-meta small, .member-list-subtitle) { color: var(--ink-secondary); }
+:root[data-theme="light"] :is(.onboarding-card, .policy-modal) { background: var(--surface-panel); color: var(--ink-primary); border-color: var(--edge-default); }
+:root[data-theme="light"] :is(.onboarding-header p, .onboarding-field span, .avatar-upload p, .profile-preview-copy small, .policy-copy p, .compliance-check) { color: var(--ink-secondary); }
+:root[data-theme="light"] :is(.onboarding-field input, .avatar-mode-btn, .avatar-upload-btn, .profile-preview, .compliance-section, .policy-action-btn, .policy-close-btn, .onboarding-back-btn) { background: var(--surface-raised); color: var(--ink-primary); border-color: var(--edge-default); }
+:root[data-theme="light"] :is(.avatar-mode-btn.is-active, .onboarding-continue) { background: var(--brand); color: #fff; }
+
+:root[data-contrast="high"] :is(.server-modal, .voice-video-section, .user-settings-nav-btn.is-active, .guild-menu, .server-context-menu, .onboarding-card, .policy-modal, .composer) { border: 2px solid var(--edge-default); }
+:root[data-contrast="high"] :is(.user-settings-nav-btn, .server-modal-btn, .guild-menu-item, .server-context-item) { color: var(--ink-primary); }
+:root[data-motion="reduced"] *, :root[data-motion="reduced"] *::before, :root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
+@media (max-width: 900px) {
+  .user-settings-modal { grid-template-columns: 1fr; overflow-y: auto; }
+  .user-settings-nav { grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); max-height: 12rem; }
+  .settings-keybind-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .settings-keybind-row > :last-child { grid-column: 2; }
+}
+@media (max-width: 600px) {
+  .user-settings-modal { width: 100%; max-height: 100%; height: 100%; }
+  .user-settings-content { padding: 12px; }
+}

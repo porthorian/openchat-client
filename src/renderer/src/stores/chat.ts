@@ -49,6 +49,10 @@ import type {
 } from "@renderer/types/chat";
 import { extractMessageURLs } from "@renderer/utils/linkify";
 import { useServerRegistryStore } from "./serverRegistry";
+import { useIdentityStore } from "./identity";
+import { PROFILE_PUBLICATION_APPROVED } from "./profilePublication";
+import { useSettingsStore } from "./settings";
+import { shouldNotify } from "./settingsModel";
 import {
   applyCategoryCreatedToGroups,
   applyCategoryDeletedToGroups,
@@ -109,7 +113,6 @@ type ChatStoreState = {
   profilesByServer: Record<string, Record<string, SyncedUserProfile>>;
   profileSyncStateByServer: Record<string, ProfileSyncState>;
   profileSyncAvailableByServer: Record<string, boolean | null>;
-  serverMutedById: Record<string, boolean>;
 };
 
 const socketsByServer = new Map<string, WebSocket>();
@@ -908,33 +911,6 @@ function typingMemberTimerKey(channelId: string, member: ChannelPresenceMember):
   return `${channelId}|${presenceMemberKey(member)}`;
 }
 
-const CHAT_NOTIFICATION_PREFS_STORAGE_KEY = "openchat.chat-notification-prefs.v1";
-
-function readPersistedMutedServerIds(): string[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(CHAT_NOTIFICATION_PREFS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as { mutedServerIds?: unknown };
-    if (!Array.isArray(parsed.mutedServerIds)) return [];
-    return parsed.mutedServerIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-  } catch (_error) {
-    return [];
-  }
-}
-
-function writePersistedMutedServerIds(serverMutedById: Record<string, boolean>): void {
-  if (typeof window === "undefined") return;
-  const mutedServerIds = Object.entries(serverMutedById)
-    .filter(([, muted]) => muted)
-    .map(([serverId]) => serverId);
-  try {
-    window.localStorage.setItem(CHAT_NOTIFICATION_PREFS_STORAGE_KEY, JSON.stringify({ mutedServerIds }));
-  } catch (_error) {
-    // Notification preferences persistence is best-effort.
-  }
-}
-
 export const useChatStore = defineStore("chat", {
   state: (): ChatStoreState => ({
     groupsByServer: {},
@@ -953,8 +929,7 @@ export const useChatStore = defineStore("chat", {
     currentUserUIDByServer: {},
     profilesByServer: {},
     profileSyncStateByServer: {},
-    profileSyncAvailableByServer: {},
-    serverMutedById: {}
+    profileSyncAvailableByServer: {}
   }),
   getters: {
     groupsFor:
@@ -1063,35 +1038,21 @@ export const useChatStore = defineStore("chat", {
           }
         );
       },
-    serverMutedFor:
-      (state) =>
-      (serverId: string): boolean => {
-        return state.serverMutedById[serverId] ?? false;
-      }
+    serverMutedFor: () => (serverId: string): boolean => useSettingsStore().policyFor(serverId) === "off"
   },
   actions: {
     hydrateNotificationPreferences(): void {
-      const mutedServerIds = readPersistedMutedServerIds();
-      const next: Record<string, boolean> = {};
-      mutedServerIds.forEach((serverId) => {
-        next[serverId] = true;
-      });
-      this.serverMutedById = next;
+      useSettingsStore().hydrate();
     },
     persistNotificationPreferences(): void {
-      writePersistedMutedServerIds(this.serverMutedById);
+      useSettingsStore().persist();
     },
     setServerMuted(serverId: string, muted: boolean): void {
-      if (!serverId.trim()) return;
-      if (muted) {
-        this.serverMutedById[serverId] = true;
-      } else {
-        delete this.serverMutedById[serverId];
-      }
-      this.persistNotificationPreferences();
+      const settings = useSettingsStore();
+      settings.setPolicy(serverId, muted ? "off" : settings.previousNotificationPolicyByServer[serverId] ?? "all");
     },
     toggleServerMuted(serverId: string): void {
-      this.setServerMuted(serverId, !this.serverMutedById[serverId]);
+      useSettingsStore().toggleMute(serverId);
     },
     async loadServerData(params: {
       serverId: string;
@@ -1573,6 +1534,8 @@ export const useChatStore = defineStore("chat", {
     async syncLocalProfile(params: LocalProfileSyncInput): Promise<void> {
       this.ensureProfileSyncState(params.serverId);
       if (this.profileSyncDisabled(params.serverId)) return;
+      const capability = useServerRegistryStore().byId(params.serverId)?.capabilities?.profile;
+      if (!PROFILE_PUBLICATION_APPROVED || !capability?.enabled || !useIdentityStore().hasProfileConsent(params.serverId, params.backendUrl, capability.scope)) return;
 
       const syncState = this.profileSyncStateByServer[params.serverId];
       if (syncState.syncing) return;
@@ -2129,18 +2092,18 @@ export const useChatStore = defineStore("chat", {
     async notifyIncomingMessage(serverId: string, message: ChatMessage, channelIsActive: boolean): Promise<void> {
       if (typeof window === "undefined" || typeof Notification === "undefined") return;
       const currentUID = this.currentUserUIDByServer[serverId] ?? "";
-      if (currentUID && message.authorUID === currentUID) return;
-      if (this.serverMutedById[serverId]) return;
-
-      const windowVisible = isDocumentVisible();
+      const settings = useSettingsStore();
       const isMention = messageCountsAsMentionForUser(message, currentUID);
-      if (windowVisible && channelIsActive && !isMention) return;
-
-      if (Notification.permission === "denied") return;
-      if (Notification.permission === "default") {
-        const permission = await Notification.requestPermission();
-        if (permission !== "granted") return;
-      }
+      if (!shouldNotify({
+        enabled: settings.notificationsEnabled,
+        presence: settings.presenceStatus,
+        policy: settings.policyFor(serverId),
+        ownMessage: Boolean(currentUID && message.authorUID === currentUID),
+        isMention,
+        windowVisible: isDocumentVisible(),
+        channelIsActive
+      })) return;
+      if (Notification.permission !== "granted") return;
 
       const channelName = this.findChannelName(serverId, message.channelId);
       const profile = this.profileForUser(serverId, message.authorUID);
@@ -2153,9 +2116,9 @@ export const useChatStore = defineStore("chat", {
         body = attachmentCount > 1 ? `Sent ${attachmentCount} attachments.` : attachmentCount === 1 ? "Sent an image." : "New message.";
       }
       const notification = new Notification(title, {
-        body,
+        body: settings.notificationPreview ? body : "New message.",
         tag: `openchat:${serverId}:${message.channelId}`,
-        silent: true
+        silent: !settings.notificationSound
       });
       notification.onclick = () => {
         if (typeof window !== "undefined") {
@@ -2210,8 +2173,7 @@ export const useChatStore = defineStore("chat", {
         delete this.mentionUnreadByChannel[channelId];
       });
 
-      delete this.serverMutedById[serverId];
-      this.persistNotificationPreferences();
+      useSettingsStore().clearServer(serverId);
     },
     disconnectAllRealtime(): void {
       [...socketsByServer.keys()].forEach((serverId) => {

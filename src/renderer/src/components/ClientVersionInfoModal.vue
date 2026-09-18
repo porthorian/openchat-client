@@ -1,5 +1,7 @@
 <script setup lang="ts">
-defineProps<{
+import { ref } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
+const props = defineProps<{
   isOpen: boolean;
   currentVersion: string;
   runtimeLabel: string;
@@ -14,11 +16,13 @@ const emit = defineEmits<{
   close: [];
   checkAgain: [];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 </script>
 
 <template>
   <div v-if="isOpen" class="version-info-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="version-info-modal" role="dialog" aria-modal="true" aria-label="Client version information">
+    <section ref="dialogElement" class="version-info-modal" role="dialog" aria-modal="true" aria-label="Client version information" tabindex="-1">
       <header>
         <h3>Client information</h3>
         <button type="button" class="version-info-close" @click="emit('close')">Close</button>

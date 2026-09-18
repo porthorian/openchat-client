@@ -596,6 +596,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
 function handleGlobalTyping(event: KeyboardEvent): void {
   if (props.isSendingMessage) return;
   if (event.defaultPrevented) return;
+  if (document.querySelector('[aria-modal="true"]')) return;
+  if ((event.target as HTMLElement | null)?.closest('dialog, [role="dialog"], [role="menu"], [role="listbox"], [role="toolbar"], button, a[href]')) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key.length !== 1) return;
   if (isEditableTarget(event.target)) return;
@@ -811,11 +813,12 @@ watch(
         </div>
       </div>
       <div class="composer" :class="{ 'is-under-reply': activeReplyTarget }">
-        <button type="button" class="composer-icon" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
+        <button type="button" class="composer-icon" aria-label="Add attachment" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
           <AppIcon :path="mdiPlusCircleOutline" :size="18" />
         </button>
         <textarea
           ref="composerInputRef"
+          data-shortcut-target="composer"
           v-model="draftMessage"
           rows="1"
           :placeholder="`Message #${channelId}`"
@@ -833,7 +836,7 @@ watch(
           <button type="button" class="composer-send-btn" :disabled="isSendingMessage || isComposerEmpty" @click="submitMessage">
             {{ isSendingMessage ? "Sending..." : "Send" }}
           </button>
-          <button type="button" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
+          <button type="button" aria-label="Add image" :disabled="isSendingMessage || !attachmentsEnabled" @click="openAddAttachmentPicker">
             <AppIcon :path="mdiImageOutline" :size="18" />
           </button>
           <button

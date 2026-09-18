@@ -15,6 +15,7 @@ import {
 } from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
+import { canonicalShortcut, shortcutActions, type ShortcutAction } from "@renderer/stores/settingsModel";
 import {
   useAppUIStore,
   useCallStore,
@@ -22,7 +23,8 @@ import {
   useClientUpdateStore,
   useIdentityStore,
   useServerRegistryStore,
-  useSessionStore
+  useSessionStore,
+  useSettingsStore
 } from "@renderer/stores";
 
 type VoiceMood = "chilling" | "gaming" | "studying" | "brb" | "watching stuff";
@@ -106,7 +108,7 @@ type ServerSettingsFormState = {
   bannerPreset: string;
 };
 
-type UserSettingsTabID = "my_account" | "voice_video";
+type UserSettingsTabID = "my_account" | "voice_video" | "appearance" | "keybinds" | "notifications" | "accessibility" | "identity_privacy";
 
 type UserSettingsFormState = {
   isOpen: boolean;
@@ -132,7 +134,9 @@ export function useWorkspaceShell() {
   const identity = useIdentityStore();
   const registry = useServerRegistryStore();
   const session = useSessionStore();
+  const settings = useSettingsStore();
   const isMacOS = /mac/i.test(window.navigator.userAgent);
+  const notificationSettingsTargetId = ref<string | null>(null);
 
   const runtime = ref<RuntimeInfo | null>(null);
   const appVersion = ref<string>("0.0.0");
@@ -600,11 +604,16 @@ export function useWorkspaceShell() {
 
     isHydrating.value = true;
     try {
+      let probedCapabilities: ServerCapabilities | null = null;
       try {
-        const capabilities = await fetchServerCapabilities(server.backendUrl);
-        registry.setCapabilities(server.serverId, capabilities);
+        probedCapabilities = await fetchServerCapabilities(server.backendUrl);
       } catch (_error) {
         // Keep previously-cached capabilities when probe fails.
+      }
+      if (probedCapabilities) {
+        identity.revokeConsentForScopeChange(server.serverId, server.backendUrl,
+          server.capabilities?.profile?.scope ?? null, probedCapabilities.profile?.scope ?? null);
+        registry.setCapabilities(server.serverId, probedCapabilities);
       }
       if (server.capabilities?.profile && !server.capabilities.profile.enabled) {
         chat.setProfileSyncAvailability(serverId, false);
@@ -664,6 +673,13 @@ export function useWorkspaceShell() {
 
   async function removeServerFromClient(serverId: string, reasonMessage: string): Promise<void> {
     const wasActiveServer = appUI.activeServerId === serverId;
+    const removedServer = registry.byId(serverId);
+    let consentClearError = "";
+    if (removedServer) {
+      try { identity.clearServerProfileConsent(serverId, removedServer.backendUrl); }
+      catch (error) { consentClearError = (error as Error).message; }
+    }
+    const notice = consentClearError ? `${reasonMessage} ${consentClearError}` : reasonMessage;
     chat.clearServerData(serverId);
     call.clearServerState(serverId);
     session.clearSession(serverId);
@@ -672,18 +688,18 @@ export function useWorkspaceShell() {
 
     if (registry.servers.length === 0) {
       appUI.setActiveServer("");
-      startupError.value = reasonMessage;
+      startupError.value = notice;
       return;
     }
 
     if (!wasActiveServer) {
-      startupError.value = reasonMessage;
+      startupError.value = notice;
       return;
     }
 
     const fallbackServerID = registry.servers[0].serverId;
     appUI.setActiveServer(fallbackServerID);
-    startupError.value = reasonMessage;
+    startupError.value = notice;
     await hydrateServerWithReachabilityHandling(fallbackServerID);
   }
 
@@ -706,7 +722,43 @@ export function useWorkspaceShell() {
 
   const onMediaDeviceChange = (): void => { void call.handleMediaDeviceChange(); };
 
+  function onAppShortcut(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.repeat || userSettingsForm.value.isOpen || document.querySelector('[aria-modal="true"]')) return;
+    const chord = canonicalShortcut(event, isMacOS);
+    if (!chord) return;
+    const action = shortcutActions.find((item) => settings.shortcuts[item] === chord);
+    if (!action) return;
+    if (document.querySelector('[role="menu"]')) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const typing = Boolean(target?.closest("input, textarea, select, [contenteditable], [role='textbox']"));
+    if (typing && !["settings", "composer", "channelFilter"].includes(action)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    runAppShortcut(action);
+  }
+
+  function runAppShortcut(action: ShortcutAction): void {
+    if (action === "settings") { openUserSettings("my_account"); return; }
+    if (action === "composer") { document.querySelector<HTMLTextAreaElement>('[data-shortcut-target="composer"]')?.focus(); return; }
+    if (action === "channelFilter") { document.querySelector<HTMLInputElement>('[data-shortcut-target="channel-filter"]')?.focus(); return; }
+    if (action === "members") { toggleMembersPane(); return; }
+    if (action === "microphone") { toggleMic(); return; }
+    if (action === "deafen") { toggleDeafen(); return; }
+    if (action === "previousServer" || action === "nextServer") {
+      const ids = registry.servers.map((server) => server.serverId);
+      const index = ids.indexOf(appUI.activeServerId);
+      const next = ids[index + (action === "nextServer" ? 1 : -1)];
+      if (next) void selectServer(next);
+      return;
+    }
+    const channels = rawChannelGroups.value.flatMap((group) => group.channels.filter((channel) => channel.type === "text"));
+    const index = channels.findIndex((channel) => channel.id === appUI.activeChannelId);
+    const next = channels[index + (action === "nextChannel" ? 1 : -1)];
+    if (next) void selectChannel(next.id);
+  }
+
   onMounted(async () => {
+    window.addEventListener("keydown", onAppShortcut, true);
     identity.initializeIdentity();
     chat.hydrateNotificationPreferences();
     registry.hydrateFromStorage();
@@ -754,6 +806,7 @@ export function useWorkspaceShell() {
   });
 
   onBeforeUnmount(() => {
+    window.removeEventListener("keydown", onAppShortcut, true);
     navigator.mediaDevices?.removeEventListener?.("devicechange", onMediaDeviceChange);
     closeCreateChannelModal();
     closeCreateCategoryModal();
@@ -1185,7 +1238,8 @@ export function useWorkspaceShell() {
     }
   }
 
-  function openUserSettings(initialTab: UserSettingsTabID): void {
+  function openUserSettings(initialTab: UserSettingsTabID, notificationServerId: string | null = null): void {
+    notificationSettingsTargetId.value = initialTab === "notifications" ? notificationServerId : null;
     userSettingsForm.value = {
       isOpen: true,
       initialTab
@@ -1212,6 +1266,37 @@ export function useWorkspaceShell() {
       isOpen: false,
       initialTab: "my_account"
     };
+    notificationSettingsTargetId.value = null;
+  }
+
+  async function syncConsentedProfiles(): Promise<void> {
+    await Promise.allSettled(registry.servers.map(async (server) => {
+      const capability = server.capabilities?.profile;
+      if (!capability?.enabled || !identity.hasProfileConsent(server.serverId, server.backendUrl, capability.scope)) return;
+      await chat.syncLocalProfile({
+        serverId: server.serverId, backendUrl: server.backendUrl,
+        userUID: identity.getUIDForServer(server.serverId), deviceID: localDeviceID.value,
+        displayName: identity.profileDisplayName, avatarMode: identity.avatarMode,
+        avatarPresetId: identity.avatarPresetId, avatarImageDataUrl: identity.avatarImageDataUrl
+      });
+    }));
+  }
+
+  function saveLocalProfile(profile: { username: string; avatarMode: "generated" | "uploaded"; avatarPresetId: string; avatarImageDataUrl: string | null }): void {
+    identity.updateLocalProfile(profile.username, profile.avatarMode, profile.avatarPresetId, profile.avatarImageDataUrl);
+    void syncConsentedProfiles();
+  }
+
+  function setProfileConsent(granted: boolean): void {
+    const server = activeServer.value;
+    const capability = server?.capabilities?.profile;
+    if (!server || !capability?.enabled) return;
+    try {
+      identity.setProfileConsent(server.serverId, server.backendUrl, capability.scope, granted);
+      if (granted) void syncConsentedProfiles();
+    } catch (error) {
+      startupError.value = (error as Error).message;
+    }
   }
 
   function cycleUIDMode(): void {
@@ -2172,6 +2257,20 @@ export function useWorkspaceShell() {
     userUID: activeSession.value?.userUID ?? "uid_unbound",
     uidMode: identity.uidMode,
     disclosureMessage: identity.disclosureMessage,
+    avatarMode: identity.avatarMode,
+    avatarPresetId: identity.avatarPresetId,
+    avatarImageDataUrl: identity.avatarImageDataUrl,
+    serverId: activeServer.value?.serverId ?? "",
+    serverName: activeServer.value?.displayName ?? "",
+    notificationServerId: registry.byId(notificationSettingsTargetId.value ?? appUI.activeServerId)?.serverId ?? "",
+    notificationServerName: registry.byId(notificationSettingsTargetId.value ?? appUI.activeServerId)?.displayName ?? "",
+    backendUrl: activeServer.value?.backendUrl ?? "",
+    profileScope: activeServer.value?.capabilities?.profile?.scope ?? null,
+    profileEnabled: activeServer.value?.capabilities?.profile?.enabled ?? false,
+    profileConsent: activeServer.value?.capabilities?.profile?.scope
+      ? identity.hasProfileConsent(activeServer.value.serverId, activeServer.value.backendUrl, activeServer.value.capabilities.profile.scope)
+      : false,
+    profileSyncError: chat.profileSyncStateByServer[appUI.activeServerId]?.errorMessage ?? null,
     startupError: startupError.value,
     inputDevices: call.inputDevices,
     selectedInputDeviceId: call.selectedInputDeviceId,
@@ -2199,6 +2298,9 @@ export function useWorkspaceShell() {
     toggleServerMuted: (serverId: string) => {
       chat.toggleServerMuted(serverId);
     },
+    openNotificationSettings: (serverId: string) => {
+      openUserSettings("notifications", serverId);
+    },
     leaveServer
   };
 
@@ -2211,6 +2313,8 @@ export function useWorkspaceShell() {
     deleteCategory: openDeleteCategoryModal,
     reorderChannelTree: submitChannelTreeLayout,
     openServerSettings: openServerSettingsModal,
+    openNotificationSettings: () => openUserSettings("notifications"),
+    openPrivacySettings: () => openUserSettings("identity_privacy"),
     updateFilter: setChannelFilter,
     markChannelsRead
   };
@@ -2229,6 +2333,7 @@ export function useWorkspaceShell() {
     selectOutputDevice,
     updateOutputVolume,
     openUserSettings: openUserSettingsFromDock,
+    editProfile: () => openUserSettings("my_account"),
     openVoiceSettings: openVoiceSettingsFromDock
   };
 
@@ -2299,7 +2404,9 @@ export function useWorkspaceShell() {
     stopMicTest,
     startCameraTest,
     stopCameraTest,
-    toggleUidMode: cycleUIDMode
+    toggleUidMode: cycleUIDMode,
+    saveProfile: saveLocalProfile,
+    setProfileConsent
   };
 
   const screenSharePickerListeners = {

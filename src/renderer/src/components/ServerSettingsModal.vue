@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 
 type SettingsTabID = "profile" | "engagement" | "moderation" | "integrations";
 
@@ -18,6 +19,8 @@ const emit = defineEmits<{
   close: [];
   submit: [payload: { displayName: string; description: string; bannerPreset: string }];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 
 const activeTab = ref<SettingsTabID>("profile");
 const draftDisplayName = ref("");
@@ -67,7 +70,7 @@ function submit(): void {
 
 <template>
   <div v-if="isOpen" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="server-modal server-settings-modal" role="dialog" aria-modal="true" aria-label="Server settings">
+    <section ref="dialogElement" class="server-modal server-settings-modal" role="dialog" aria-modal="true" aria-label="Server settings" tabindex="-1">
       <header>
         <h3>Server Settings</h3>
         <button type="button" class="server-modal-close" :disabled="isSubmitting" @click="emit('close')">Close</button>

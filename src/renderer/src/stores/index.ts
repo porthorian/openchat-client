@@ -5,3 +5,4 @@ export * from "./clientUpdate";
 export * from "./identity";
 export * from "./serverRegistry";
 export * from "./session";
+export * from "./settings";

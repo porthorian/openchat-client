@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { mdiChevronRight, mdiPencilOutline, mdiPlusCircleOutline } from "@mdi/js";
 import type { AvatarMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
+import { useMenuKeyboard } from "@renderer/composables/useMenuKeyboard";
 import AppIcon from "./AppIcon.vue";
 
 type PresenceStatus = "online" | "idle" | "busy" | "invisible";
@@ -25,6 +26,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:presenceStatus": [status: PresenceStatus];
+  editProfile: [];
 }>();
 
 const presenceOptions: PresenceOption[] = [
@@ -38,7 +40,7 @@ const presenceOptions: PresenceOption[] = [
   {
     value: "invisible",
     label: "Invisible",
-    description: "You will appear offline"
+    description: "Shown as offline in this client"
   }
 ];
 
@@ -50,7 +52,9 @@ const presenceLabels: Record<PresenceStatus, string> = {
 };
 
 const statusTriggerRef = ref<HTMLElement | null>(null);
+const statusMenuRef = ref<HTMLElement | null>(null);
 const statusMenuOpen = ref(false);
+const statusMenuKeyboard = useMenuKeyboard(statusMenuRef, closeStatusMenu);
 const statusMenuPosition = ref({ x: 0, y: 0 });
 let statusMenuCloseTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -113,6 +117,7 @@ function openStatusMenu(): void {
 function scheduleStatusMenuClose(): void {
   clearStatusMenuCloseTimer();
   statusMenuCloseTimer = setTimeout(() => {
+    if (statusMenuRef.value?.contains(document.activeElement)) return;
     statusMenuOpen.value = false;
   }, 120);
 }
@@ -124,7 +129,7 @@ function closeStatusMenu(): void {
 
 function setPresenceStatus(status: PresenceStatus): void {
   emit("update:presenceStatus", status);
-  closeStatusMenu();
+  statusMenuKeyboard.closeAndReturn();
 }
 
 function onWindowPointerDown(event: PointerEvent): void {
@@ -142,7 +147,7 @@ function onWindowResize(): void {
 
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
-    closeStatusMenu();
+    if (statusMenuOpen.value) statusMenuKeyboard.closeAndReturn();
   }
 }
 
@@ -183,7 +188,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="profile-panel">
-      <button type="button" class="profile-row">
+      <button type="button" class="profile-row" @click="emit('editProfile')">
         <span class="profile-row-left">
           <AppIcon :path="mdiPencilOutline" :size="14" />
           <span>Edit Profile</span>
@@ -198,6 +203,10 @@ onBeforeUnmount(() => {
           type="button"
           class="profile-row profile-status-trigger"
           :class="{ 'is-active': statusMenuOpen }"
+          :aria-expanded="statusMenuOpen"
+          aria-haspopup="menu"
+          aria-controls="profile-status-options"
+          @click="openStatusMenu(); statusMenuKeyboard.openedBy(statusTriggerRef)"
           @mouseenter="openStatusMenu"
           @mouseleave="scheduleStatusMenuClose"
         >
@@ -210,7 +219,12 @@ onBeforeUnmount(() => {
 
         <div
           v-if="statusMenuOpen"
+          ref="statusMenuRef"
+          id="profile-status-options"
           class="status-hover-menu"
+          role="menu"
+          aria-label="Presence status"
+          @keydown="statusMenuKeyboard.onKeydown"
           :style="{ left: `${statusMenuPosition.x}px`, top: `${statusMenuPosition.y}px` }"
           @mouseenter="openStatusMenu"
           @mouseleave="scheduleStatusMenuClose"
@@ -220,6 +234,8 @@ onBeforeUnmount(() => {
             :key="option.value"
             type="button"
             class="status-menu-item"
+            role="menuitemradio"
+            :aria-checked="option.value === presenceStatus"
             :class="{ 'is-active': option.value === presenceStatus }"
             @click="setPresenceStatus(option.value)"
           >

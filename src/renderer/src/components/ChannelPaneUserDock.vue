@@ -11,6 +11,7 @@ import {
 } from "@mdi/js";
 import type { AvatarMode } from "@renderer/types/models";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
+import { useSettingsStore } from "@renderer/stores/settings";
 import AppIcon from "./AppIcon.vue";
 import ChannelVoiceConnectedCard from "./ChannelVoiceConnectedCard.vue";
 import ProfilePanelCard from "./ProfilePanelCard.vue";
@@ -72,11 +73,13 @@ const emit = defineEmits<{
   selectOutputDevice: [deviceId: string];
   updateOutputVolume: [value: number];
   openUserSettings: [];
+  editProfile: [];
   openVoiceSettings: [];
 }>();
 
 const profileCardOpen = ref(false);
-const presenceStatus = ref<PresenceStatus>("online");
+const settings = useSettingsStore();
+const presenceStatus = computed(() => settings.presenceStatus);
 const inputSettingsMenuOpen = ref(false);
 const outputSettingsMenuOpen = ref(false);
 const outputDeviceListOpen = ref(false);
@@ -158,7 +161,7 @@ function closeProfileCard(): void {
 }
 
 function setPresenceStatus(status: PresenceStatus): void {
-  presenceStatus.value = status;
+  settings.setNotificationPreference({ presenceStatus: status });
 }
 
 function toggleInputSettingsMenu(): void {
@@ -546,7 +549,7 @@ onBeforeUnmount(() => {
             </section>
           </div>
 
-          <button type="button" class="user-settings-btn" @click="openUserSettings">
+          <button type="button" class="user-settings-btn" aria-label="Open user settings" @click="openUserSettings">
             <AppIcon :path="mdiCogOutline" :size="16" />
           </button>
         </div>
@@ -563,6 +566,7 @@ onBeforeUnmount(() => {
       :profile-avatar-image-data-url="profileAvatarImageDataUrl"
       :presence-status="presenceStatus"
       @update:presence-status="setPresenceStatus"
+      @edit-profile="closeProfileCard(); emit('editProfile')"
     />
   </footer>
 </template>

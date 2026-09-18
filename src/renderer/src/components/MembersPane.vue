@@ -29,7 +29,7 @@ const emit = defineEmits<{
   <aside class="members-pane" :class="{ 'is-collapsed': !isOpen }">
     <header>
       <h3>{{ title ?? "Online" }} - {{ members.length }}</h3>
-      <button type="button" class="members-close" @click="emit('close')">
+      <button type="button" class="members-close" aria-label="Close members pane" @click="emit('close')">
         <AppIcon :path="mdiChevronRight" :size="18" />
       </button>
     </header>

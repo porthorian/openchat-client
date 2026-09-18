@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 import type { ChannelGroup, ChannelType } from "@renderer/types/chat";
 import { selectCreateChannelDefaults } from "@renderer/stores/chat/channelGroups";
 
@@ -16,6 +17,8 @@ const emit = defineEmits<{
   close: [];
   submit: [payload: { name: string; type: ChannelType; groupId: string }];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 
 const channelName = ref("");
 const selectedType = ref<ChannelType>("text");
@@ -63,7 +66,7 @@ function submit(): void {
 
 <template>
   <div v-if="isOpen" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="server-modal create-channel-modal" role="dialog" aria-modal="true" aria-label="Create channel">
+    <section ref="dialogElement" class="server-modal create-channel-modal" role="dialog" aria-modal="true" aria-label="Create channel" tabindex="-1">
       <header>
         <h3>Create Channel</h3>
         <button type="button" class="server-modal-close" :disabled="isSubmitting" @click="emit('close')">Close</button>

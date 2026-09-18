@@ -23,10 +23,10 @@ defineProps<{
 <template>
   <header class="taskbar">
     <div class="taskbar-left">
-      <button type="button" class="taskbar-btn" aria-label="Back">
+      <button type="button" class="taskbar-btn" aria-label="Back (unavailable)" disabled>
         <AppIcon :path="mdiArrowLeft" :size="16" />
       </button>
-      <button type="button" class="taskbar-btn" aria-label="Forward">
+      <button type="button" class="taskbar-btn" aria-label="Forward (unavailable)" disabled>
         <AppIcon :path="mdiArrowRight" :size="16" />
       </button>
     </div>

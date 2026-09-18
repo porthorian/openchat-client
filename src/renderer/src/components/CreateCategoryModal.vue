@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 
 const props = defineProps<{
   isOpen: boolean;
@@ -13,6 +14,8 @@ const emit = defineEmits<{
   close: [];
   submit: [payload: { name: string; kind: "text" | "voice" }];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 
 const categoryName = ref("");
 const categoryKind = ref<"text" | "voice">("text");
@@ -46,7 +49,7 @@ function submit(): void {
 
 <template>
   <div v-if="isOpen" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="server-modal create-channel-modal" role="dialog" aria-modal="true" aria-label="Create category">
+    <section ref="dialogElement" class="server-modal create-channel-modal" role="dialog" aria-modal="true" aria-label="Create category" tabindex="-1">
       <header>
         <h3>Create Category</h3>
         <button type="button" class="server-modal-close" :disabled="isSubmitting" @click="emit('close')">Close</button>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { mdiChevronRight, mdiPlus } from "@mdi/js";
 import type { ServerProfile } from "@renderer/types/models";
+import { useMenuKeyboard } from "@renderer/composables/useMenuKeyboard";
 import AppIcon from "./AppIcon.vue";
 import openchatLogo from "../../../../logo_white.png";
 
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   selectServer: [serverId: string];
   addServer: [];
   toggleServerMuted: [serverId: string];
+  openNotificationSettings: [serverId: string];
   leaveServer: [serverId: string];
 }>();
 
@@ -33,6 +35,8 @@ const serverContextMenu = ref<ServerContextMenuState>({
   y: 0,
   serverId: ""
 });
+const menuElement = ref<HTMLElement | null>(null);
+const menuKeyboard = useMenuKeyboard(menuElement, closeServerContextMenu);
 
 const selectedContextServer = computed(() => {
   if (!serverContextMenu.value.serverId) return null;
@@ -61,6 +65,14 @@ function openServerContextMenu(serverId: string, event: MouseEvent): void {
     y: boundedY,
     serverId
   };
+  void menuKeyboard.openedBy(event.currentTarget as HTMLElement | null);
+}
+
+function openServerContextMenuWithKeyboard(serverId: string, event: KeyboardEvent): void {
+  if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+  event.preventDefault();
+  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  openServerContextMenu(serverId, { preventDefault() {}, clientX: bounds.left, clientY: bounds.bottom, currentTarget: event.currentTarget } as MouseEvent);
 }
 
 function handleSelectServer(serverId: string): void {
@@ -80,6 +92,13 @@ function toggleServerMuted(): void {
   closeServerContextMenu();
 }
 
+function openNotificationSettings(): void {
+  const serverId = serverContextMenu.value.serverId;
+  if (!serverId) return;
+  menuKeyboard.closeAndReturn();
+  void nextTick(() => emit("openNotificationSettings", serverId));
+}
+
 function leaveServerFromContextMenu(): void {
   const serverId = serverContextMenu.value.serverId;
   if (!serverId) return;
@@ -96,7 +115,7 @@ function onWindowPointerDown(event: PointerEvent): void {
 
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
-    closeServerContextMenu();
+    if (serverContextMenu.value.open) menuKeyboard.closeAndReturn();
   }
 }
 
@@ -122,12 +141,15 @@ onBeforeUnmount(() => {
       :key="server.serverId"
       type="button"
       class="server-dot"
+      :aria-label="server.displayName"
+      aria-haspopup="menu"
       :class="{
         'is-active': server.serverId === activeServerId,
         'is-unverified': server.trustState === 'unverified'
       }"
       @click="handleSelectServer(server.serverId)"
       @contextmenu.prevent="openServerContextMenu(server.serverId, $event)"
+      @keydown="openServerContextMenuWithKeyboard(server.serverId, $event)"
     >
       <span>{{ server.iconText }}</span>
       <span v-if="(mentionByServer[server.serverId] ?? 0) > 0" class="server-unread-badge server-mention-badge">
@@ -144,8 +166,10 @@ onBeforeUnmount(() => {
 
     <section
       v-if="serverContextMenu.open"
+      ref="menuElement"
       class="server-context-menu"
       role="menu"
+      @keydown="menuKeyboard.onKeydown"
       aria-label="Server actions"
       :style="{ left: `${serverContextMenu.x}px`, top: `${serverContextMenu.y}px` }"
     >
@@ -166,10 +190,10 @@ onBeforeUnmount(() => {
       >
         {{ selectedContextServerMuted ? "Unmute Server" : "Mute Server" }}
       </button>
-      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">
+      <button type="button" class="server-context-item" role="menuitem" @click="openNotificationSettings">
         <span class="server-context-copy">
           Notification Settings
-          <small>Only @mentions</small>
+          <small>Choose All, Mentions, or Off</small>
         </span>
         <span class="server-context-trailing">
           <AppIcon :path="mdiChevronRight" :size="14" />

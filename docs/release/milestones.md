@@ -1,6 +1,6 @@
 # Release Milestones
 
-Last updated: 2026-02-22
+Last updated: 2026-09-18
 
 ## M0: Project Foundation
 - Status: `done`
@@ -31,5 +31,6 @@ Last updated: 2026-02-22
 - Current focus:
   - RTC hardening (reconnect stability, device handling, media error states).
   - Documentation alignment with implemented behavior.
-  - Accessibility and settings follow-up pass.
+  - Settings store, sections, profile editor, notification controls, remappable shortcuts, and initial accessibility tests implemented; feature remains in progress pending app-wide WCAG audit and platform screen-reader checks.
+  - Profile publication remains disabled pending ADR-0009 security signoff.
   - CI/release hardening and updater flow validation.

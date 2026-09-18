@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 import type { AvatarMode, OnboardingSetupInput } from "@renderer/types/models";
 import { DEFAULT_AVATAR_PRESET_ID, GENERATED_AVATAR_PRESETS, avatarPresetById } from "@renderer/utils/avatarPresets";
 
@@ -23,6 +24,8 @@ const hasViewedTermsOfService = ref(false);
 const hasAcceptedPrivacyPolicy = ref(false);
 const hasAcceptedTermsOfService = ref(false);
 const activePolicyDocument = ref<PolicyDocument | null>(null);
+const policyDialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => activePolicyDocument.value !== null, policyDialogElement, closePolicyDocument);
 
 const previewName = computed(() => {
   const trimmed = username.value.trim();
@@ -303,9 +306,9 @@ function completeSetup(): void {
       </template>
 
       <div v-if="activePolicyDocument" class="policy-modal-backdrop" role="presentation" @click.self="closePolicyDocument">
-        <section class="policy-modal" role="dialog" aria-modal="true">
+        <section ref="policyDialogElement" class="policy-modal" role="dialog" aria-modal="true" aria-labelledby="policy-title" tabindex="-1">
           <header>
-            <h2>{{ activePolicyDocument === "privacy" ? "Privacy Policy" : "Terms of Service" }}</h2>
+            <h2 id="policy-title">{{ activePolicyDocument === "privacy" ? "Privacy Policy" : "Terms of Service" }}</h2>
             <button type="button" class="policy-close-btn" @click="closePolicyDocument">Close</button>
           </header>
           <div class="policy-copy">

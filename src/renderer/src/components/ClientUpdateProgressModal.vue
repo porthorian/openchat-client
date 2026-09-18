@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 
 const props = defineProps<{
   isOpen: boolean;
@@ -14,6 +15,8 @@ const emit = defineEmits<{
   retry: [];
   install: [];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 
 const displayPercent = computed(() => {
   if (props.progressPercent === null) return null;
@@ -50,7 +53,7 @@ const statusMessage = computed(() => {
 
 <template>
   <div v-if="isOpen" class="update-progress-backdrop" role="presentation">
-    <section class="update-progress-modal" role="dialog" aria-modal="true" aria-label="Downloading client update">
+    <section ref="dialogElement" class="update-progress-modal" role="dialog" aria-modal="true" aria-label="Downloading client update" tabindex="-1">
       <h3>{{ modalTitle }}</h3>
       <p>{{ statusMessage }}</p>
 

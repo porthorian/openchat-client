@@ -25,13 +25,13 @@ const emit = defineEmits<{
       <span class="toolbar-connection-chip" :class="`is-${connectionTone}`" :title="connectionDetail">{{ connectionLabel }}</span>
     </div>
     <div class="chat-toolbar-right">
-      <button type="button" class="toolbar-icon">
+      <button type="button" class="toolbar-icon" aria-label="Pinned messages (unavailable)" disabled>
         <AppIcon :path="mdiPinOutline" :size="18" />
       </button>
-      <button type="button" class="toolbar-icon">
+      <button type="button" class="toolbar-icon" aria-label="Threads (unavailable)" disabled>
         <AppIcon :path="mdiMessageTextOutline" :size="18" />
       </button>
-      <button type="button" class="toolbar-icon" :class="{ 'is-active': membersPaneOpen }" @click="emit('toggleMembersPane')">
+      <button type="button" class="toolbar-icon" :class="{ 'is-active': membersPaneOpen }" :aria-pressed="membersPaneOpen" aria-label="Toggle members pane" @click="emit('toggleMembersPane')">
         <AppIcon :path="mdiAccountMultiple" :size="18" />
       </button>
       <label class="toolbar-search-wrap">

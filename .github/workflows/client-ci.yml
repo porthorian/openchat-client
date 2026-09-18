@@ -45,5 +45,14 @@ jobs:
       - name: Test RTC
         run: corepack yarn test:rtc
 
+      - name: Test Settings
+        run: corepack yarn test:settings
+
+      - name: Test Components
+        run: corepack yarn test:components
+
       - name: Build
         run: corepack yarn build
+
+      - name: Electron accessibility smoke
+        run: xvfb-run -a corepack yarn test:e2e

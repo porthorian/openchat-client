@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 import { mdiClose } from "@mdi/js";
 import AppIcon from "./AppIcon.vue";
 
@@ -14,11 +16,13 @@ const emit = defineEmits<{
   close: [];
   submit: [];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 </script>
 
 <template>
   <div v-if="isOpen" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="server-modal delete-category-modal" role="dialog" aria-modal="true" aria-label="Delete category">
+    <section ref="dialogElement" class="server-modal delete-category-modal" role="dialog" aria-modal="true" aria-label="Delete category" tabindex="-1">
       <header class="delete-category-modal-header">
         <h3>Delete Category</h3>
         <button type="button" class="delete-category-modal-close" :disabled="isSubmitting" aria-label="Close" @click="emit('close')">

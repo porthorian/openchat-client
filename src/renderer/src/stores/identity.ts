@@ -2,8 +2,11 @@ import { defineStore } from "pinia";
 import { DEFAULT_AVATAR_PRESET_ID } from "@renderer/utils/avatarPresets";
 import { projectUID } from "@renderer/utils/uid";
 import type { AvatarMode, OnboardingSetupInput, UIDMode } from "@renderer/types/models";
+import type { ProfileScope } from "@renderer/types/capabilities";
+import { parseProfileConsent, profileConsentKey, type ProfileConsentData } from "./profileConsent";
 
 const IDENTITY_STORAGE_KEY = "openchat.identity.v1";
+const PROFILE_CONSENT_STORAGE_KEY = "openchat.profile-consent.v1";
 
 type PersistedIdentityState = {
   rootIdentityId: string;
@@ -102,13 +105,14 @@ export const useIdentityStore = defineStore("identity", {
     privacyPolicyAcceptedAt: null as string | null,
     termsOfServiceAcceptedAt: null as string | null,
     hasViewedPrivacyPolicy: false,
-    hasViewedTermsOfService: false
+    hasViewedTermsOfService: false,
+    profileConsentByTarget: {} as ProfileConsentData
   }),
   getters: {
     disclosureMessage(state): string {
       return state.uidMode === "server_scoped"
-        ? "This server sees only a server-scoped UID and proof."
-        : "This server sees only a global UID and proof.";
+        ? "By default, servers receive a server-scoped UID and required proof. Profile sharing is optional below."
+        : "By default, servers receive a global UID and required proof. Profile sharing is optional below.";
     },
     profileDisplayName(state): string {
       const normalized = normalizeUsername(state.username);
@@ -162,6 +166,11 @@ export const useIdentityStore = defineStore("identity", {
         this.hasViewedPrivacyPolicy = persisted.hasViewedPrivacyPolicy;
         this.hasViewedTermsOfService = persisted.hasViewedTermsOfService;
       }
+      try {
+        this.profileConsentByTarget = parseProfileConsent(window.localStorage.getItem(PROFILE_CONSENT_STORAGE_KEY));
+      } catch {
+        this.profileConsentByTarget = {};
+      }
       this.isInitialized = true;
     },
     completeSetup(payload: OnboardingSetupInput): void {
@@ -208,6 +217,67 @@ export const useIdentityStore = defineStore("identity", {
     setUIDMode(mode: UIDMode): void {
       this.uidMode = mode;
       this.persistIdentity();
+    },
+    updateLocalProfile(username: string, avatarMode: AvatarMode, avatarPresetId: string, avatarImageDataUrl: string | null): void {
+      const normalized = normalizeUsername(username);
+      if (!normalized) throw new Error("Display name is required.");
+      if (avatarMode === "uploaded" && !avatarImageDataUrl) throw new Error("Choose an avatar image.");
+      this.username = normalized;
+      this.avatarMode = avatarMode;
+      this.avatarPresetId = avatarPresetId || DEFAULT_AVATAR_PRESET_ID;
+      this.avatarImageDataUrl = avatarMode === "uploaded" ? avatarImageDataUrl : null;
+      this.persistIdentity();
+    },
+    hasProfileConsent(serverId: string, backendUrl: string, scope: ProfileScope): boolean {
+      const key = profileConsentKey(serverId, backendUrl, scope);
+      return Boolean(key && this.profileConsentByTarget[key]);
+    },
+    clearServerProfileConsent(serverId: string, backendUrl: string): void {
+      const key = profileConsentKey(serverId, backendUrl, "server_scoped");
+      if (!key || !this.profileConsentByTarget[key]) return;
+      const next = { ...this.profileConsentByTarget };
+      delete next[key];
+      try {
+        window.localStorage.setItem(PROFILE_CONSENT_STORAGE_KEY, JSON.stringify({ version: 1, grants: next }));
+        this.profileConsentByTarget = next;
+      } catch {
+        this.profileConsentByTarget = {};
+        try { window.localStorage.removeItem(PROFILE_CONSENT_STORAGE_KEY); return; } catch { /* Fail closed in memory. */ }
+        throw new Error("Could not clear this server's profile sharing consent.");
+      }
+    },
+    revokeConsentForScopeChange(serverId: string, backendUrl: string, previousScope: ProfileScope | null, nextScope: ProfileScope | null): void {
+      if (!previousScope || previousScope === nextScope) return;
+      const next = { ...this.profileConsentByTarget };
+      for (const scope of ["global", "server_scoped"] as const) {
+        const key = profileConsentKey(serverId, backendUrl, scope);
+        if (key) delete next[key];
+      }
+      try {
+        window.localStorage.setItem(PROFILE_CONSENT_STORAGE_KEY, JSON.stringify({ version: 1, grants: next }));
+        this.profileConsentByTarget = next;
+      } catch {
+        this.profileConsentByTarget = {};
+        try { window.localStorage.removeItem(PROFILE_CONSENT_STORAGE_KEY); return; } catch { /* Fail closed in memory. */ }
+        throw new Error("Profile capability changed but consent could not be cleared. Profile sharing is disabled for this session.");
+      }
+    },
+    setProfileConsent(serverId: string, backendUrl: string, scope: ProfileScope, granted: boolean): void {
+      const key = profileConsentKey(serverId, backendUrl, scope);
+      if (!key) throw new Error("Cannot save sharing choice for an invalid server endpoint.");
+      const next = { ...this.profileConsentByTarget };
+      if (granted) next[key] = { grantedAt: new Date().toISOString() };
+      else delete next[key];
+      try {
+        window.localStorage.setItem(PROFILE_CONSENT_STORAGE_KEY, JSON.stringify({ version: 1, grants: next }));
+        this.profileConsentByTarget = next;
+      } catch {
+        if (!granted) {
+          this.profileConsentByTarget = {};
+          try { window.localStorage.removeItem(PROFILE_CONSENT_STORAGE_KEY); return; } catch { /* Fail closed in memory. */ }
+        }
+        throw new Error("Could not save profile sharing consent on this device.");
+      }
     }
   }
 });

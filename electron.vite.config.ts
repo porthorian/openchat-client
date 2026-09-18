@@ -9,7 +9,9 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
-      rollupOptions: {
+      // Vite 8 uses Rolldown options here; keep Electron external to the sandboxed preload.
+      rolldownOptions: {
+        external: ["electron"],
         output: {
           format: "cjs",
           entryFileNames: "[name].cjs",

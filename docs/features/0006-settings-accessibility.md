@@ -1,113 +1,64 @@
-# Feature: Settings and Accessibility Foundations
+# Feature: Client settings and accessibility
 
-- Status: In progress (baseline controls implemented, dedicated settings shell pending)
+- Status: In progress; release gates below remain open
 - Owners: Maintainers
-- Last Updated: 2026-09-17
-- Related ADRs: `docs/architecture/adrs/0008-local-vue-components.md`, `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0005-user-owned-identity.md`
-- Related Issues: TBD
+- Last updated: 2026-09-18
+- Related ADRs: ADR-0002, ADR-0005, ADR-0008, proposed ADR-0009
 
-## Problem Statement
-Users need consistent settings and accessibility controls so the client remains usable across preferences, devices, and assistive technologies.
+## Problem and user flows
 
-## User Stories
-- As a user, I want to control appearance and behavior settings so that the app fits my workflow.
-- As a user, I want keyboard and accessibility controls so that the app is usable without a mouse.
-- As a user, I want settings to persist safely across sessions on this device.
+Users need one place to edit local profile, appearance, keyboard shortcuts, notifications, accessibility preferences, identity disclosure, and call devices. The settings dialog opens from the dock, profile panel, server notification menus, and the Settings shortcut. Changes apply immediately and persist locally where appropriate. The app targets WCAG 2.2 AA across onboarding, chat, calls, and overlays.
 
-## Scope
-### In Scope
-- Current implemented baseline controls:
-  - identity disclosure panel (`user_uid` sharing summary) and UID mode toggle
-  - profile presence status picker (`online`, `idle`, `busy`, `invisible`) in user dock panel
-  - per-server notification mute toggle via server context menu
-  - voice input/output device selectors and volume controls
-  - members pane visibility toggle
-- Persistence of non-sensitive settings currently in domain stores:
-  - identity/profile setup state
-  - muted server list
-  - server registry and active-channel context
-- Planned settings shell categories:
-  - appearance
-  - keybinds
-  - notifications
-  - accessibility
-  - identity/privacy
+## User stories
 
-### Out of Scope
-- Fully routed, dedicated settings modal/screen shell (not shipped yet).
-- Keybind remapping UX.
-- Reduced motion and high-contrast user toggles.
-- Identity backup/export and key rotation workflows.
-- Cloud sync of user preferences.
-- Full localization and language packs.
-- Enterprise policy enforcement.
-- Automatic upload of identity profile data to servers.
+- As a user, I can change appearance and keyboard behavior and keep the choices after restart.
+- As a user, I can control desktop alerts for each server and see OS permission state.
+- As a user, I can edit my local profile without automatically sending it to a server.
+- As a keyboard or screen-reader user, I can complete the same onboarding, chat, call, and settings tasks.
 
-## UX Flow
-1. User opens profile and audio controls from the bottom user dock.
-2. User adjusts presence, UID mode, microphone/speaker device, and volume controls.
-3. User can mute a server from server context menu for notification control.
-4. Client applies changes immediately and persists non-sensitive values where supported.
+## Backend capability assumptions
 
-## UI States
-- Loading: device list refresh, profile hydration, or store initialization.
-- Empty: defaults active (no user overrides).
-- Success: control updates apply immediately.
-- Error: device selection failure, unavailable output switching, or persistence failure.
-- Degraded/Offline: local settings still usable without backend dependency.
+All settings except optional profile publication are local. Publication uses the existing profile capability and update API only. The capability must advertise enabled status and either `server_scoped` or `global` scope. No backend service code or new endpoint is required.
 
-## Backend Capability Assumptions
-- No backend dependency for baseline settings.
-- Optional future capability flags may inform server-specific defaults.
+## Client data and migration
 
-## Client Data Model and State Impact
-- Stores touched:
-  - `useIdentityStore` (profile + UID mode)
-  - `useChatStore` (server notification mute preferences)
-  - `useCallStore` (voice device and volume state)
-  - `useAppUiStore` (pane/layout toggles)
-- Planned future store: `useSettingsStore` for unified settings categories and schema versioning.
-- Caches affected: local settings cache.
-- Persistence requirements:
-  - persist only non-sensitive values
-  - schema versioning for settings migrations
+- `useSettingsStore` hydrates before the first Vue render and writes normalized, non-sensitive preferences to `openchat.settings.v1`.
+- Defaults: dark theme, system-following contrast and motion, 100% text, notifications enabled, previews on, sound off, online local presence, per-server policy All.
+- Settings normalization falls back per invalid field. Existing `openchat.chat-notification-prefs.v1` muted server IDs migrate to Off on first v1 hydration. The previous All or Mentions policy is remembered when quick mute is toggled.
+- Call device and volume preferences stay in the call store. Profile name and avatar stay in the identity store, outside settings preferences. Consent is a separate `openchat.profile-consent.v1` record; malformed consent fails closed.
+- State is server-scoped for notification policy and client-wide for appearance, shortcuts, and presence.
 
-## Security and Privacy Considerations
-- Avoid persisting sensitive user data in settings payloads.
-- Validate settings values before persistence.
-- Include safe fallback to defaults on schema mismatch.
-- Keep personal identity/profile details local-only by default.
+## UI states
 
-## Accessibility Requirements
-- Current controls are keyboard reachable (profile popover, device menus, sliders, toggles).
-- Semantic labels for profile, disclosure, and voice-control actions.
-- Focus-visible treatment required for dock actions, popouts, and context menus.
-- Dedicated reduced-motion/high-contrast preferences remain pending.
+- Settings sections: My Account, Appearance, Keybinds, Notifications, Accessibility, Identity & Privacy, Voice & Video.
+- Appearance: Dark, Light, Follow system. Accessibility: Standard, High contrast, or Follow system; Full motion, Reduced motion, or Follow system; 100, 125, 150, or 200% text.
+- Keybind recorder validates in-app single chords, rejects reserved and duplicate shortcuts, and supports per-action and all reset. Navigation and call shortcuts ignore typing and modals. Typing outside the composer cannot redirect text from a dialog, menu, or button.
+- Notification delivery obeys global enable, OS permission, Do Not Disturb, and the target server's All, Mentions, or Off policy. Permission is requested only from the explicit control. Message text previews can be hidden; sound defaults off.
+- Local profile editing uses the onboarding name length and image type/size limits. Display name and avatar are not automatically published. The optional sharing UI explains scope, audience, and revocation limits. Publication is disabled until ADR-0009 security signoff.
+- Error states: local storage failure, device selection failure, notification permission denied, unsupported output switching, profile sync failure. Offline local preferences remain editable.
 
-## Telemetry and Observability
-- Events:
-  - settings telemetry is not wired in the current baseline.
-- Metrics:
-  - device-selection failure rate
-  - settings persistence failure rate
+## Security and accessibility
 
-## Testing Strategy
-- Unit: settings normalization and persistence helpers in domain stores.
-- Component: profile panel, user dock controls, and device menu interactions.
-- Integration: persistence + runtime rehydration for identity and notification preferences.
-- End-to-end: change settings and verify behavior after app restart.
-- Manual QA: keyboard-only navigation and screen-reader behavior for popovers/menus.
+- ADR-0005's UID/proof-only boundary remains effective. `PROFILE_PUBLICATION_APPROVED` is false pending the ADR-0009 security review. No backend endpoint is added.
+- Settings is a modal dialog with initial focus, Tab containment, Escape, background inertness, and focus return. Server menus use shared arrow-key behavior and focus return. Focus indication is visible across native controls.
+- Semantic appearance tokens cover primary app surfaces and settings controls. Further tokenization and contrast verification are required for all chat/call states before declaring app-wide WCAG 2.2 AA conformance.
 
-## Rollout Plan
-- Milestone target: M3.
-- Guardrails:
-  - baseline dock controls must remain functional while settings shell is introduced
-  - bad persisted config falls back safely
-- Success metrics:
-  - settings persistence reliability
-  - accessibility regression count
+## Verification
 
-## Open Questions
-- Should presence status become server-synced or remain local-only?
-- Which keybind customization depth is in-scope for first stable release?
-- Which identity backup format and encryption UX should be default?
+- Unit: settings migration/defaults, notification decisions, consent scope and corrupt consent, shortcut conflicts.
+- Component: settings profile editing and section navigation, dialog Tab/Escape, server notification menu action.
+- Playwright Electron: fresh onboarding keyboard focus and axe, dark/light workspace, menu, settings and high-contrast axe, 200% text with narrow-dialog reflow, preference persistence after a full Electron restart, no profile upload before consent or while the review gate is closed.
+- Manual release matrix: keyboard-only onboarding/chat/call flows, OS theme and contrast/motion changes, 200% reflow, notification permission states, screen reader announcements with VoiceOver on macOS, NVDA on Windows, and Orca on Linux. Record findings and fix all known Level A/AA failures before release.
+
+## Release gates
+
+- [ ] Security reviewer accepts ADR-0009 and profile publication review; network test covers granted, revoked, invalid, and changed-scope consent; only then enable publication.
+- [ ] Finish semantic token conversion and app-wide WCAG 2.2 AA audit, including chat/call states and all overlays.
+- [ ] Complete VoiceOver, NVDA, and Orca manual checks on supported platforms.
+- [ ] Confirm PR CI and packaged artifacts on macOS, Windows, and Linux.
+
+Identity backup, key rotation, and encrypted identity storage remain separate milestone work.
+
+## Rollout and success criteria
+
+Ship only after every release gate above is checked and CI passes on the target platforms. Treat any known user-facing WCAG Level A/AA failure or profile write without valid, scoped consent as a release blocker. Success means preferences survive restart, notification decisions follow the selected policy, and keyboard and assistive-technology users can complete the core flows.

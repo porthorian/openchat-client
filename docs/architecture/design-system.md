@@ -63,6 +63,8 @@ Current implementation:
 - Minimum contrast targets documented per token set.
 - Reduced motion support for key animations.
 
+Current behavior: `useDialogFocus` gives modal dialogs focus containment, Escape, inert background, and focus return. `useMenuKeyboard` supplies menu Arrow Up/Down, Home/End, Escape, and focus return. New dialogs and menus should use these shared behaviors, expose an accessible name, and give every icon-only button a label. Appearance roles in `tokens.css` and `appearance.css` implement dark/light and high-contrast variants; new UI colors must use semantic roles. The remaining legacy literals in `base.css` are tracked by the settings feature release gate. Axe checks in Playwright Electron run against onboarding, the workspace, and settings. Manual screen-reader checks remain required.
+
 ## 7) Responsiveness and Density
 - Desktop-first layouts with constrained mobile and narrow-window behavior.
 - Density modes should be token-driven.

@@ -16,6 +16,9 @@
     "preview": "electron-vite preview",
     "test:security": "node --test src/renderer/src/utils/messageFormatting.security.test.ts src/main/openGraphText.security.test.ts",
     "test:rtc": "node --test src/renderer/src/stores/call/*.test.ts tests/rtc/*.test.mjs",
+    "test:settings": "node --test src/renderer/src/stores/settingsModel.test.ts src/renderer/src/stores/profileConsent.test.ts",
+    "test:components": "vitest run",
+    "test:e2e": "playwright test",
     "typecheck:app": "vue-tsc --noEmit -p tsconfig.json",
     "typecheck:build": "tsc --noEmit -p tsconfig.build-scripts.json",
     "typecheck": "yarn run typecheck:app && yarn run typecheck:build",
@@ -31,12 +34,19 @@
     "vue": "^3.5.40"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/jsdom": "^30",
     "@types/node": "^26.5.1",
     "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/compiler-dom": "^3.5.43",
+    "@vue/test-utils": "^2.5.1",
+    "axe-core": "^4.13.0",
     "electron": "^44.3.0",
     "electron-vite": "^5.0.0",
+    "jsdom": "^30.1.0",
     "typescript": "^6.0.3",
     "vite": "^8.3.0",
+    "vitest": "^5.0.1",
     "vue-tsc": "^3.3.11"
   }
 }

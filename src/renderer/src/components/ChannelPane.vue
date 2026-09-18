@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   mdiAccountMultiplePlus,
   mdiChevronDown,
@@ -10,6 +10,7 @@ import {
   mdiVolumeHigh
 } from "@mdi/js";
 import { moveCategoryInGroups, moveChannelInGroups } from "@renderer/stores/chat/channelGroups";
+import { useMenuKeyboard } from "@renderer/composables/useMenuKeyboard";
 import AppIcon from "./AppIcon.vue";
 import VoicePresencePopover from "./VoicePresencePopover.vue";
 
@@ -62,6 +63,8 @@ const emit = defineEmits<{
   deleteCategory: [groupId: string];
   reorderChannelTree: [groups: ChannelGroup[]];
   openServerSettings: [];
+  openNotificationSettings: [];
+  openPrivacySettings: [];
 }>();
 
 type ChannelPaneMenuState = {
@@ -107,6 +110,8 @@ const guildHeaderMenu = ref<GuildHeaderMenuState>({
   x: 0,
   y: 0
 });
+const guildMenuElement = ref<HTMLElement | null>(null);
+const guildMenuKeyboard = useMenuKeyboard(guildMenuElement, closeGuildHeaderMenu);
 const hideMutedChannels = ref(false);
 const voicePresencePopover = ref<VoicePresencePopoverState>({
   open: false,
@@ -196,6 +201,7 @@ function toggleGuildHeaderMenu(event: MouseEvent): void {
     x: boundedX,
     y: boundedY
   };
+  void guildMenuKeyboard.openedBy(trigger);
 }
 
 function categoryForID(categoryId: string | null): ChannelGroup | null {
@@ -211,18 +217,16 @@ function categoryKindForID(categoryId: string | null): "text" | "voice" | null {
 
 function runGuildHeaderAction(
   _event?: Event,
-  action: "create-channel" | "create-category" | "open-settings" | "noop" = "noop"
+  action: "create-channel" | "create-category" | "open-settings" | "open-notifications" | "open-privacy" | "noop" = "noop"
 ): void {
-  if (action === "create-channel") {
-    emit("createChannel", null);
-  }
-  if (action === "create-category") {
-    emit("createCategory", null, null);
-  }
-  if (action === "open-settings") {
-    emit("openServerSettings");
-  }
-  closeGuildHeaderMenu();
+  guildMenuKeyboard.closeAndReturn();
+  void nextTick(() => {
+    if (action === "create-channel") emit("createChannel", null);
+    if (action === "create-category") emit("createCategory", null, null);
+    if (action === "open-settings") emit("openServerSettings");
+    if (action === "open-notifications") emit("openNotificationSettings");
+    if (action === "open-privacy") emit("openPrivacySettings");
+  });
 }
 
 function runChannelPaneAction(
@@ -459,7 +463,7 @@ function onWindowPointerDown(event: PointerEvent): void {
 
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
-    closeGuildHeaderMenu();
+    if (guildHeaderMenu.value.open) guildMenuKeyboard.closeAndReturn();
     closeChannelPaneMenu();
     closeVoicePresencePopover();
   }
@@ -500,8 +504,10 @@ onBeforeUnmount(() => {
     </header>
     <section
       v-if="guildHeaderMenu.open"
+      ref="guildMenuElement"
       class="guild-menu"
       role="menu"
+      @keydown="guildMenuKeyboard.onKeydown"
       aria-label="Server quick actions"
       :style="{ left: `${guildHeaderMenu.x}px`, top: `${guildHeaderMenu.y}px` }"
     >
@@ -548,13 +554,13 @@ onBeforeUnmount(() => {
 
       <div class="guild-menu-divider" />
 
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+      <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'open-notifications')">
         Notification Settings
         <span class="guild-menu-icon">
           <AppIcon :path="mdiCogOutline" :size="17" />
         </span>
       </button>
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
+      <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'open-privacy')">
         Privacy Settings
         <span class="guild-menu-icon">
           <AppIcon :path="mdiCogOutline" :size="17" />
@@ -584,6 +590,7 @@ onBeforeUnmount(() => {
     <label class="filter-row guild-filter">
       <span class="sr-only">Filter channels</span>
       <input
+        data-shortcut-target="channel-filter"
         type="text"
         :value="filterValue"
         placeholder="Filter channels"

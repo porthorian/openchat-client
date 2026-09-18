@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 import type { DesktopCaptureSource } from "@shared/ipc";
 
 const emit = defineEmits<{
@@ -18,6 +19,8 @@ const props = defineProps<{
   targetChannelName: string | null;
   sources: DesktopCaptureSource[];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 
 const applicationSources = computed(() => props.sources.filter((source) => source.kind === "window"));
 const screenSources = computed(() => props.sources.filter((source) => source.kind === "screen"));
@@ -31,7 +34,7 @@ const visibleSources = computed(() => {
 
 <template>
   <div v-if="isOpen" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="server-modal screen-share-picker-modal" role="dialog" aria-modal="true" aria-label="Choose a screen to share">
+    <section ref="dialogElement" class="server-modal screen-share-picker-modal" role="dialog" aria-modal="true" aria-label="Choose a screen to share" tabindex="-1">
       <header>
         <h3>Share Your Screen</h3>
         <button type="button" class="server-modal-close" @click="emit('close')">Close</button>

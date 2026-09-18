@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref } from "vue";
+import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 import { DEFAULT_BACKEND_URL } from "../services/serverRegistryClient";
 
 type DiscoveredServerOption = {
@@ -15,7 +17,7 @@ type ServerJoinProbeSummary = {
   probedAt: string;
 };
 
-defineProps<{
+const props = defineProps<{
   isOpen: boolean;
   mode: "join" | "create";
   backendUrl: string;
@@ -41,11 +43,13 @@ const emit = defineEmits<{
   "update:createDescription": [value: string];
   "update:backendUrl": [value: string];
 }>();
+const dialogElement = ref<HTMLElement | null>(null);
+useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 </script>
 
 <template>
   <div v-if="isOpen" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <section class="server-modal" role="dialog" aria-modal="true" aria-label="Add server">
+    <section ref="dialogElement" class="server-modal" role="dialog" aria-modal="true" aria-label="Add server" tabindex="-1">
       <header>
         <h3>Add Server</h3>
         <button type="button" class="server-modal-close" @click="emit('close')">Close</button>
