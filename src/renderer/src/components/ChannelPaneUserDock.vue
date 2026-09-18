@@ -28,6 +28,11 @@ const props = defineProps<{
   callState: "idle" | "joining" | "active" | "reconnecting" | "error";
   callParticipantCount: number;
   callErrorMessage?: string | null;
+  canRetryCall: boolean;
+  receiveOnly: boolean;
+  reconnectAttempt: number;
+  reconnectPhase: "waiting" | "attempting" | null;
+  nextRetryAt: number | null;
   cameraEnabled: boolean;
   screenShareEnabled: boolean;
   canSendVideo: boolean;
@@ -59,6 +64,7 @@ const emit = defineEmits<{
   toggleCamera: [];
   toggleScreenShare: [];
   leaveVoiceChannel: [];
+  retryVoiceChannel: [];
   openInputOptions: [];
   selectInputDevice: [deviceId: string];
   updateInputVolume: [value: number];
@@ -303,6 +309,11 @@ onBeforeUnmount(() => {
         :call-state="callState"
         :call-participant-count="callParticipantCount"
         :call-error-message="callErrorMessage"
+        :can-retry="canRetryCall"
+        :receive-only="receiveOnly"
+        :reconnect-attempt="reconnectAttempt"
+        :reconnect-phase="reconnectPhase"
+        :next-retry-at="nextRetryAt"
         :camera-enabled="cameraEnabled"
         :screen-share-enabled="screenShareEnabled"
         :camera-available="canSendVideo"
@@ -310,6 +321,7 @@ onBeforeUnmount(() => {
         :camera-error-message="cameraErrorMessage"
         :screen-share-error-message="screenShareErrorMessage"
         @leave="emit('leaveVoiceChannel')"
+        @retry="emit('retryVoiceChannel')"
         @toggle-camera="emit('toggleCamera')"
         @toggle-screen-share="emit('toggleScreenShare')"
       />

@@ -2,7 +2,7 @@
 
 - Status: Implemented baseline (voice + video + screenshare), hardening in progress
 - Owners: Maintainers
-- Last Updated: 2026-02-20
+- Last Updated: 2026-09-18
 - Related ADRs: `docs/architecture/adrs/0002-pinia-state-architecture.md`, `docs/architecture/adrs/0004-multi-server-isolation.md`, `docs/architecture/adrs/0005-user-owned-identity.md`, `docs/architecture/adrs/0006-webrtc-sfu-media-architecture.md`
 - Related Issues: TBD
 
@@ -17,7 +17,7 @@ Users need low-latency voice and video communication in channels without sacrifi
 
 ## Scope
 ### In Scope
-- Voice channel sessions using backend signaling + PCM audio relay.
+- Voice channel sessions using backend signaling + WebRTC media.
 - Join/leave flow with per-server capability gating.
 - Core controls:
   - mute/unmute
@@ -30,7 +30,7 @@ Users need low-latency voice and video communication in channels without sacrifi
 - Video stream stage with hero tile, thumbnails, and pin/unpin behavior.
 - WebRTC offer/answer/ICE negotiation for video stream exchange.
 - Speaking indicator and participant state badges.
-- Server-scoped call lifecycle state with reconnect and degraded states.
+- One active call across the app, with server-scoped session data and controls visible while browsing another server.
 
 ### Out of Scope
 - End-to-end encrypted media layer beyond transport defaults.
@@ -44,17 +44,18 @@ Users need low-latency voice and video communication in channels without sacrifi
 ## UX Flow
 1. User selects a voice-enabled channel.
 2. Client validates capabilities and requests a join ticket.
-3. Client opens signaling transport, starts local mic uplink, and initializes participant session state.
+3. Client opens signaling transport and starts microphone capture after `rtc.joined` when the ticket permits speaking.
 4. User can enable camera and/or screen share when capability + permission checks pass.
 5. Remote participants and video/screen streams render in call stage with speaking/activity indicators.
-6. On transport degradation, UI shows reconnecting/degraded state and retries per policy.
+6. On transport degradation, UI shows a waiting countdown, then the active attempt number. It retries up to five times with a new ticket each time, waiting at least 1, 2, 4, 8, and 15 seconds before attempts 1–5. A server may advertise longer waits up to 30 seconds. Manual Retry starts immediately. Recovery preserves mic mute and deafen settings; camera and screen share require explicit re-enabling.
 7. User leaves channel; local media streams, mic uplink, and peer connections are torn down.
 
 ## UI States
 - Loading: capability check, join-ticket fetch, signaling connect, mic capture init, video publish startup.
 - Empty: user is alone in channel.
 - Success: active call with participant media tiles and controls.
-- Error: capability mismatch, permission denied, signaling transport failure.
+- Error: capability mismatch, permission denied, or exhausted signaling retries, with Retry and Leave actions where retry is allowed.
+- Receive-only: joined without microphone permission or unable to capture an input device.
 - Degraded/Offline: signaling disconnected, media paused, reconnect in progress.
 
 ## Backend Capability Assumptions
@@ -72,6 +73,7 @@ Users need low-latency voice and video communication in channels without sacrifi
   - `connection_policy` (timeouts, ICE restart behavior, reconnect backoff hints)
 - Server must support session-bound signaling auth that does not require personal profile fields.
 - Capability flags determine which media controls render/enabled in the UI.
+- Join-ticket media permissions gate microphone, camera, and screen capture independently.
 
 ## Client Data Model and State Impact
 - Stores touched:

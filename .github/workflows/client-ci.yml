@@ -2,6 +2,7 @@ name: Client CI
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
@@ -40,6 +41,9 @@ jobs:
 
       - name: Test Security
         run: corepack yarn test:security --ci
+
+      - name: Test RTC
+        run: corepack yarn test:rtc
 
       - name: Build
         run: corepack yarn build

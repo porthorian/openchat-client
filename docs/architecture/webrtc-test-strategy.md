@@ -53,6 +53,7 @@ Fixture rules:
   - `idle -> joining -> active`
   - `active -> reconnecting -> active`
   - `active -> disconnected` on kick/ban event
+  - fake-clock reconnect waits of at least 1, 2, 4, 8, and 15 seconds; waiting and trying phases; timer cancellation on success, leave, and channel switch
 - Permission gating:
   - hide/disable camera/screen-share toggles from capabilities
   - deterministic error message mapping for permission-denied events
@@ -94,7 +95,9 @@ Run with 2-5 synthetic users:
 5. Server capability downgrade (video off); UI hides video controls without restart.
 
 ## 10) CI Stage Plan (Client Repo)
-Proposed pipeline:
+The pull-request `Client CI` workflow runs `corepack yarn test:rtc` for the deterministic RTC store, policy, and rendered component tests.
+
+Additional system testing before release:
 1. `validate`
    - lint/format/typecheck
    - capability/signaling fixture schema checks
@@ -106,6 +109,8 @@ Proposed pipeline:
    - mocked signaling lifecycle
 5. `test-e2e-smoke` (nightly or gated on main)
    - multi-client scripted smoke against backend test stack
+
+Before release, run a two-client call and reconnect on macOS, Windows, and Linux. Include a TURN-only path, device unplug, denied mic/camera permission, a five-retry exhaustion case, and a moderation removal. Record whether recovery reaches working media or a clear retryable error. Check that there are no duplicate sessions, lingering local tracks, or unrequested camera/screen capture after reconnect.
 
 ## 11) Pass/Fail Thresholds
 - `join_success_rate >= 99%` in stable CI environment

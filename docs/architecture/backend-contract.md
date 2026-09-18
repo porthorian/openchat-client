@@ -229,6 +229,8 @@ When media is supported, capability discovery should include `rtc` with:
 - `ice_servers` (STUN/TURN definitions with credential metadata)
 - `connection_policy` (`join_timeout_ms`, `answer_timeout_ms`, `ice_restart_enabled`, `reconnect_backoff_ms`)
 
+The client caps automatic reconnects at five attempts. Each attempt requests a new one-time ticket. `join_timeout_ms` covers capability discovery, ticket issuance, socket open, and `rtc.joined`; `answer_timeout_ms` applies to each offer. A disconnected peer has a five-second grace period before ICE recovery begins. When `ice_restart_enabled` is true, recovery attempts ICE restart, then one peer rebuild, then a fresh-ticket rejoin. Retry attempts wait at least 1, 2, 4, 8, and 15 seconds respectively (30 seconds before the fifth attempt after immediate failures). Longer advertised delays are honored up to 30 seconds per attempt. If the list has fewer than five entries, the last advertised delay is reused but each attempt still observes its minimum. The UI distinguishes the scheduled wait from the active attempt and derives its countdown from the scheduled retry time.
+
 ### Join and signaling expectations
 - `POST /v1/rtc/channels/:channel_id/join-ticket`:
   - validates session + channel membership + media permission state
@@ -244,6 +246,12 @@ Join tickets should be scoped minimally to:
 - `device_id`
 - permitted media actions
 - expiry and single-use identifier
+
+The join-ticket response includes `permissions.speak`, `permissions.video`, and `permissions.screenshare`; the client checks these before requesting local capture. A receive-only join is valid when `speak` is false.
+
+Signaling envelopes use `type`, optional `request_id`, optional `channel_id`, and `payload`. The first WebSocket message is `rtc.join` with `{ "ticket": "..." }`. A successful response is `rtc.joined` with `participant_id`, `channel_id`, `participants`, and `joined_at`. Offer and answer pairs are `rtc.offer.publish`/`rtc.answer.publish` and `rtc.offer.subscribe`/`rtc.answer.subscribe`; ICE uses `rtc.ice.candidate`. Media state uses `rtc.media.state`; moderation removal uses `rtc.kicked`.
+
+An unsuccessful join emits `rtc.error` **before** the socket closes, with the original join `request_id`, an empty `channel_id`, and `{ "code", "message", "retryable" }`. `rtc_ticket_expired` is retryable only with a newly issued ticket. `rtc_join_denied`, `rtc_ticket_replayed`, and permission or moderation denials are terminal. Retryable negotiation and transport errors may trigger the bounded reconnect policy. These error codes and fields extend the existing envelope without replacing it.
 
 ### RTC event expectations
 Backends should emit explicit events for:

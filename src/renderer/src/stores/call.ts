@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { fetchServerCapabilities, requestJoinTicket, sendSignal, type SignalEnvelope } from "@renderer/services/rtcClient";
+import { fetchServerCapabilities, requestJoinTicket, RTCRequestError, sendSignal, type SignalEnvelope } from "@renderer/services/rtcClient";
 import { useServerRegistryStore } from "@renderer/stores/serverRegistry";
 import { transitionCallState } from "@renderer/stores/call/machine";
 import {
@@ -23,6 +23,16 @@ import {
   type PersistedCallMediaPreferences
 } from "@renderer/stores/call/preferences";
 import { parseSignalEnvelopeMessage } from "@renderer/stores/call/signaling";
+import {
+  DEFAULT_RTC_CONNECTION_POLICY,
+  isRetryableHTTPStatus,
+  isRetryableSignalError,
+  nextPeerRecoveryAction,
+  normalizeRTCConnectionPolicy,
+  reconnectDelay,
+  restoredCaptureAfterJoin
+} from "@renderer/stores/call/recovery";
+import type { RTCConnectionPolicy } from "@renderer/types/capabilities";
 
 export type CallConnectionState = "idle" | "joining" | "active" | "reconnecting" | "error";
 
@@ -58,11 +68,16 @@ export type ChannelCallSession = {
   deafened: boolean;
   cameraEnabled: boolean;
   screenShareEnabled: boolean;
+  canSpeak: boolean;
   canSendVideo: boolean;
   canShareScreen: boolean;
   cameraErrorMessage: string | null;
   screenShareErrorMessage: string | null;
   errorMessage: string | null;
+  canRetry: boolean;
+  reconnectAttempt: number;
+  reconnectPhase: "waiting" | "attempting" | null;
+  nextRetryAt: number | null;
   joinedAt: string | null;
   lastEventAt: string | null;
 };
@@ -83,6 +98,7 @@ export type VideoInputDevice = {
 };
 
 type CallState = {
+  activeCall: { serverId: string; channelId: string } | null;
   activeVoiceChannelByServer: Record<string, string | null>;
   sessionsByKey: Record<string, ChannelCallSession>;
   audioPrefsByServer: Record<
@@ -111,6 +127,8 @@ type CallState = {
   cameraTestStream: MediaStream | null;
   cameraTestError: string | null;
 };
+
+class CallFatalError extends Error {}
 
 const DEFAULT_OUTPUT_DEVICE_ID = "default";
 const DEFAULT_OUTPUT_DEVICE_LABEL = "System Default";
@@ -148,6 +166,13 @@ const subscribePeerResetCooldownByKey = new Map<string, number>();
 const signalingSocketRestartCooldownByKey = new Map<string, number>();
 const reconnectTimerByKey = new Map<string, ReturnType<typeof setTimeout>>();
 const reconnectAttemptByKey = new Map<string, number>();
+const generationByKey = new Map<string, number>();
+const joinAbortByKey = new Map<string, AbortController>();
+const joinDeadlineByKey = new Map<string, ReturnType<typeof setTimeout>>();
+const peerRecoveryTimerByKey = new Map<string, ReturnType<typeof setTimeout>>();
+const iceDisconnectTimerByKey = new Map<string, ReturnType<typeof setTimeout>>();
+const peerRecoveryStepByKey = new Map<string, number>();
+const rtcConnectionPolicyByKey = new Map<string, RTCConnectionPolicy>();
 const joinContextByKey = new Map<string, { backendUrl: string; userUID: string; deviceID: string }>();
 const localCameraStreamsByKey = new Map<string, MediaStream>();
 const localScreenStreamsByKey = new Map<string, MediaStream>();
@@ -266,6 +291,10 @@ function sessionKey(serverId: string, channelId: string): string {
   return `${serverId}:${channelId}`;
 }
 
+function peerRecoveryKey(serverId: string, channelId: string, peerId: string): string {
+  return `${sessionKey(serverId, channelId)}:${peerId}`;
+}
+
 function createEmptySession(): ChannelCallSession {
   return {
     state: "idle",
@@ -277,11 +306,16 @@ function createEmptySession(): ChannelCallSession {
     deafened: false,
     cameraEnabled: false,
     screenShareEnabled: false,
+    canSpeak: false,
     canSendVideo: true,
     canShareScreen: true,
     cameraErrorMessage: null,
     screenShareErrorMessage: null,
     errorMessage: null,
+    canRetry: true,
+    reconnectAttempt: 0,
+    reconnectPhase: null,
+    nextRetryAt: null,
     joinedAt: null,
     lastEventAt: null
   };
@@ -818,6 +852,7 @@ function isPlaceholderDeviceID(value: string): boolean {
 
 export const useCallStore = defineStore("call", {
   state: (): CallState => ({
+    activeCall: null,
     activeVoiceChannelByServer: {},
     sessionsByKey: {},
     audioPrefsByServer: {},
@@ -955,6 +990,10 @@ export const useCallStore = defineStore("call", {
       this.persistMediaPreferences();
       if (this.cameraTestActive) {
         await this.startCameraTest();
+      }
+      const active = this.activeCall;
+      if (active && this.sessionsByKey[sessionKey(active.serverId, active.channelId)]?.cameraEnabled) {
+        await this.enableCamera(active.serverId);
       }
     },
     async startMicTest(): Promise<void> {
@@ -1110,6 +1149,159 @@ export const useCallStore = defineStore("call", {
       subscribeSyncFollowUpReasonByKey.delete(key);
       reconnectAttemptByKey.delete(key);
       signalingSocketRestartCooldownByKey.delete(key);
+      const session = this.sessionsByKey[key];
+      if (session) {
+        session.reconnectAttempt = 0;
+        session.reconnectPhase = null;
+        session.nextRetryAt = null;
+      }
+    },
+    clearJoinDeadline(serverId: string, channelId: string): void {
+      const key = sessionKey(serverId, channelId);
+      const timer = joinDeadlineByKey.get(key);
+      if (timer) clearTimeout(timer);
+      joinDeadlineByKey.delete(key);
+      joinAbortByKey.delete(key);
+    },
+    invalidateJoinAttempt(serverId: string, channelId: string): number {
+      const key = sessionKey(serverId, channelId);
+      generationByKey.set(key, (generationByKey.get(key) ?? 0) + 1);
+      joinAbortByKey.get(key)?.abort();
+      this.clearJoinDeadline(serverId, channelId);
+      return generationByKey.get(key) as number;
+    },
+    isCurrentCall(serverId: string, channelId: string, generation: number): boolean {
+      return generationByKey.get(sessionKey(serverId, channelId)) === generation &&
+        this.activeCall?.serverId === serverId && this.activeCall.channelId === channelId;
+    },
+    armJoinDeadline(serverId: string, channelId: string, generation: number, timeoutMs: number): void {
+      const key = sessionKey(serverId, channelId);
+      const oldTimer = joinDeadlineByKey.get(key);
+      if (oldTimer) clearTimeout(oldTimer);
+      joinDeadlineByKey.set(key, setTimeout(() => {
+        joinDeadlineByKey.delete(key);
+        if (!this.isCurrentCall(serverId, channelId, generation)) return;
+        const session = this.sessionsByKey[key];
+        if (!session || session.state === "active") return;
+        joinAbortByKey.get(key)?.abort();
+        const socket = socketsByKey.get(key);
+        if (socket) {
+          socketsByKey.delete(key);
+          socket.close();
+        }
+        this.scheduleSignalingReconnect(serverId, channelId, "join-timeout");
+      }, timeoutMs));
+    },
+    failCall(serverId: string, channelId: string, message: string, canRetry = true): void {
+      const key = sessionKey(serverId, channelId);
+      this.invalidateJoinAttempt(serverId, channelId);
+      this.clearReconnectState(serverId, channelId);
+      this.stopMicUplink(serverId, channelId);
+      this.stopAllLocalVideo(serverId, channelId, { notify: false });
+      this.closePeerConnectionsForSession(serverId, channelId);
+      this.clearRemoteAudioForSession(serverId, channelId);
+      const socket = socketsByKey.get(key);
+      if (socket) {
+        socketsByKey.delete(key);
+        socket.close();
+      }
+      const session = this.sessionsByKey[key];
+      if (session) {
+        session.state = "error";
+        session.errorMessage = message;
+        session.canRetry = canRetry;
+        session.participants = [];
+        session.videoStreams = [];
+        session.localParticipantId = null;
+        session.cameraEnabled = false;
+        session.screenShareEnabled = false;
+      }
+    },
+    retryCall(): void {
+      const current = this.activeCall;
+      if (!current) return;
+      const key = sessionKey(current.serverId, current.channelId);
+      if (!this.sessionsByKey[key]?.canRetry) return;
+      const context = joinContextByKey.get(key);
+      if (!context) return;
+      this.clearReconnectState(current.serverId, current.channelId);
+      void this.joinChannel({
+        serverId: current.serverId,
+        channelId: current.channelId,
+        ...context
+      });
+    },
+    clearPeerRecovery(serverId: string, channelId: string, peerId: string, resetStep = true): void {
+      const key = peerRecoveryKey(serverId, channelId, peerId);
+      this.clearAnswerDeadline(serverId, channelId, peerId);
+      const disconnectTimer = iceDisconnectTimerByKey.get(key);
+      if (disconnectTimer) clearTimeout(disconnectTimer);
+      iceDisconnectTimerByKey.delete(key);
+      if (resetStep) peerRecoveryStepByKey.delete(key);
+    },
+    clearAnswerDeadline(serverId: string, channelId: string, peerId: string): void {
+      const key = peerRecoveryKey(serverId, channelId, peerId);
+      const timer = peerRecoveryTimerByKey.get(key);
+      if (timer) clearTimeout(timer);
+      peerRecoveryTimerByKey.delete(key);
+    },
+    armAnswerDeadline(serverId: string, channelId: string, peerId: string, peer: PeerConnectionEntry): void {
+      const generation = generationByKey.get(sessionKey(serverId, channelId));
+      if (generation === undefined) return;
+      this.clearAnswerDeadline(serverId, channelId, peerId);
+      const policy = rtcConnectionPolicyByKey.get(sessionKey(serverId, channelId)) ?? DEFAULT_RTC_CONNECTION_POLICY;
+      const key = peerRecoveryKey(serverId, channelId, peerId);
+      peerRecoveryTimerByKey.set(key, setTimeout(() => {
+        peerRecoveryTimerByKey.delete(key);
+        if (!this.isCurrentCall(serverId, channelId, generation)) return;
+        if (peerConnectionsByKey.get(sessionKey(serverId, channelId))?.get(peerId) !== peer) return;
+        this.recoverPeer(serverId, channelId, peerId, "answer-timeout");
+      }, policy.answerTimeoutMs));
+    },
+    recoverPeer(serverId: string, channelId: string, peerId: string, reason: string): void {
+      const key = sessionKey(serverId, channelId);
+      const peer = peerConnectionsByKey.get(key)?.get(peerId);
+      const session = this.sessionsByKey[key];
+      if (!peer || !session || this.activeCall?.serverId !== serverId || this.activeCall.channelId !== channelId) return;
+      if (session.state !== "active" && session.state !== "reconnecting") return;
+      const recoveryKey = peerRecoveryKey(serverId, channelId, peerId);
+      const step = peerRecoveryStepByKey.get(recoveryKey) ?? 0;
+      if (step > 0 && reason !== "answer-timeout" && reason !== "answer-error" && reason !== "offer-error") return;
+      this.clearPeerRecovery(serverId, channelId, peerId, false);
+      session.state = "reconnecting";
+      session.errorMessage = "Restoring call media...";
+      this.stopAllLocalVideo(serverId, channelId, { notify: false });
+      if (peer.direction === RTC_DIRECTION_SUBSCRIBE) {
+        session.videoStreams = session.videoStreams.filter((entry) => entry.isLocal);
+        this.clearRemoteAudioForSession(serverId, channelId);
+        this.stopRemoteVideoStatsProbesForSession(serverId, channelId);
+        remoteTrackMetaByKey.delete(key);
+        pendingRemoteTracksByKey.delete(key);
+      }
+      const micTrack = localMicStreamsByKey.get(key)?.getAudioTracks()[0];
+      if (micTrack) micTrack.enabled = false;
+      const policy = rtcConnectionPolicyByKey.get(key) ?? DEFAULT_RTC_CONNECTION_POLICY;
+      const action = nextPeerRecoveryAction(step, policy.iceRestartEnabled);
+      if (action === "restart_ice") {
+        peerRecoveryStepByKey.set(recoveryKey, 1);
+        try {
+          peer.connection.restartIce();
+          void this.createAndSendOffer(serverId, channelId, peerId, `ice-restart:${reason}`);
+          return;
+        } catch (_error) {
+          // Rebuild the peer below if this runtime cannot restart ICE.
+        }
+      }
+      if (action === "rebuild_peer" || action === "restart_ice") {
+        peerRecoveryStepByKey.set(recoveryKey, 2);
+        this.closePeerConnection(serverId, channelId, peerId);
+        const replacement = this.ensurePeerConnection(serverId, channelId, peerId);
+        if (replacement) {
+          void this.createAndSendOffer(serverId, channelId, peerId, `peer-rebuild:${reason}`);
+          return;
+        }
+      }
+      this.scheduleSignalingReconnect(serverId, channelId, `peer:${reason}`);
     },
     subscribeReceivePolicyForSession(serverId: string, channelId: string): RTCSubscribeReceivePolicy {
       const key = sessionKey(serverId, channelId);
@@ -1280,18 +1472,24 @@ export const useCallStore = defineStore("call", {
     scheduleSignalingReconnect(serverId: string, channelId: string, reason: string): void {
       const key = sessionKey(serverId, channelId);
       const session = this.sessionsByKey[key];
-      if (!session || intentionallyClosed.has(key)) return;
+      if (!session || intentionallyClosed.has(key) || this.activeCall?.serverId !== serverId || this.activeCall.channelId !== channelId) return;
       const existingTimer = reconnectTimerByKey.get(key);
       if (existingTimer) return;
       const context = joinContextByKey.get(key);
       if (!context) {
-        session.state = "error";
-        session.errorMessage = "Call signaling disconnected.";
+        this.failCall(serverId, channelId, "Call connection lost. Retry to join again.");
         return;
       }
-      const attempt = (reconnectAttemptByKey.get(key) ?? 0) + 1;
+      const previousAttempts = reconnectAttemptByKey.get(key) ?? 0;
+      const policy = rtcConnectionPolicyByKey.get(key) ?? DEFAULT_RTC_CONNECTION_POLICY;
+      const delayMs = reconnectDelay(policy, previousAttempts);
+      if (delayMs === null) {
+        this.failCall(serverId, channelId, "Call could not reconnect. Retry when the connection is available.");
+        return;
+      }
+      const attempt = previousAttempts + 1;
       reconnectAttemptByKey.set(key, attempt);
-      const delayMs = Math.min(8_000, Math.max(1_000, 1_000 * 2 ** (attempt - 1)));
+      const generation = this.invalidateJoinAttempt(serverId, channelId);
       rtcLog("signaling.socket.reconnect.scheduled", {
         serverId,
         channelId,
@@ -1300,23 +1498,32 @@ export const useCallStore = defineStore("call", {
         delayMs
       });
       session.state = transitionCallState(session.state, "signal_disconnected");
-      session.errorMessage = "Call signaling disconnected. Reconnecting...";
+      session.reconnectAttempt = attempt;
+      session.reconnectPhase = "waiting";
+      session.nextRetryAt = Date.now() + delayMs;
+      session.errorMessage = null;
+      this.stopMicUplink(serverId, channelId);
+      this.stopAllLocalVideo(serverId, channelId, { notify: false });
+      this.closePeerConnectionsForSession(serverId, channelId);
+      this.clearRemoteAudioForSession(serverId, channelId);
+      session.videoStreams = [];
+      session.participants = [];
+      session.localParticipantId = null;
+      const socket = socketsByKey.get(key);
+      if (socket) {
+        socketsByKey.delete(key);
+        socket.close();
+      }
       const timer = setTimeout(() => {
         reconnectTimerByKey.delete(key);
-        if (intentionallyClosed.has(key)) return;
-        if (this.activeVoiceChannelByServer[serverId] !== channelId) return;
-        const activeSocket = socketsByKey.get(key);
-        if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
-          reconnectAttemptByKey.delete(key);
-          return;
-        }
+        if (intentionallyClosed.has(key) || !this.isCurrentCall(serverId, channelId, generation)) return;
         void this.joinChannel({
           serverId,
           channelId,
           backendUrl: context.backendUrl,
           userUID: context.userUID,
           deviceID: context.deviceID
-        });
+        }, { reconnect: true });
       }, delayMs);
       reconnectTimerByKey.set(key, timer);
     },
@@ -2363,6 +2570,8 @@ export const useCallStore = defineStore("call", {
     },
     async createAndSendOffer(serverId: string, channelId: string, peerId: string, reason = "unspecified"): Promise<void> {
       const key = sessionKey(serverId, channelId);
+      const generation = generationByKey.get(key);
+      if (generation === undefined) return;
       const peers = peerConnectionsByKey.get(key);
       const peer = peers?.get(peerId);
       if (!peer) return;
@@ -2376,7 +2585,7 @@ export const useCallStore = defineStore("call", {
         return;
       }
       const session = this.sessionsByKey[key];
-      if (!session || session.state !== "active") return;
+      if (!session || (session.state !== "active" && session.state !== "reconnecting")) return;
       const socket = socketsByKey.get(key);
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
       if (peer.connection.signalingState === "closed") return;
@@ -2424,6 +2633,7 @@ export const useCallStore = defineStore("call", {
           signalingState: peer.connection.signalingState
         });
         const createdOffer = await peer.connection.createOffer();
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== peer) return;
         if (!createdOffer.sdp || createdOffer.sdp.trim().length === 0) {
           rtcLog("offer.skip.empty-created-sdp", {
             serverId,
@@ -2448,6 +2658,7 @@ export const useCallStore = defineStore("call", {
           return;
         }
         await peer.connection.setLocalDescription(createdOffer);
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== peer) return;
         const localDescription = peer.connection.localDescription ?? createdOffer;
         if (localDescription.type !== "offer") {
           rtcLog("offer.skip", {
@@ -2494,6 +2705,7 @@ export const useCallStore = defineStore("call", {
             direction: peer.direction
           }
         });
+        this.armAnswerDeadline(serverId, channelId, peerId, peer);
         rtcLog("offer.sent", {
           serverId,
           channelId,
@@ -2503,7 +2715,10 @@ export const useCallStore = defineStore("call", {
           signalingState: peer.connection.signalingState
         });
       } catch (error) {
-        session.errorMessage = `Offer negotiation failed: ${(error as Error).message}`;
+        if (this.isCurrentCall(serverId, channelId, generation) && peerConnectionsByKey.get(key)?.get(peerId) === peer) {
+          session.errorMessage = `Offer negotiation failed: ${(error as Error).message}`;
+          this.recoverPeer(serverId, channelId, peerId, "offer-error");
+        }
         rtcLog("offer.error", {
           serverId,
           channelId,
@@ -2515,6 +2730,7 @@ export const useCallStore = defineStore("call", {
         });
       } finally {
         peer.makingOffer = false;
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== peer) return;
         const shouldFlushPending =
           peer.pendingNegotiation &&
           !peer.makingOffer &&
@@ -2560,6 +2776,8 @@ export const useCallStore = defineStore("call", {
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
       if (!session) return null;
+      const generation = generationByKey.get(key);
+      if (generation === undefined) return null;
 
       const peers = this.peerConnectionsForSession(key);
       const existing = peers.get(peerId);
@@ -2592,6 +2810,7 @@ export const useCallStore = defineStore("call", {
       }
 
       connection.onicecandidate = (event) => {
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== entry) return;
         if (!event.candidate) return;
         const socket = socketsByKey.get(key);
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -2615,6 +2834,7 @@ export const useCallStore = defineStore("call", {
       };
 
       connection.onnegotiationneeded = () => {
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== entry) return;
         rtcLog("negotiation.needed", {
           serverId,
           channelId,
@@ -2626,6 +2846,7 @@ export const useCallStore = defineStore("call", {
       };
 
       connection.ontrack = (event) => {
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== entry) return;
         if (direction !== RTC_DIRECTION_SUBSCRIBE) return;
         const mediaStream = event.streams[0] ?? new MediaStream([event.track]);
         const observedTrackId = event.track.id;
@@ -2710,6 +2931,7 @@ export const useCallStore = defineStore("call", {
       };
 
       connection.onsignalingstatechange = () => {
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== entry) return;
         rtcLog("signaling.state", {
           serverId,
           channelId,
@@ -2739,6 +2961,7 @@ export const useCallStore = defineStore("call", {
       };
 
       connection.oniceconnectionstatechange = () => {
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== entry) return;
         rtcLog("ice.state", {
           serverId,
           channelId,
@@ -2746,6 +2969,21 @@ export const useCallStore = defineStore("call", {
           direction,
           iceConnectionState: connection.iceConnectionState
         });
+        const recoveryKey = peerRecoveryKey(serverId, channelId, peerId);
+        if (connection.iceConnectionState === "disconnected") {
+          if (iceDisconnectTimerByKey.has(recoveryKey)) return;
+          iceDisconnectTimerByKey.set(recoveryKey, setTimeout(() => {
+            iceDisconnectTimerByKey.delete(recoveryKey);
+            if (connection.iceConnectionState === "disconnected") {
+              this.recoverPeer(serverId, channelId, peerId, "ice-disconnected");
+            }
+          }, 5_000));
+        } else {
+          const timer = iceDisconnectTimerByKey.get(recoveryKey);
+          if (timer) clearTimeout(timer);
+          iceDisconnectTimerByKey.delete(recoveryKey);
+          if (connection.iceConnectionState === "failed") this.recoverPeer(serverId, channelId, peerId, "ice-failed");
+        }
       };
 
       connection.onicecandidateerror = (event: Event) => {
@@ -2770,6 +3008,7 @@ export const useCallStore = defineStore("call", {
       };
 
       connection.onconnectionstatechange = () => {
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== entry) return;
         rtcLog("connection.state", {
           serverId,
           channelId,
@@ -2777,6 +3016,19 @@ export const useCallStore = defineStore("call", {
           direction,
           connectionState: connection.connectionState
         });
+        if (connection.connectionState === "connected") {
+          this.clearPeerRecovery(serverId, channelId, peerId);
+          const localSession = this.sessionsByKey[key];
+          const allPeersConnected = [...(peerConnectionsByKey.get(key)?.values() ?? [])]
+            .every((candidate) => candidate.connection.connectionState === "connected");
+          if (localSession?.state === "reconnecting" && allPeersConnected && socketsByKey.get(key)?.readyState === WebSocket.OPEN) {
+            localSession.state = "active";
+            localSession.errorMessage = null;
+            const micTrack = localMicStreamsByKey.get(key)?.getAudioTracks()[0];
+            if (micTrack) micTrack.enabled = !localSession.micMuted && !localSession.deafened;
+          }
+          return;
+        }
         if (connection.connectionState !== "failed" && connection.connectionState !== "closed") return;
         if (direction === RTC_DIRECTION_SUBSCRIBE) {
           const localSession = this.sessionsByKey[key];
@@ -2785,6 +3037,7 @@ export const useCallStore = defineStore("call", {
           }
           this.clearRemoteAudioForSession(serverId, channelId);
         }
+        if (connection.connectionState === "failed") this.recoverPeer(serverId, channelId, peerId, "peer-failed");
       };
 
       if (direction === RTC_DIRECTION_PUBLISH) {
@@ -2797,6 +3050,7 @@ export const useCallStore = defineStore("call", {
       const peers = peerConnectionsByKey.get(key);
       const peer = peers?.get(peerId);
       if (!peer) return;
+      this.clearPeerRecovery(serverId, channelId, peerId, false);
       peer.connection.onicecandidate = null;
       peer.connection.onnegotiationneeded = null;
       peer.connection.ontrack = null;
@@ -2821,6 +3075,9 @@ export const useCallStore = defineStore("call", {
         }
       }
       peerConnectionsByKey.delete(key);
+      for (const recoveryKey of peerRecoveryStepByKey.keys()) {
+        if (recoveryKey.startsWith(`${key}:`)) peerRecoveryStepByKey.delete(recoveryKey);
+      }
       iceServersByKey.delete(key);
       videoHintByKey.delete(key);
       videoTrackOwnerByKey.delete(key);
@@ -2900,11 +3157,15 @@ export const useCallStore = defineStore("call", {
         probeKey: `${key}:${params.trackId}`,
         mediaStream: params.mediaStream,
         onSpeaking: () => {
+          if (this.activeCall?.serverId !== params.serverId || this.activeCall.channelId !== params.channelId) return;
           this.markParticipantSpeaking(params.serverId, params.channelId, params.participantId);
         }
       });
 
+      const generation = generationByKey.get(key);
       params.track.onended = () => {
+        if (generation === undefined || !this.isCurrentCall(params.serverId, params.channelId, generation)) return;
+        if (remoteAudioEntriesByKey.get(key)?.get(entryKey)?.mediaStream !== params.mediaStream) return;
         this.removeRemoteAudioTrack(params.serverId, params.channelId, params.participantId, params.trackId);
       };
     },
@@ -3026,7 +3287,10 @@ export const useCallStore = defineStore("call", {
         track: params.track
       });
 
+      const generation = generationByKey.get(key);
       params.track.onended = () => {
+        if (generation === undefined || !this.isCurrentCall(params.serverId, params.channelId, generation)) return;
+        if (!session.videoStreams.some((entry) => entry.participantId === params.participantId && entry.trackId === params.track.id && entry.mediaStream === params.mediaStream)) return;
         rtcLog("video.track.ended", {
           serverId: params.serverId,
           channelId: params.channelId,
@@ -3054,6 +3318,8 @@ export const useCallStore = defineStore("call", {
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
       if (!session) return;
+      const generation = generationByKey.get(key);
+      if (generation === undefined || !this.isCurrentCall(serverId, channelId, generation)) return;
       const peerId = peerIdForDirection(direction);
       const peer = this.ensurePeerConnection(serverId, channelId, peerId);
       if (!peer) return;
@@ -3070,6 +3336,7 @@ export const useCallStore = defineStore("call", {
           await this.syncPeerVideoTracks(serverId, channelId, peerId);
         }
         await peer.connection.setLocalDescription();
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peerId) !== peer) return;
         const localDescription = peer.connection.localDescription;
         if (!localDescription || localDescription.type !== "answer") return;
 
@@ -3091,7 +3358,10 @@ export const useCallStore = defineStore("call", {
           signalingState: peer.connection.signalingState
         });
       } catch (error) {
-        session.errorMessage = `Offer handling failed: ${(error as Error).message}`;
+        if (this.isCurrentCall(serverId, channelId, generation) && peerConnectionsByKey.get(key)?.get(peerId) === peer) {
+          session.errorMessage = `Offer handling failed: ${(error as Error).message}`;
+          this.recoverPeer(serverId, channelId, peerId, "offer-error");
+        }
         rtcLog("offer.error", {
           serverId,
           channelId,
@@ -3115,6 +3385,8 @@ export const useCallStore = defineStore("call", {
       if (!sdp || descriptionType !== "answer") return;
 
       const key = sessionKey(serverId, channelId);
+      const generation = generationByKey.get(key);
+      if (generation === undefined) return;
       const peer = peerConnectionsByKey.get(key)?.get(peerIdForDirection(direction));
       if (!peer) return;
       const session = this.sessionsByKey[key];
@@ -3132,7 +3404,13 @@ export const useCallStore = defineStore("call", {
           type: "answer",
           sdp
         });
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peer.peerId) !== peer) return;
+        this.clearAnswerDeadline(serverId, channelId, peer.peerId);
         await this.flushPendingRemoteICECandidates(serverId, channelId, peer);
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peer.peerId) !== peer) return;
+        if (peer.connection.connectionState !== "connected") {
+          this.armAnswerDeadline(serverId, channelId, peer.peerId, peer);
+        }
         rtcLog("answer.applied", {
           serverId,
           channelId,
@@ -3141,6 +3419,7 @@ export const useCallStore = defineStore("call", {
           signalingState: peer.connection.signalingState
         });
       } catch (error) {
+        if (!this.isCurrentCall(serverId, channelId, generation)) return;
         session.errorMessage = `Answer handling failed: ${(error as Error).message}`;
         rtcLog("answer.error", {
           serverId,
@@ -3150,8 +3429,10 @@ export const useCallStore = defineStore("call", {
           signalingState: peer.connection.signalingState,
           message: (error as Error).message
         });
+        this.recoverPeer(serverId, channelId, peer.peerId, "answer-error");
       } finally {
         peer.isSettingRemoteAnswerPending = false;
+        if (!this.isCurrentCall(serverId, channelId, generation) || peerConnectionsByKey.get(key)?.get(peer.peerId) !== peer) return;
         const shouldFlushPending = peer.pendingNegotiation && !peer.makingOffer && peer.connection.signalingState === "stable";
         if (shouldFlushPending) {
           const pendingReason = peer.pendingNegotiationReason ?? "post-answer";
@@ -3255,6 +3536,7 @@ export const useCallStore = defineStore("call", {
       if (!channelId) return;
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
+      const generation = generationByKey.get(key);
       if (!session.localParticipantId) {
         session.cameraErrorMessage = "Camera can be enabled after the call is connected.";
         return;
@@ -3269,7 +3551,6 @@ export const useCallStore = defineStore("call", {
       }
 
       try {
-        this.stopLocalVideoKind(serverId, channelId, "camera", { notify: false });
         const selectedDeviceID = this.selectedCameraDeviceId;
         const useCustomCamera = selectedDeviceID && selectedDeviceID !== DEFAULT_CAMERA_DEVICE_ID;
         let mediaStream: MediaStream;
@@ -3292,8 +3573,14 @@ export const useCallStore = defineStore("call", {
         }
         const track = mediaStream.getVideoTracks()[0];
         if (!track) {
+          mediaStream.getTracks().forEach((item) => item.stop());
           throw new Error("No camera track available.");
         }
+        if (generation === undefined || !this.isCurrentCall(serverId, channelId, generation) || session.state !== "active") {
+          mediaStream.getTracks().forEach((item) => item.stop());
+          return;
+        }
+        this.stopLocalVideoKind(serverId, channelId, "camera");
         this.cameraDeviceError = null;
 
         const localParticipant = session.participants.find((item) => item.participantId === session.localParticipantId);
@@ -3320,6 +3607,7 @@ export const useCallStore = defineStore("call", {
           streamId: mediaStream.id
         });
         track.onended = () => {
+          if (localCameraStreamsByKey.get(key) !== mediaStream || !this.isCurrentCall(serverId, channelId, generation)) return;
           rtcLog("video.local.track.ended", {
             serverId,
             channelId,
@@ -3333,8 +3621,9 @@ export const useCallStore = defineStore("call", {
         };
         await this.syncAllPeerVideoTracks(serverId, channelId);
       } catch (error) {
-        session.cameraEnabled = false;
-        session.cameraErrorMessage = `Camera unavailable: ${(error as Error).message}`;
+        if (generation !== undefined && this.isCurrentCall(serverId, channelId, generation)) {
+          session.cameraErrorMessage = `Camera unavailable: ${(error as Error).message}. Select another camera and try again.`;
+        }
       }
     },
     async enableScreenShare(serverId: string, options?: { sourceId?: string }): Promise<void> {
@@ -3342,6 +3631,7 @@ export const useCallStore = defineStore("call", {
       if (!channelId) return;
       const key = this.ensureSession(serverId, channelId);
       const session = this.sessionsByKey[key];
+      const generation = generationByKey.get(key);
       if (!session.localParticipantId) {
         session.screenShareErrorMessage = "Screen share can be enabled after the call is connected.";
         return;
@@ -3384,7 +3674,12 @@ export const useCallStore = defineStore("call", {
         }
         const track = mediaStream.getVideoTracks()[0];
         if (!track) {
+          mediaStream.getTracks().forEach((item) => item.stop());
           throw new Error("No screen-share track available.");
+        }
+        if (generation === undefined || !this.isCurrentCall(serverId, channelId, generation) || session.state !== "active") {
+          mediaStream.getTracks().forEach((item) => item.stop());
+          return;
         }
 
         const localParticipant = session.participants.find((item) => item.participantId === session.localParticipantId);
@@ -3411,6 +3706,7 @@ export const useCallStore = defineStore("call", {
           streamId: mediaStream.id
         });
         track.onended = () => {
+          if (localScreenStreamsByKey.get(key) !== mediaStream || !this.isCurrentCall(serverId, channelId, generation)) return;
           rtcLog("video.local.track.ended", {
             serverId,
             channelId,
@@ -3424,8 +3720,9 @@ export const useCallStore = defineStore("call", {
         };
         await this.syncAllPeerVideoTracks(serverId, channelId);
       } catch (error) {
-        session.screenShareEnabled = false;
-        session.screenShareErrorMessage = `Screen share unavailable: ${(error as Error).message}`;
+        if (generation !== undefined && this.isCurrentCall(serverId, channelId, generation)) {
+          session.screenShareErrorMessage = `Screen share unavailable: ${(error as Error).message}. Choose a source and try again.`;
+        }
       }
     },
     async toggleCamera(serverId: string): Promise<void> {
@@ -3531,9 +3828,27 @@ export const useCallStore = defineStore("call", {
         if (!channelId) continue;
         const key = this.ensureSession(serverId, channelId);
         const session = this.sessionsByKey[key];
-        if (session.state !== "active" || session.micMuted) continue;
+        if (session.state !== "active" || !session.canSpeak) continue;
         this.stopMicUplink(serverId, channelId);
         await this.startMicUplink(serverId, channelId);
+      }
+    },
+    async handleMediaDeviceChange(): Promise<void> {
+      const previousInput = this.selectedInputDeviceId;
+      const previousCamera = this.selectedCameraDeviceId;
+      await Promise.all([this.refreshInputDevices(), this.refreshVideoInputDevices(), this.refreshOutputDevices()]);
+      const active = this.activeCall;
+      if (!active) return;
+      const session = this.sessionsByKey[sessionKey(active.serverId, active.channelId)];
+      if (!session || session.state !== "active") return;
+      if (previousInput !== this.selectedInputDeviceId && session.canSpeak) {
+        this.stopMicUplink(active.serverId, active.channelId);
+        await this.startMicUplink(active.serverId, active.channelId);
+      }
+      if (previousCamera !== this.selectedCameraDeviceId && session.cameraEnabled) {
+        this.stopLocalVideoKind(active.serverId, active.channelId, "camera");
+        await this.syncAllPeerVideoTracks(active.serverId, active.channelId);
+        session.cameraErrorMessage = "Camera disconnected. Select a camera to start video again.";
       }
     },
     setInputVolume(volume: number): void {
@@ -3547,6 +3862,8 @@ export const useCallStore = defineStore("call", {
       const key = this.ensureSession(serverId, channelId);
       if (micUplinksByKey.has(key)) return;
       const session = this.sessionsByKey[key];
+      const generation = generationByKey.get(key);
+      if (generation === undefined || !this.isCurrentCall(serverId, channelId, generation) || !session.canSpeak) return;
       if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
         session.errorMessage = "Microphone capture is not supported in this runtime.";
         return;
@@ -3578,7 +3895,7 @@ export const useCallStore = defineStore("call", {
         }
         const activeSession = this.sessionsByKey[key];
         const activeSocket = socketsByKey.get(key);
-        if (!activeSession || activeSession.state !== "active" || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+        if (!this.isCurrentCall(serverId, channelId, generation) || !activeSession || activeSession.state !== "active" || !activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
           mediaStream.getTracks().forEach((track) => {
             track.stop();
           });
@@ -3590,6 +3907,16 @@ export const useCallStore = defineStore("call", {
           throw new Error("No microphone track available.");
         }
         track.enabled = !activeSession.micMuted && !activeSession.deafened;
+        track.onended = () => {
+          if (micUplinksByKey.get(key)?.track !== track || !this.isCurrentCall(serverId, channelId, generation)) return;
+          this.stopMicUplink(serverId, channelId);
+          session.errorMessage = "Microphone disconnected. Select an input device to resume speaking.";
+          if (this.selectedInputDeviceId !== DEFAULT_OUTPUT_DEVICE_ID) {
+            this.selectedInputDeviceId = DEFAULT_OUTPUT_DEVICE_ID;
+            this.persistMediaPreferences();
+            void this.startMicUplink(serverId, channelId);
+          }
+        };
 
         const uplink: MicUplink = {
           channelId,
@@ -3629,7 +3956,9 @@ export const useCallStore = defineStore("call", {
         });
         await this.syncAllPeerVideoTracks(serverId, channelId);
       } catch (error) {
-        session.errorMessage = `Microphone unavailable: ${(error as Error).message}`;
+        if (generation !== undefined && this.isCurrentCall(serverId, channelId, generation)) {
+          session.errorMessage = `Microphone unavailable: ${(error as Error).message}. Select an input device and try again.`;
+        }
       }
     },
     stopMicUplink(serverId: string, channelId: string): void {
@@ -3652,6 +3981,7 @@ export const useCallStore = defineStore("call", {
       }
       stopAudioProbe(localMicProbeByKey, key);
       uplink.mediaStream.getTracks().forEach((track) => {
+        track.onended = null;
         track.stop();
       });
       micUplinksByKey.delete(key);
@@ -3713,13 +4043,13 @@ export const useCallStore = defineStore("call", {
       userUID: string;
       deviceID: string;
     }): Promise<void> {
-      const active = this.activeVoiceChannelByServer[params.serverId] ?? null;
-      if (active === params.channelId) {
+      const active = this.activeCall;
+      if (active?.serverId === params.serverId && active.channelId === params.channelId) {
         this.leaveChannel(params.serverId, params.channelId);
         return;
       }
       if (active) {
-        this.leaveChannel(params.serverId, active);
+        this.leaveChannel(active.serverId, active.channelId);
       }
       await this.joinChannel(params);
     },
@@ -3729,28 +4059,51 @@ export const useCallStore = defineStore("call", {
       backendUrl: string;
       userUID: string;
       deviceID: string;
-    }): Promise<void> {
+    }, options?: { reconnect?: boolean }): Promise<void> {
+      const otherCall = this.activeCall;
+      if (otherCall && (otherCall.serverId !== params.serverId || otherCall.channelId !== params.channelId)) {
+        this.leaveChannel(otherCall.serverId, otherCall.channelId);
+      }
+      const key = this.ensureSession(params.serverId, params.channelId);
+      const generation = this.invalidateJoinAttempt(params.serverId, params.channelId);
+      const controller = new AbortController();
+      joinAbortByKey.set(key, controller);
+      this.activeCall = { serverId: params.serverId, channelId: params.channelId };
+      this.activeVoiceChannelByServer[params.serverId] = params.channelId;
+      if (!options?.reconnect) {
+        reconnectAttemptByKey.delete(key);
+      }
+      this.armJoinDeadline(params.serverId, params.channelId, generation, 12_000);
       ensureAudioPlayback();
       setPlaybackVolume(this.outputVolume / 100);
       void this.refreshInputDevices();
       void this.refreshOutputDevices();
       void this.refreshVideoInputDevices();
       void this.selectOutputDevice(this.selectedOutputDeviceId);
-      const key = this.ensureSession(params.serverId, params.channelId);
       const audioPrefs = this.ensureAudioPrefs(params.serverId);
       const session = this.sessionsByKey[key];
+      const previousSocket = socketsByKey.get(key);
+      if (previousSocket) {
+        socketsByKey.delete(key);
+        previousSocket.close();
+      }
       session.micMuted = audioPrefs.micMuted;
       session.deafened = audioPrefs.deafened;
       this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
       this.closePeerConnectionsForSession(params.serverId, params.channelId);
       this.stopMicUplink(params.serverId, params.channelId);
-      session.state = transitionCallState(session.state, "join_requested");
+      session.state = options?.reconnect ? "reconnecting" : transitionCallState(session.state, "join_requested");
+      session.reconnectAttempt = options?.reconnect ? reconnectAttemptByKey.get(key) ?? 0 : 0;
+      session.reconnectPhase = options?.reconnect ? "attempting" : null;
+      session.nextRetryAt = null;
       session.errorMessage = null;
+      session.canRetry = true;
       session.participants = [];
       session.localParticipantId = null;
       session.videoStreams = [];
       session.cameraEnabled = false;
       session.screenShareEnabled = false;
+      session.canSpeak = false;
       session.cameraErrorMessage = null;
       session.screenShareErrorMessage = null;
       session.canSendVideo = true;
@@ -3774,12 +4127,16 @@ export const useCallStore = defineStore("call", {
       });
 
       try {
-        const capabilities = await fetchServerCapabilities(params.backendUrl);
+        const capabilities = await fetchServerCapabilities(params.backendUrl, controller.signal);
+        if (!this.isCurrentCall(params.serverId, params.channelId, generation)) return;
         const registry = useServerRegistryStore();
         registry.setCapabilities(params.serverId, capabilities);
-        if (!capabilities.rtc) {
-          throw new Error("Server does not advertise RTC support");
+        if (!capabilities.rtc?.features.voice || !capabilities.rtc.topologies.includes("sfu")) {
+          throw new CallFatalError("Server does not advertise compatible voice calling.");
         }
+        const policy = normalizeRTCConnectionPolicy(capabilities.rtc.connectionPolicy);
+        rtcConnectionPolicyByKey.set(key, policy);
+        this.armJoinDeadline(params.serverId, params.channelId, generation, policy.joinTimeoutMs);
         const defaultSubscribeReceivePolicy = resolveSubscribeReceivePolicy({
           capabilitiesPolicy: capabilities.rtc.subscribeReceivePolicy
         });
@@ -3789,24 +4146,29 @@ export const useCallStore = defineStore("call", {
           channelId: params.channelId,
           userUID: params.userUID,
           deviceID: params.deviceID,
-          serverID: params.serverId
+          serverID: params.serverId,
+          signal: controller.signal
         });
+        if (!this.isCurrentCall(params.serverId, params.channelId, generation)) return;
+        if (joinTicket.server_id !== params.serverId || joinTicket.channel_id !== params.channelId) {
+          throw new CallFatalError("Join ticket did not match the requested call.");
+        }
         const effectiveSubscribeReceivePolicy = resolveSubscribeReceivePolicy({
           capabilitiesPolicy: defaultSubscribeReceivePolicy,
           joinTicketPolicy: joinTicket.subscribe_receive_policy
         });
         subscribeReceivePolicyByKey.set(key, effectiveSubscribeReceivePolicy);
         iceServersByKey.set(key, toRTCIceServers(joinTicket.ice_servers));
-        session.canSendVideo = Boolean(joinTicket.permissions.video);
-        session.canShareScreen = Boolean(joinTicket.permissions.screenshare);
+        session.canSpeak = Boolean(joinTicket.permissions.speak);
+        session.canSendVideo = Boolean(capabilities.rtc.features.video && joinTicket.permissions.video);
+        session.canShareScreen = Boolean(capabilities.rtc.features.screenshare && joinTicket.permissions.screenshare);
 
         intentionallyClosed.delete(key);
         const socket = new WebSocket(joinTicket.signaling_url);
         socketsByKey.set(key, socket);
-        this.activeVoiceChannelByServer[params.serverId] = params.channelId;
 
         socket.addEventListener("open", () => {
-          reconnectAttemptByKey.delete(key);
+          if (!this.isCurrentCall(params.serverId, params.channelId, generation) || socketsByKey.get(key) !== socket) return;
           sendSignal(socket, {
             type: "rtc.join",
             request_id: `join_${Date.now()}`,
@@ -3818,6 +4180,7 @@ export const useCallStore = defineStore("call", {
         });
 
         socket.addEventListener("message", (event: MessageEvent<string>) => {
+          if (!this.isCurrentCall(params.serverId, params.channelId, generation) || socketsByKey.get(key) !== socket) return;
           const envelope = parseSignalEnvelope(event.data);
           if (!envelope) return;
           this.handleSignalEnvelope({
@@ -3828,6 +4191,7 @@ export const useCallStore = defineStore("call", {
         });
 
         socket.addEventListener("close", (event: CloseEvent) => {
+          if (!this.isCurrentCall(params.serverId, params.channelId, generation) || socketsByKey.get(key) !== socket) return;
           rtcLog("signaling.socket.close", {
             serverId: params.serverId,
             channelId: params.channelId,
@@ -3835,59 +4199,27 @@ export const useCallStore = defineStore("call", {
             reason: event.reason || null,
             wasClean: event.wasClean
           });
-          const activeSocket = socketsByKey.get(key);
-          if (activeSocket === socket) {
-            socketsByKey.delete(key);
-          }
-          this.stopMicUplink(params.serverId, params.channelId);
-          const localSession = this.sessionsByKey[key];
-          if (!localSession) return;
-          localSession.lastEventAt = new Date().toISOString();
-          if (intentionallyClosed.has(key)) {
-            intentionallyClosed.delete(key);
-            this.clearReconnectState(params.serverId, params.channelId);
-            localSession.state = transitionCallState(localSession.state, "left");
-            localSession.participants = [];
-            localSession.localParticipantId = null;
-            localSession.videoStreams = [];
-            localSession.cameraEnabled = false;
-            localSession.screenShareEnabled = false;
-            this.clearSpeakingForSession(params.serverId, params.channelId);
-            localSession.errorMessage = null;
-            return;
-          }
+          socketsByKey.delete(key);
           this.scheduleSignalingReconnect(params.serverId, params.channelId, `close:${event.code}`);
         });
 
         socket.addEventListener("error", () => {
+          if (!this.isCurrentCall(params.serverId, params.channelId, generation) || socketsByKey.get(key) !== socket) return;
           rtcLog("signaling.socket.error", {
             serverId: params.serverId,
             channelId: params.channelId
           });
-          this.stopMicUplink(params.serverId, params.channelId);
-          const localSession = this.sessionsByKey[key];
-          if (!localSession) return;
-          localSession.lastEventAt = new Date().toISOString();
           this.scheduleSignalingReconnect(params.serverId, params.channelId, "socket-error");
         });
       } catch (error) {
-        session.state = transitionCallState(session.state, "join_failed");
-        session.errorMessage = (error as Error).message;
-        session.videoStreams = [];
-        session.cameraEnabled = false;
-        session.screenShareEnabled = false;
-        this.stopAllLocalVideo(params.serverId, params.channelId, { notify: false });
-        this.closePeerConnectionsForSession(params.serverId, params.channelId);
-        const shouldReconnect =
-          !intentionallyClosed.has(key) && this.activeVoiceChannelByServer[params.serverId] === params.channelId;
-        if (shouldReconnect) {
-          this.scheduleSignalingReconnect(params.serverId, params.channelId, "join-failed");
+        if (!this.isCurrentCall(params.serverId, params.channelId, generation)) return;
+        const failure = error as Error;
+        if (failure instanceof CallFatalError ||
+          (failure instanceof RTCRequestError && !isRetryableHTTPStatus(failure.status))) {
+          this.failCall(params.serverId, params.channelId, failure.message, false);
           return;
         }
-        this.activeVoiceChannelByServer[params.serverId] = null;
-        this.clearReconnectState(params.serverId, params.channelId);
-        localJoinIdentityByKey.delete(key);
-        joinContextByKey.delete(key);
+        this.scheduleSignalingReconnect(params.serverId, params.channelId, "join-failed");
       }
     },
     handleSignalEnvelope(params: { serverId: string; channelId: string; envelope: SignalEnvelope }): void {
@@ -3898,6 +4230,15 @@ export const useCallStore = defineStore("call", {
 
       switch (params.envelope.type) {
         case "rtc.joined": {
+          this.clearJoinDeadline(params.serverId, params.channelId);
+          const reconnectTimer = reconnectTimerByKey.get(key);
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimerByKey.delete(key);
+          reconnectAttemptByKey.delete(key);
+          session.reconnectAttempt = 0;
+          session.reconnectPhase = null;
+          session.nextRetryAt = null;
+          session.errorMessage = null;
           const localIdentity = localJoinIdentityByKey.get(key);
           const participants = Array.isArray(payload.participants)
             ? payload.participants
@@ -3970,7 +4311,11 @@ export const useCallStore = defineStore("call", {
           session.joinedAt = new Date().toISOString();
           this.connectParticipantMesh(params.serverId, params.channelId);
           void this.syncAllPeerVideoTracks(params.serverId, params.channelId);
-          void this.startMicUplink(params.serverId, params.channelId);
+          if (restoredCaptureAfterJoin(session.canSpeak).microphone) {
+            void this.startMicUplink(params.serverId, params.channelId);
+          } else {
+            session.errorMessage = "Listen-only: this channel does not permit microphone publishing.";
+          }
           return;
         }
         case "rtc.participant.joined": {
@@ -4058,8 +4403,11 @@ export const useCallStore = defineStore("call", {
             this.requestSubscribeSync(params.serverId, params.channelId, "rtc-error-closed-peer", 2_000);
             return;
           }
-          session.state = transitionCallState(session.state, "fatal_error");
-          session.errorMessage = message;
+          if (isRetryableSignalError(code, retryable)) {
+            this.scheduleSignalingReconnect(params.serverId, params.channelId, `rtc-error:${code}`);
+          } else {
+            this.failCall(params.serverId, params.channelId, message, false);
+          }
           return;
         }
         case "rtc.media.state": {
@@ -4194,9 +4542,7 @@ export const useCallStore = defineStore("call", {
           return;
         }
         case "rtc.kicked": {
-          this.leaveChannel(params.serverId, params.channelId, {
-            reason: "Removed from voice channel by moderation action."
-          });
+          this.failCall(params.serverId, params.channelId, "Removed from voice channel by moderation action.", false);
           return;
         }
         default:
@@ -4302,6 +4648,7 @@ export const useCallStore = defineStore("call", {
     },
     leaveChannel(serverId: string, channelId: string, options?: { reason?: string }): void {
       const key = sessionKey(serverId, channelId);
+      this.invalidateJoinAttempt(serverId, channelId);
       this.clearReconnectState(serverId, channelId);
       this.stopMediaTests();
       this.stopMicUplink(serverId, channelId);
@@ -4322,6 +4669,7 @@ export const useCallStore = defineStore("call", {
         socket.close();
         socketsByKey.delete(key);
       }
+      intentionallyClosed.delete(key);
       const session = this.sessionsByKey[key];
       if (session) {
         session.state = options?.reason
@@ -4338,10 +4686,14 @@ export const useCallStore = defineStore("call", {
         session.errorMessage = options?.reason ?? null;
         session.lastEventAt = new Date().toISOString();
       }
-      clearPlaybackState();
+      if (!this.activeCall) clearPlaybackState();
       if (this.activeVoiceChannelByServer[serverId] === channelId) {
         this.activeVoiceChannelByServer[serverId] = null;
       }
+      if (this.activeCall?.serverId === serverId && this.activeCall.channelId === channelId) {
+        this.activeCall = null;
+      }
+      rtcConnectionPolicyByKey.delete(key);
     },
     clearServerState(serverId: string): void {
       this.stopMediaTests();
@@ -4374,7 +4726,7 @@ export const useCallStore = defineStore("call", {
       delete this.activeVoiceChannelByServer[serverId];
       delete this.audioPrefsByServer[serverId];
       subscribeReceivePolicyByServer.delete(serverId);
-      clearPlaybackState();
+      if (!this.activeCall) clearPlaybackState();
     },
     disconnectAll(): void {
       this.stopMediaTests();

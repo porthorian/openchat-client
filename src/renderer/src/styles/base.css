@@ -1327,6 +1327,13 @@ button {
   text-overflow: ellipsis;
 }
 
+.voice-connected-retry-countdown {
+  margin: 0 0 0 36px;
+  color: #f0cb82;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
 .voice-connected-header-actions {
   display: inline-flex;
   align-items: center;

@@ -34,20 +34,29 @@ export type SignalEnvelope = {
   payload?: Record<string, unknown>;
 };
 
-export async function fetchServerCapabilities(backendUrl: string): Promise<ServerCapabilities> {
+export class RTCRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "RTCRequestError";
+  }
+}
+
+export async function fetchServerCapabilities(backendUrl: string, signal?: AbortSignal): Promise<ServerCapabilities> {
   const base = backendUrl.replace(/\/$/, "");
   const candidates = [`${base}/v1/client/capabilities`, `${base}/client/capabilities`];
 
   let lastError: Error | null = null;
   for (const endpoint of candidates) {
     try {
-      const response = await fetch(endpoint);
+      const response = await fetch(endpoint, { signal });
       if (!response.ok) {
-        throw new Error(`Capability probe failed (${response.status})`);
+        throw new RTCRequestError(`Capability probe failed (${response.status})`, response.status);
       }
       const payload = (await response.json()) as ServerCapabilitiesResponse;
       return normalizeServerCapabilities(payload);
     } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof RTCRequestError && error.status !== 404 && error.status !== 405) throw error;
       lastError = error as Error;
     }
   }
@@ -60,11 +69,13 @@ export async function requestJoinTicket(params: {
   userUID: string;
   deviceID: string;
   serverID: string;
+  signal?: AbortSignal;
 }): Promise<JoinTicketResponse> {
   const base = params.backendUrl.replace(/\/$/, "");
   const endpoint = `${base}/v1/rtc/channels/${encodeURIComponent(params.channelId)}/join-ticket`;
   const response = await fetch(endpoint, {
     method: "POST",
+    signal: params.signal,
     headers: {
       "Content-Type": "application/json",
       "X-OpenChat-User-UID": params.userUID,
@@ -75,8 +86,7 @@ export async function requestJoinTicket(params: {
     })
   });
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Join ticket request failed (${response.status}): ${text}`);
+    throw new RTCRequestError(`Join ticket request failed (${response.status})`, response.status);
   }
   return (await response.json()) as JoinTicketResponse;
 }

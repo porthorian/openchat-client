@@ -399,6 +399,19 @@ export function useWorkspaceShell() {
     if (!activeVoiceChannelId.value) return null;
     return call.sessionFor(appUI.activeServerId, activeVoiceChannelId.value);
   });
+  const dockCallSession = computed(() => {
+    const active = call.activeCall;
+    return active ? call.sessionFor(active.serverId, active.channelId) : null;
+  });
+  const dockCallServerName = computed(() => {
+    const active = call.activeCall;
+    return active ? registry.byId(active.serverId)?.displayName ?? active.serverId : activeServer.value?.displayName ?? "Unknown Server";
+  });
+  const dockCallChannelName = computed(() => {
+    const active = call.activeCall;
+    if (!active) return null;
+    return findChannelByID(chat.groupsFor(active.serverId), active.channelId)?.name ?? active.channelId;
+  });
 
   const selectedChannel = computed(() => findChannelByID(rawChannelGroups.value, appUI.activeChannelId));
   const selectedVoiceChannelId = computed(() => (selectedChannel.value?.type === "voice" ? selectedChannel.value.id : null));
@@ -691,6 +704,8 @@ export function useWorkspaceShell() {
     }
   }
 
+  const onMediaDeviceChange = (): void => { void call.handleMediaDeviceChange(); };
+
   onMounted(async () => {
     identity.initializeIdentity();
     chat.hydrateNotificationPreferences();
@@ -699,6 +714,7 @@ export function useWorkspaceShell() {
     void call.refreshInputDevices();
     void call.refreshOutputDevices();
     void call.refreshVideoInputDevices();
+    navigator.mediaDevices?.addEventListener?.("devicechange", onMediaDeviceChange);
 
     try {
       await clientUpdate.initialize();
@@ -738,6 +754,7 @@ export function useWorkspaceShell() {
   });
 
   onBeforeUnmount(() => {
+    navigator.mediaDevices?.removeEventListener?.("devicechange", onMediaDeviceChange);
     closeCreateChannelModal();
     closeCreateCategoryModal();
     closeRenameCategoryModal();
@@ -788,10 +805,6 @@ export function useWorkspaceShell() {
     closeServerSettingsModal();
     closeUserSettingsModal();
     closeScreenSharePicker();
-    const currentActiveVoice = activeVoiceChannelId.value;
-    if (currentActiveVoice) {
-      call.leaveChannel(appUI.activeServerId, currentActiveVoice);
-    }
     const previousServerID = appUI.activeServerId;
     const previousChannelID = appUI.activeChannelId;
     if (previousChannelID) {
@@ -1224,15 +1237,15 @@ export function useWorkspaceShell() {
   }
 
   function toggleMic(): void {
-    call.toggleMic(appUI.activeServerId);
+    call.toggleMic(call.activeCall?.serverId ?? appUI.activeServerId);
   }
 
   function toggleDeafen(): void {
-    call.toggleDeafen(appUI.activeServerId);
+    call.toggleDeafen(call.activeCall?.serverId ?? appUI.activeServerId);
   }
 
   function toggleCamera(): void {
-    void call.toggleCamera(appUI.activeServerId);
+    void call.toggleCamera(call.activeCall?.serverId ?? appUI.activeServerId);
   }
 
   function closeScreenSharePicker(): void {
@@ -1247,7 +1260,7 @@ export function useWorkspaceShell() {
   async function openScreenSharePicker(): Promise<void> {
     const screenShareBridge = window.openchat.rtc?.listDesktopCaptureSources;
     if (!screenShareBridge) {
-      void call.toggleScreenShare(appUI.activeServerId);
+      void call.toggleScreenShare(call.activeCall?.serverId ?? appUI.activeServerId);
       return;
     }
 
@@ -1276,9 +1289,9 @@ export function useWorkspaceShell() {
   }
 
   async function toggleScreenShare(): Promise<void> {
-    const active = activeCallSession.value;
+    const active = dockCallSession.value;
     if (active?.screenShareEnabled) {
-      await call.toggleScreenShare(appUI.activeServerId);
+      await call.toggleScreenShare(call.activeCall?.serverId ?? appUI.activeServerId);
       closeScreenSharePicker();
       return;
     }
@@ -1289,15 +1302,19 @@ export function useWorkspaceShell() {
     const normalizedSourceID = sourceId.trim();
     if (!normalizedSourceID) return;
     closeScreenSharePicker();
-    void call.toggleScreenShare(appUI.activeServerId, {
+    void call.toggleScreenShare(call.activeCall?.serverId ?? appUI.activeServerId, {
       sourceId: normalizedSourceID
     });
   }
 
   function leaveVoiceChannel(): void {
-    if (!activeVoiceChannelId.value) return;
+    const active = call.activeCall;
+    if (!active) return;
     closeScreenSharePicker();
-    call.leaveChannel(appUI.activeServerId, activeVoiceChannelId.value);
+    call.leaveChannel(active.serverId, active.channelId);
+  }
+  function retryVoiceChannel(): void {
+    call.retryCall();
   }
 
   function openOutputOptions(): void {
@@ -1986,20 +2003,25 @@ export function useWorkspaceShell() {
   }));
 
   const userDockProps = computed(() => ({
-    serverName: activeServer.value?.displayName ?? "Unknown Server",
-    activeVoiceChannelName: activeVoiceChannelName.value,
-    callState: activeCallSession.value?.state ?? "idle",
-    callParticipantCount: activeCallSession.value?.participants.length ?? 0,
-    callErrorMessage: activeCallSession.value?.errorMessage ?? null,
-    cameraEnabled: activeCallSession.value?.cameraEnabled ?? false,
-    screenShareEnabled: activeCallSession.value?.screenShareEnabled ?? false,
-    canSendVideo: activeCallSession.value?.canSendVideo ?? true,
-    canShareScreen: activeCallSession.value?.canShareScreen ?? true,
-    cameraErrorMessage: activeCallSession.value?.cameraErrorMessage ?? null,
-    screenShareErrorMessage: activeCallSession.value?.screenShareErrorMessage ?? null,
+    serverName: dockCallServerName.value,
+    activeVoiceChannelName: dockCallChannelName.value,
+    callState: dockCallSession.value?.state ?? "idle",
+    callParticipantCount: dockCallSession.value?.participants.length ?? 0,
+    callErrorMessage: dockCallSession.value?.errorMessage ?? null,
+    canRetryCall: dockCallSession.value?.canRetry ?? false,
+    receiveOnly: dockCallSession.value?.state === "active" && (!dockCallSession.value.canSpeak || Boolean(dockCallSession.value.errorMessage?.startsWith("Microphone"))),
+    reconnectAttempt: dockCallSession.value?.reconnectAttempt ?? 0,
+    reconnectPhase: dockCallSession.value?.reconnectPhase ?? null,
+    nextRetryAt: dockCallSession.value?.nextRetryAt ?? null,
+    cameraEnabled: dockCallSession.value?.cameraEnabled ?? false,
+    screenShareEnabled: dockCallSession.value?.screenShareEnabled ?? false,
+    canSendVideo: dockCallSession.value?.canSendVideo ?? true,
+    canShareScreen: dockCallSession.value?.canShareScreen ?? true,
+    cameraErrorMessage: dockCallSession.value?.cameraErrorMessage ?? null,
+    screenShareErrorMessage: dockCallSession.value?.screenShareErrorMessage ?? null,
     localVoiceTransmitting: localVoiceTransmitting.value,
-    micMuted: activeCallSession.value?.micMuted ?? activeServerAudioPrefs.value?.micMuted ?? false,
-    deafened: activeCallSession.value?.deafened ?? activeServerAudioPrefs.value?.deafened ?? false,
+    micMuted: dockCallSession.value?.micMuted ?? activeServerAudioPrefs.value?.micMuted ?? false,
+    deafened: dockCallSession.value?.deafened ?? activeServerAudioPrefs.value?.deafened ?? false,
     inputDevices: call.inputDevices,
     selectedInputDeviceId: call.selectedInputDeviceId,
     inputVolume: call.inputVolume,
@@ -2199,6 +2221,7 @@ export function useWorkspaceShell() {
     toggleCamera,
     toggleScreenShare,
     leaveVoiceChannel,
+    retryVoiceChannel,
     openInputOptions,
     selectInputDevice,
     updateInputVolume,
