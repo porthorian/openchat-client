@@ -9,7 +9,7 @@ import { sanitizeText } from "./openGraphText";
 const isMac = process.platform === "darwin";
 const appName = "OpenChat Client";
 const appID = "io.openchat.client";
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const mainDirectory = path.dirname(fileURLToPath(import.meta.url));
 let appIconPath: string | null = null;
 const openGraphFetchTimeoutMS = 8000;
 const openGraphHtmlSliceLimit = 512_000;
@@ -22,9 +22,9 @@ if (process.platform === "win32") {
 
 function resolvePreloadPath(): string {
   const candidates = [
-    path.join(__dirname, "../preload/index.cjs"),
-    path.join(__dirname, "../preload/index.js"),
-    path.join(__dirname, "../preload/index.mjs"),
+    path.join(mainDirectory, "../preload/index.cjs"),
+    path.join(mainDirectory, "../preload/index.js"),
+    path.join(mainDirectory, "../preload/index.mjs"),
     path.join(process.cwd(), "out/preload/index.cjs"),
     path.join(process.cwd(), "out/preload/index.js"),
     path.join(process.cwd(), "out/preload/index.mjs")
@@ -41,7 +41,7 @@ function resolvePreloadPath(): string {
   const fallback = candidates[0];
   console.error("[openchat/main] preload script not found", {
     cwd: process.cwd(),
-    dirname: __dirname,
+    dirname: mainDirectory,
     candidates
   });
   return fallback;
@@ -51,8 +51,8 @@ function resolveAppIconPath(): string | null {
   const candidates = [
     path.join(process.cwd(), "logo.png"),
     path.join(app.getAppPath(), "logo.png"),
-    path.join(__dirname, "../../logo.png"),
-    path.join(__dirname, "../../../logo.png"),
+    path.join(mainDirectory, "../../logo.png"),
+    path.join(mainDirectory, "../../../logo.png"),
     path.join(process.resourcesPath, "logo.png")
   ];
 
@@ -65,7 +65,7 @@ function resolveAppIconPath(): string | null {
   console.warn("[openchat/main] app icon not found", {
     cwd: process.cwd(),
     appPath: app.getAppPath(),
-    dirname: __dirname,
+    dirname: mainDirectory,
     candidates
   });
   return null;
@@ -246,7 +246,7 @@ function createMainWindow(): BrowserWindow {
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
-    void window.loadFile(path.join(__dirname, "../renderer/index.html"));
+    void window.loadFile(path.join(mainDirectory, "../renderer/index.html"));
   }
 
   return window;
