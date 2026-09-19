@@ -3,7 +3,7 @@ import type { DesktopCaptureSource, RuntimeInfo } from "@shared/ipc";
 import type { Channel, ChannelGroup, ChannelType, MentionCandidate } from "@renderer/types/chat";
 import type { ServerCapabilities } from "@renderer/types/capabilities";
 import type { ServerProfile } from "@renderer/types/models";
-import type { SyncedUserProfile } from "@renderer/services/chatClient";
+import { updateBulkReadAcks, type SyncedUserProfile } from "@renderer/services/chatClient";
 import type { CallVideoStream } from "@renderer/stores/call";
 import {
   claimServerOwnership as claimServerOwnershipRequest,
@@ -14,6 +14,7 @@ import {
   ServerRegistryRequestError
 } from "@renderer/services/serverRegistryClient";
 import { fetchServerCapabilities } from "@renderer/services/rtcClient";
+import { clearVerifiedSession } from "@renderer/services/verifiedSessionClient";
 import { avatarPresetById } from "@renderer/utils/avatarPresets";
 import { canonicalShortcut, shortcutActions, type ShortcutAction } from "@renderer/stores/settingsModel";
 import {
@@ -312,9 +313,11 @@ export function useWorkspaceShell() {
   const rawChannelGroups = computed(() => chat.groupsFor(appUI.activeServerId));
 
   const filteredChannelGroups = computed(() => {
+    const muted = new Set(settings.mutedChannelIdsByServer[appUI.activeServerId] ?? []);
+    const hideMuted = settings.hideMutedChannelsByServer[appUI.activeServerId] ?? false;
     const groups = rawChannelGroups.value.map((group) => ({
       ...group,
-      channels: group.channels.map((channel) => ({
+      channels: group.channels.filter((channel) => !hideMuted || !muted.has(channel.id) || channel.id === appUI.activeChannelId || channel.id === activeVoiceChannelId.value).map((channel) => ({
         ...channel,
         unreadCount: channel.type === "text" ? chat.unreadCountForChannel(channel.id) : channel.unreadCount,
         mentionCount: channel.type === "text" ? chat.mentionCountForChannel(channel.id) : 0
@@ -675,14 +678,18 @@ export function useWorkspaceShell() {
     const wasActiveServer = appUI.activeServerId === serverId;
     const removedServer = registry.byId(serverId);
     let consentClearError = "";
+    let sessionClearError = "";
     if (removedServer) {
       try { identity.clearServerProfileConsent(serverId, removedServer.backendUrl); }
       catch (error) { consentClearError = (error as Error).message; }
     }
-    const notice = consentClearError ? `${reasonMessage} ${consentClearError}` : reasonMessage;
+    try { await clearVerifiedSession(serverId); }
+    catch (error) { sessionClearError = `Could not clear the saved session: ${(error as Error).message}`; }
+    const notice = [reasonMessage, consentClearError, sessionClearError].filter(Boolean).join(" ");
     chat.clearServerData(serverId);
     call.clearServerState(serverId);
     session.clearSession(serverId);
+    settings.clearServer(serverId);
     appUI.clearServerContext(serverId);
     registry.removeServer(serverId);
 
@@ -713,10 +720,7 @@ export function useWorkspaceShell() {
       if (!isServerUnreachableError(error)) {
         throw error;
       }
-      await removeServerFromClient(
-        serverId,
-        `Removed unreachable server ${targetServer.displayName}. Add it again once reachable.`
-      );
+      startupError.value = `${targetServer.displayName} is unreachable. It remains in your server list.`;
     }
   }
 
@@ -870,6 +874,7 @@ export function useWorkspaceShell() {
   async function leaveServer(serverId: string): Promise<void> {
     const leavingServer = registry.byId(serverId);
     if (!leavingServer) return;
+    if (!window.confirm(`Leave ${leavingServer.displayName}? This removes your membership on the server.`)) return;
 
     const leavingSession = session.sessionsByServer[serverId];
     const userUID = leavingSession?.userUID || identity.getUIDForServer(serverId);
@@ -883,11 +888,15 @@ export function useWorkspaceShell() {
       });
     } catch (error) {
       if (isServerUnreachableError(error)) {
-        await removeServerFromClient(serverId, `Removed unreachable server ${leavingServer.displayName}.`);
+        if (window.confirm(`${leavingServer.displayName} is unreachable. Remove it from this device only? Your backend membership will remain.`)) {
+          await removeServerFromClient(serverId, `Removed unreachable server ${leavingServer.displayName} locally.`);
+        }
         return;
       }
       if (error instanceof ServerRegistryRequestError && error.status === 404) {
-        await removeServerFromClient(serverId, `Removed missing server ${leavingServer.displayName}.`);
+        if (window.confirm(`${leavingServer.displayName} was not found. Remove its local entry?`)) {
+          await removeServerFromClient(serverId, `Removed missing server ${leavingServer.displayName} locally.`);
+        }
         return;
       }
       startupError.value = `Failed to leave server ${leavingServer.displayName}: ${(error as Error).message}`;
@@ -1510,6 +1519,45 @@ export function useWorkspaceShell() {
     });
   }
 
+  async function markServerRead(serverId: string): Promise<void> {
+    const server = registry.byId(serverId);
+    if (!server) return;
+    const channelIds = chat.groupsFor(serverId).flatMap((group) => group.channels)
+      .filter((channel) => channel.type === "text")
+      .map((channel) => channel.id);
+    if (channelIds.length === 0) return;
+    if (!server.capabilities?.serverActions?.bulkReadAcks) {
+      markChannelsRead(channelIds);
+      return;
+    }
+    const unreadBefore = Object.fromEntries(channelIds.map((id) => [id, chat.unreadByChannel[id] ?? 0]));
+    const mentionsBefore = Object.fromEntries(channelIds.map((id) => [id, chat.mentionUnreadByChannel[id] ?? 0]));
+    chat.markChannelsRead(channelIds);
+    try {
+      const readAcks = await updateBulkReadAcks({
+        backendUrl: server.backendUrl,
+        serverId,
+        userUID: session.sessionsByServer[serverId]?.userUID ?? identity.getUIDForServer(serverId),
+        deviceID: localDeviceID.value,
+        channelIds
+      });
+      const expected = new Set(channelIds);
+      if (readAcks.length !== expected.size || readAcks.some((ack) => !expected.delete(ack.channelId))) {
+        throw new Error("Server returned an incomplete read-ack response.");
+      }
+      for (const ack of readAcks) {
+        chat.readAckByChannel[ack.channelId] = ack;
+        chat.recomputeMentionUnreadForChannel(serverId, ack.channelId);
+      }
+    } catch (error) {
+      for (const channelId of channelIds) {
+        chat.unreadByChannel[channelId] = unreadBefore[channelId];
+        chat.mentionUnreadByChannel[channelId] = mentionsBefore[channelId];
+      }
+      startupError.value = `Could not mark ${server.displayName} as read: ${(error as Error).message}`;
+    }
+  }
+
   function markMessageUnread(payload: { channelId: string; messageId: string }): void {
     const channelId = payload.channelId.trim();
     if (!channelId) return;
@@ -2069,6 +2117,7 @@ export function useWorkspaceShell() {
     activeServerId: appUI.activeServerId,
     unreadByServer: unreadByServer.value,
     mentionByServer: mentionByServer.value,
+    hideMutedByServer: settings.hideMutedChannelsByServer,
     mutedByServer: registry.servers.reduce<Record<string, boolean>>((summary, server) => {
       summary[server.serverId] = chat.serverMutedFor(server.serverId);
       return summary;
@@ -2084,7 +2133,10 @@ export function useWorkspaceShell() {
     activeVoiceChannelId: activeVoiceChannelId.value,
     voiceParticipantsByChannel: activeVoiceParticipants.value,
     voiceSpeakingParticipantIdsByChannel: activeVoiceSpeakingParticipants.value,
-    filterValue: appUI.channelFilter
+    filterValue: appUI.channelFilter,
+    hideMutedChannels: settings.hideMutedChannelsByServer[appUI.activeServerId] ?? false,
+    mutedChannelIds: settings.mutedChannelIdsByServer[appUI.activeServerId] ?? [],
+    actionCapabilities: activeServer.value?.capabilities?.serverActions ?? null
   }));
 
   const userDockProps = computed(() => ({
@@ -2298,6 +2350,12 @@ export function useWorkspaceShell() {
     toggleServerMuted: (serverId: string) => {
       chat.toggleServerMuted(serverId);
     },
+    markServerRead,
+    toggleHideMutedChannels: (serverId: string) => settings.toggleHideMutedChannels(serverId),
+    openServerSettings: (serverId: string) => {
+      if (serverId === appUI.activeServerId) void openServerSettingsModal();
+      else void selectServer(serverId).then(() => openServerSettingsModal());
+    },
     openNotificationSettings: (serverId: string) => {
       openUserSettings("notifications", serverId);
     },
@@ -2316,7 +2374,10 @@ export function useWorkspaceShell() {
     openNotificationSettings: () => openUserSettings("notifications"),
     openPrivacySettings: () => openUserSettings("identity_privacy"),
     updateFilter: setChannelFilter,
-    markChannelsRead
+    markChannelsRead,
+    markServerRead: () => markServerRead(appUI.activeServerId),
+    toggleHideMutedChannels: () => settings.toggleHideMutedChannels(appUI.activeServerId),
+    toggleChannelMuted: (channelId: string) => settings.toggleChannelMute(appUI.activeServerId, channelId)
   };
 
   const userDockListeners = {

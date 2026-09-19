@@ -40,6 +40,8 @@ export const useSettingsStore = defineStore("settings", {
           notificationSound: this.notificationSound, notificationPreview: this.notificationPreview,
           notificationPolicyByServer: this.notificationPolicyByServer,
           previousNotificationPolicyByServer: this.previousNotificationPolicyByServer,
+          mutedChannelIdsByServer: this.mutedChannelIdsByServer,
+          hideMutedChannelsByServer: this.hideMutedChannelsByServer,
           presenceStatus: this.presenceStatus
         };
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, ...data }));
@@ -81,9 +83,27 @@ export const useSettingsStore = defineStore("settings", {
     toggleMute(serverId: string): void {
       this.setPolicy(serverId, this.policyFor(serverId) === "off" ? this.previousNotificationPolicyByServer[serverId] ?? "all" : "off");
     },
+    channelMutedFor(serverId: string, channelId: string): boolean {
+      return (this.mutedChannelIdsByServer[serverId] ?? []).includes(channelId);
+    },
+    toggleChannelMute(serverId: string, channelId: string): void {
+      if (!serverId.trim() || !channelId.trim()) return;
+      const next = new Set(this.mutedChannelIdsByServer[serverId] ?? []);
+      if (next.has(channelId)) next.delete(channelId);
+      else next.add(channelId);
+      this.mutedChannelIdsByServer[serverId] = [...next];
+      this.persist();
+    },
+    toggleHideMutedChannels(serverId: string): void {
+      if (!serverId.trim()) return;
+      this.hideMutedChannelsByServer[serverId] = !this.hideMutedChannelsByServer[serverId];
+      this.persist();
+    },
     clearServer(serverId: string): void {
       delete this.notificationPolicyByServer[serverId];
       delete this.previousNotificationPolicyByServer[serverId];
+      delete this.mutedChannelIdsByServer[serverId];
+      delete this.hideMutedChannelsByServer[serverId];
       this.persist();
     },
     setShortcut(action: ShortcutAction, shortcut: string): string | null {

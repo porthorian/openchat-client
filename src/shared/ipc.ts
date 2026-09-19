@@ -8,8 +8,21 @@ export const IPCChannels = {
   UpdateCheckForUpdates: "app:update:check-for-updates",
   UpdateDownload: "app:update:download",
   UpdateQuitAndInstall: "app:update:quit-and-install",
-  UpdateStatusChanged: "app:update:status-changed"
+  UpdateStatusChanged: "app:update:status-changed",
+  IdentityPublicKey: "identity:public-key",
+  IdentitySignChallenge: "identity:sign-challenge",
+  IdentityStoreSession: "identity:store-session",
+  IdentityLoadSession: "identity:load-session",
+  IdentityClearSession: "identity:clear-session"
 } as const;
+
+export type StoredVerifiedSession = {
+  serverId: string;
+  backendUrl: string;
+  userUID: string;
+  token: string;
+  expiresAt: string;
+};
 
 export type DesktopCaptureSourceKind = "screen" | "window";
 

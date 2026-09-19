@@ -12,12 +12,16 @@ const props = defineProps<{
   unreadByServer: Record<string, number>;
   mentionByServer: Record<string, number>;
   mutedByServer: Record<string, boolean>;
+  hideMutedByServer?: Record<string, boolean>;
 }>();
 
 const emit = defineEmits<{
   selectServer: [serverId: string];
   addServer: [];
   toggleServerMuted: [serverId: string];
+  markServerRead: [serverId: string];
+  toggleHideMutedChannels: [serverId: string];
+  openServerSettings: [serverId: string];
   openNotificationSettings: [serverId: string];
   leaveServer: [serverId: string];
 }>();
@@ -55,7 +59,7 @@ function closeServerContextMenu(): void {
 function openServerContextMenu(serverId: string, event: MouseEvent): void {
   event.preventDefault();
   const menuWidth = 236;
-  const menuHeight = 438;
+  const menuHeight = 275;
   const boundedX = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8));
   const boundedY = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8));
 
@@ -81,8 +85,13 @@ function handleSelectServer(serverId: string): void {
   emit("selectServer", serverId);
 }
 
-function runServerContextAction(): void {
-  closeServerContextMenu();
+function runServerContextAction(action: "mark-read" | "hide-muted" | "server-settings"): void {
+  const serverId = serverContextMenu.value.serverId;
+  if (!serverId) return;
+  menuKeyboard.closeAndReturn();
+  if (action === "mark-read") emit("markServerRead", serverId);
+  if (action === "hide-muted") emit("toggleHideMutedChannels", serverId);
+  if (action === "server-settings") void nextTick(() => emit("openServerSettings", serverId));
 }
 
 function toggleServerMuted(): void {
@@ -173,11 +182,7 @@ onBeforeUnmount(() => {
       aria-label="Server actions"
       :style="{ left: `${serverContextMenu.x}px`, top: `${serverContextMenu.y}px` }"
     >
-      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">Mark As Read</button>
-
-      <div class="server-context-divider" />
-
-      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">Invite to Server</button>
+      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction('mark-read')">Mark As Read</button>
 
       <div class="server-context-divider" />
 
@@ -199,34 +204,14 @@ onBeforeUnmount(() => {
           <AppIcon :path="mdiChevronRight" :size="14" />
         </span>
       </button>
-      <button type="button" class="server-context-item" role="menuitemcheckbox" aria-checked="false" @click="runServerContextAction">
+      <button type="button" class="server-context-item" role="menuitemcheckbox" :aria-checked="hideMutedByServer?.[serverContextMenu.serverId] ?? false" @click="runServerContextAction('hide-muted')">
         Hide Muted Channels
-        <span class="server-context-checkbox" aria-hidden="true" />
+        <span class="server-context-checkbox" :class="{ 'is-checked': hideMutedByServer?.[serverContextMenu.serverId] }" aria-hidden="true" />
       </button>
 
       <div class="server-context-divider" />
 
-      <div class="server-context-submenu-wrap">
-        <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">
-          Server Settings
-          <span class="server-context-trailing">
-            <AppIcon :path="mdiChevronRight" :size="14" />
-          </span>
-        </button>
-        <section class="server-context-submenu" role="menu" aria-label="Server settings actions">
-          <button type="button" class="server-context-subitem" role="menuitem" @click="runServerContextAction">Server Profile</button>
-          <button type="button" class="server-context-subitem" role="menuitem" @click="runServerContextAction">Engagement</button>
-          <button type="button" class="server-context-subitem" role="menuitem" @click="runServerContextAction">Emoji</button>
-          <button type="button" class="server-context-subitem" role="menuitem" @click="runServerContextAction">Stickers</button>
-          <button type="button" class="server-context-subitem" role="menuitem" @click="runServerContextAction">Soundboard</button>
-        </section>
-      </div>
-      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">Privacy Settings</button>
-      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">Edit Per-server Profile</button>
-
-      <div class="server-context-divider" />
-
-      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction">Create Event</button>
+      <button type="button" class="server-context-item" role="menuitem" @click="runServerContextAction('server-settings')">Server Settings</button>
 
       <div class="server-context-divider" />
 

@@ -112,6 +112,15 @@ export type ProfileCapabilitiesResponse = {
   message_author_profile_mode: MessageAuthorProfileMode;
 };
 
+export type ServerActionCapabilitiesResponse = {
+  bulk_read_acks?: boolean;
+  invites?: boolean;
+  privacy?: boolean;
+  profile_overrides?: boolean;
+  events?: boolean;
+  moderation?: boolean;
+};
+
 export type ServerCapabilitiesResponse = {
   server_name: string;
   server_id: string;
@@ -129,6 +138,7 @@ export type ServerCapabilitiesResponse = {
   security: SecurityCapabilitiesResponse;
   rtc?: RTCCapabilitiesResponse;
   profile?: ProfileCapabilitiesResponse;
+  server_actions?: ServerActionCapabilitiesResponse;
 };
 
 export type TransportCapabilities = {
@@ -251,6 +261,14 @@ export type ServerCapabilities = {
   security: SecurityCapabilities;
   rtc: RTCCapabilities | null;
   profile: ProfileCapabilities | null;
+  serverActions: {
+    bulkReadAcks: boolean;
+    invites: boolean;
+    privacy: boolean;
+    profileOverrides: boolean;
+    events: boolean;
+    moderation: boolean;
+  };
 };
 
 export function normalizeServerCapabilities(source: ServerCapabilitiesResponse): ServerCapabilities {
@@ -355,6 +373,14 @@ export function normalizeServerCapabilities(source: ServerCapabilitiesResponse):
       tlsFingerprint: source.security.tls_fingerprint ?? null
     },
     rtc,
-    profile
+    profile,
+    serverActions: {
+      bulkReadAcks: source.server_actions?.bulk_read_acks ?? false,
+      invites: source.server_actions?.invites ?? false,
+      privacy: source.server_actions?.privacy ?? false,
+      profileOverrides: source.server_actions?.profile_overrides ?? false,
+      events: source.server_actions?.events ?? false,
+      moderation: source.server_actions?.moderation ?? false
+    }
   };
 }

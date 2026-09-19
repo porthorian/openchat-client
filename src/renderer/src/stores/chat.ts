@@ -53,6 +53,7 @@ import { useIdentityStore } from "./identity";
 import { PROFILE_PUBLICATION_APPROVED } from "./profilePublication";
 import { useSettingsStore } from "./settings";
 import { shouldNotify } from "./settingsModel";
+import { tokenForServer } from "@renderer/services/verifiedSessionClient";
 import {
   applyCategoryCreatedToGroups,
   applyCategoryDeletedToGroups,
@@ -1633,7 +1634,8 @@ export const useChatStore = defineStore("chat", {
       this.currentUserUIDByServer[params.serverId] = params.userUID;
       realtimeConnectParamsByServer.set(params.serverId, params);
       const url = getRealtimeURL(params.backendUrl, params.serverId, params.userUID, params.deviceID);
-      const socket = new WebSocket(url);
+      const token = tokenForServer(params.serverId, params.backendUrl);
+      const socket = token ? new WebSocket(url, [`openchat.session.${token}`]) : new WebSocket(url);
       socketsByServer.set(params.serverId, socket);
       intentionallyClosedSockets.delete(params.serverId);
 
@@ -2093,6 +2095,7 @@ export const useChatStore = defineStore("chat", {
       if (typeof window === "undefined" || typeof Notification === "undefined") return;
       const currentUID = this.currentUserUIDByServer[serverId] ?? "";
       const settings = useSettingsStore();
+      if (settings.channelMutedFor(serverId, message.channelId)) return;
       const isMention = messageCountsAsMentionForUser(message, currentUID);
       if (!shouldNotify({
         enabled: settings.notificationsEnabled,

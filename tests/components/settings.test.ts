@@ -42,6 +42,21 @@ it("persists migrated mute and restores a server's previous policy", () => {
   expect(JSON.parse(localStorage.getItem("openchat.settings.v1")!).version).toBe(1);
 });
 
+it("persists channel mute and hide preferences per server", () => {
+  const settings = useSettingsStore();
+  settings.hydrate();
+  settings.toggleChannelMute("one", "ch-general");
+  settings.toggleHideMutedChannels("one");
+  expect(settings.channelMutedFor("one", "ch-general")).toBe(true);
+  expect(settings.channelMutedFor("two", "ch-general")).toBe(false);
+  const restored = JSON.parse(localStorage.getItem("openchat.settings.v1")!);
+  expect(restored.mutedChannelIdsByServer.one).toEqual(["ch-general"]);
+  expect(restored.hideMutedChannelsByServer.one).toBe(true);
+  settings.clearServer("one");
+  expect(settings.channelMutedFor("one", "ch-general")).toBe(false);
+  expect(settings.hideMutedChannelsByServer.one).toBeUndefined();
+});
+
 it("requires fresh profile consent after a capability scope change", () => {
   const identity = useIdentityStore();
   identity.setProfileConsent("one", "https://chat.example.test", "global", true);
@@ -119,6 +134,22 @@ describe("settings dialog", () => {
 });
 
 describe("server menu", () => {
+  it("dispatches read and hide actions and removes unsupported placeholders", async () => {
+    const wrapper = mount(ServerRail, { props: {
+      servers: [{ serverId: "one", displayName: "One", iconText: "O", trustState: "verified" } as never],
+      activeServerId: "one", unreadByServer: {}, mentionByServer: {}, mutedByServer: {}, hideMutedByServer: { one: false }
+    } });
+    const trigger = wrapper.get("button.server-dot:not(.app-home):not(.utility)");
+    await trigger.trigger("contextmenu", { clientX: 20, clientY: 20 });
+    expect(wrapper.text()).not.toContain("Soundboard");
+    expect(wrapper.text()).not.toContain("Invite to Server");
+    await wrapper.findAll(".server-context-item").find((item) => item.text().includes("Mark As Read"))!.trigger("click");
+    expect(wrapper.emitted("markServerRead")?.[0]).toEqual(["one"]);
+    await trigger.trigger("contextmenu", { clientX: 20, clientY: 20 });
+    await wrapper.findAll(".server-context-item").find((item) => item.text().includes("Hide Muted Channels"))!.trigger("click");
+    expect(wrapper.emitted("toggleHideMutedChannels")?.[0]).toEqual(["one"]);
+    wrapper.unmount();
+  });
   it("opens notification settings for the selected server", async () => {
     const wrapper = mount(ServerRail, { props: {
       servers: [{ serverId: "one", displayName: "One", iconText: "O", trustState: "verified" } as never],

@@ -14,6 +14,7 @@ import type {
   MessageMentionRange,
   MessageReplyReference
 } from "@renderer/types/chat";
+import { tokenForUIDAndBackend } from "./verifiedSessionClient";
 
 export type RealtimeEnvelope = {
   type: string;
@@ -98,11 +99,37 @@ export class ProfileRequestError extends Error {
   }
 }
 
-function authHeaders(userUID: string, deviceID: string): Record<string, string> {
+function authHeaders(userUID: string, deviceID: string, backendUrl?: string): Record<string, string> {
+  const token = backendUrl ? tokenForUIDAndBackend(userUID, backendUrl) : null;
+  if (token) return { Authorization: `Bearer ${token}` };
   return {
     "X-OpenChat-User-UID": userUID,
     "X-OpenChat-Device-ID": deviceID
   };
+}
+
+export async function updateBulkReadAcks(params: {
+  backendUrl: string;
+  serverId: string;
+  userUID: string;
+  deviceID: string;
+  channelIds: string[];
+}): Promise<ChannelReadAck[]> {
+  const response = await fetch(`${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/read-acks`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders(params.userUID, params.deviceID, params.backendUrl) },
+    body: JSON.stringify({ read_acks: params.channelIds.map((channelID) => ({ channel_id: channelID })) })
+  });
+  if (!response.ok) throw new Error(`Could not mark server as read (${response.status}).`);
+  const body = await response.json() as { server_id: string; read_acks: Array<Record<string, unknown>> };
+  if (body.server_id !== params.serverId || !Array.isArray(body.read_acks)) throw new Error("Invalid bulk read-ack response.");
+  return body.read_acks.map((item) => ({
+    channelId: String(item.channel_id ?? ""),
+    userUID: String(item.user_uid ?? ""),
+    lastReadMessageId: item.last_read_message_id ? String(item.last_read_message_id) : null,
+    ackedAt: item.acked_at ? String(item.acked_at) : null,
+    cursorIndex: typeof item.cursor_index === "number" ? item.cursor_index : null
+  }));
 }
 
 async function toProfileRequestError(response: Response, fallbackMessage: string): Promise<ProfileRequestError> {
@@ -556,7 +583,7 @@ export async function createChannel(params: {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -596,7 +623,7 @@ export async function createCategory(params: {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -634,7 +661,7 @@ export async function updateCategory(params: {
   const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -670,7 +697,7 @@ export async function deleteCategory(params: {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/categories/${encodeURIComponent(params.groupId)}`;
   const response = await fetch(endpoint, {
     method: "DELETE",
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -705,7 +732,7 @@ export async function updateChannelLayout(params: {
   const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -744,7 +771,7 @@ export async function fetchServerSettings(params: {
 }): Promise<ServerSettingsResponse> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/settings`;
   const response = await fetch(endpoint, {
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -772,7 +799,7 @@ export async function updateServerSettings(params: {
   const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -826,7 +853,7 @@ export async function resolveMentionCandidates(params: {
     endpoint.searchParams.set("limit", String(Math.trunc(params.limit)));
   }
   const response = await fetch(endpoint.toString(), {
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -848,7 +875,7 @@ export async function fetchChannelReadAck(params: {
 }): Promise<ChannelReadAck> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/read-ack`;
   const response = await fetch(endpoint, {
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -872,7 +899,7 @@ export async function updateChannelReadAck(params: {
   const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -908,7 +935,7 @@ export async function createMessage(params: {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/messages`;
   const files = params.attachments ?? [];
   const replyToMessageId = params.replyToMessageId?.trim() ?? "";
-  const headers = authHeaders(params.userUID, params.deviceID);
+  const headers = authHeaders(params.userUID, params.deviceID, params.backendUrl);
 
   const bodyBytes = utf8ByteLength(params.body);
   if (hasLimit(params.maxMessageBytes) && bodyBytes > params.maxMessageBytes) {
@@ -991,7 +1018,7 @@ export async function deleteMessage(params: {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/channels/${encodeURIComponent(params.channelId)}/messages/${encodeURIComponent(params.messageId)}`;
   const response = await fetch(endpoint, {
     method: "DELETE",
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -1006,7 +1033,7 @@ export async function fetchMyProfile(params: {
 }): Promise<SyncedUserProfile> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/profile/me`;
   const response = await fetch(endpoint, {
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     throw await toProfileRequestError(response, `Failed to fetch profile (${response.status})`);
@@ -1030,7 +1057,7 @@ export async function uploadProfileAvatar(params: {
 
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: authHeaders(params.userUID, params.deviceID),
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl),
     body: formData
   });
   if (!response.ok) {
@@ -1065,7 +1092,7 @@ export async function updateMyProfile(params: {
 }): Promise<SyncedUserProfile> {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/profile/me`;
   const headers: Record<string, string> = {
-    ...authHeaders(params.userUID, params.deviceID),
+    ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
     "Content-Type": "application/json"
   };
   if (typeof params.expectedVersion === "number" && params.expectedVersion > 0) {
@@ -1100,7 +1127,7 @@ export async function fetchProfilesBatch(params: {
     endpoint.searchParams.append("user_uid", userUID);
   });
   const response = await fetch(endpoint.toString(), {
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     throw await toProfileRequestError(response, `Failed to fetch profile batch (${response.status})`);

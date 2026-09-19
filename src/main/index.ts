@@ -1,10 +1,11 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from "electron";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { IPCChannels, type DesktopCaptureSource, type OpenGraphMetadata, type RuntimeInfo } from "../shared/ipc";
 import { ClientUpdateService } from "./clientUpdateService";
 import { sanitizeText } from "./openGraphText";
+import { SecureIdentityService } from "./secureIdentityService";
 
 const isMac = process.platform === "darwin";
 const appName = "OpenChat Client";
@@ -236,7 +237,8 @@ function createMainWindow(): BrowserWindow {
   window.webContents.on("will-navigate", (event, navigationURL) => {
     const devURL = process.env.ELECTRON_RENDERER_URL;
     const isAllowedDevNavigation = Boolean(devURL && navigationURL.startsWith(devURL));
-    const isAllowedFileNavigation = navigationURL.startsWith("file://");
+    const bundledRendererURL = pathToFileURL(path.join(mainDirectory, "../renderer/index.html")).toString();
+    const isAllowedFileNavigation = navigationURL === bundledRendererURL || navigationURL.startsWith(`${bundledRendererURL}#`);
 
     if (!isAllowedDevNavigation && !isAllowedFileNavigation) {
       event.preventDefault();
@@ -253,6 +255,36 @@ function createMainWindow(): BrowserWindow {
 }
 
 function registerIPCHandlers(updateService: ClientUpdateService): void {
+  const secureIdentity = new SecureIdentityService();
+  const assertTrustedRenderer = (event: IpcMainInvokeEvent): void => {
+    const source = event.senderFrame?.url ?? "";
+    const devURL = process.env.ELECTRON_RENDERER_URL;
+    const bundledURL = pathToFileURL(path.join(mainDirectory, "../renderer/index.html")).toString();
+    if (source !== bundledURL && !source.startsWith(`${bundledURL}#`) &&
+      !(devURL && (source === devURL || source.startsWith(`${devURL}/`) || source.startsWith(`${devURL}#`)))) {
+      throw new Error("Untrusted renderer frame.");
+    }
+  };
+  ipcMain.handle(IPCChannels.IdentityPublicKey, (event) => {
+    assertTrustedRenderer(event);
+    return secureIdentity.publicKey();
+  });
+  ipcMain.handle(IPCChannels.IdentitySignChallenge, (event, payload: string) => {
+    assertTrustedRenderer(event);
+    return secureIdentity.signChallenge(payload);
+  });
+  ipcMain.handle(IPCChannels.IdentityStoreSession, (event, session) => {
+    assertTrustedRenderer(event);
+    return secureIdentity.storeSession(session);
+  });
+  ipcMain.handle(IPCChannels.IdentityLoadSession, (event, serverId: string) => {
+    assertTrustedRenderer(event);
+    return secureIdentity.loadSession(serverId);
+  });
+  ipcMain.handle(IPCChannels.IdentityClearSession, (event, serverId: string) => {
+    assertTrustedRenderer(event);
+    return secureIdentity.clearSession(serverId);
+  });
   ipcMain.handle(IPCChannels.AppVersion, () => app.getVersion());
   ipcMain.handle(IPCChannels.RuntimeInfo, (): RuntimeInfo => {
     return {

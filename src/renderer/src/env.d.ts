@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { ClientUpdateSnapshot, DesktopCaptureSource, OpenGraphMetadata, ProjectLinks, RuntimeInfo } from "@shared/ipc";
+import type { ClientUpdateSnapshot, DesktopCaptureSource, OpenGraphMetadata, ProjectLinks, RuntimeInfo, StoredVerifiedSession } from "@shared/ipc";
 
 interface ImportMetaEnv {
   readonly VITE_OPENCHAT_BACKEND_URL?: string;
@@ -18,6 +18,13 @@ declare global {
       };
       rtc: {
         listDesktopCaptureSources: () => Promise<DesktopCaptureSource[]>;
+      };
+      identity: {
+        publicKey: () => Promise<string>;
+        signChallenge: (payload: string) => Promise<string>;
+        storeSession: (session: StoredVerifiedSession) => Promise<void>;
+        loadSession: (serverId: string) => Promise<StoredVerifiedSession | null>;
+        clearSession: (serverId: string) => Promise<void>;
       };
       updates: {
         getStatus: () => Promise<ClientUpdateSnapshot>;

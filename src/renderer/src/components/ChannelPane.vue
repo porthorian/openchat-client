@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import {
-  mdiAccountMultiplePlus,
   mdiChevronDown,
   mdiCogOutline,
   mdiMessage,
@@ -50,6 +49,8 @@ const props = defineProps<{
   voiceParticipantsByChannel: Record<string, VoiceParticipant[]>;
   voiceSpeakingParticipantIdsByChannel: Record<string, string[]>;
   filterValue: string;
+  hideMutedChannels: boolean;
+  mutedChannelIds: string[];
 }>();
 
 const emit = defineEmits<{
@@ -57,6 +58,7 @@ const emit = defineEmits<{
   selectVoiceChannel: [channelId: string];
   updateFilter: [value: string];
   markChannelsRead: [channelIds: string[]];
+  markServerRead: [];
   createChannel: [groupId: string | null];
   createCategory: [groupId: string | null, suggestedKind: "text" | "voice" | null];
   renameCategory: [groupId: string];
@@ -65,6 +67,8 @@ const emit = defineEmits<{
   openServerSettings: [];
   openNotificationSettings: [];
   openPrivacySettings: [];
+  toggleHideMutedChannels: [];
+  toggleChannelMuted: [channelId: string];
 }>();
 
 type ChannelPaneMenuState = {
@@ -72,6 +76,7 @@ type ChannelPaneMenuState = {
   x: number;
   y: number;
   categoryId: string | null;
+  channelId: string | null;
 };
 
 type GuildHeaderMenuState = {
@@ -103,7 +108,8 @@ const channelPaneMenu = ref<ChannelPaneMenuState>({
   open: false,
   x: 0,
   y: 0,
-  categoryId: null
+  categoryId: null,
+  channelId: null
 });
 const guildHeaderMenu = ref<GuildHeaderMenuState>({
   open: false,
@@ -112,7 +118,8 @@ const guildHeaderMenu = ref<GuildHeaderMenuState>({
 });
 const guildMenuElement = ref<HTMLElement | null>(null);
 const guildMenuKeyboard = useMenuKeyboard(guildMenuElement, closeGuildHeaderMenu);
-const hideMutedChannels = ref(false);
+const channelMenuElement = ref<HTMLElement | null>(null);
+const channelMenuKeyboard = useMenuKeyboard(channelMenuElement, closeChannelPaneMenu);
 const voicePresencePopover = ref<VoicePresencePopoverState>({
   open: false,
   x: 0,
@@ -121,7 +128,7 @@ const voicePresencePopover = ref<VoicePresencePopoverState>({
 });
 const channelPaneRef = ref<HTMLElement | null>(null);
 const dragPayload = ref<DragPayload | null>(null);
-const isDragEnabled = computed(() => props.filterValue.trim().length === 0);
+const isDragEnabled = computed(() => props.filterValue.trim().length === 0 && !props.hideMutedChannels);
 const selectedCategoryForMenu = computed(() => categoryForID(channelPaneMenu.value.categoryId));
 const canDeleteSelectedCategory = computed(() => {
   return Boolean(selectedCategoryForMenu.value && selectedCategoryForMenu.value.channels.length === 0);
@@ -152,9 +159,11 @@ function toggleGroupCollapse(groupId: string): void {
 function closeChannelPaneMenu(): void {
   channelPaneMenu.value.open = false;
   channelPaneMenu.value.categoryId = null;
+  channelPaneMenu.value.channelId = null;
 }
 
-function openChannelPaneMenu(event: MouseEvent, categoryId: string | null = null): void {
+function openChannelPaneMenu(event: Pick<MouseEvent, "preventDefault" | "clientX" | "clientY" | "currentTarget">, categoryId: string | null = null, channelId: string | null = null): void {
+  event.preventDefault();
   closeGuildHeaderMenu();
   closeVoicePresencePopover();
   const menuWidth = 236;
@@ -165,8 +174,18 @@ function openChannelPaneMenu(event: MouseEvent, categoryId: string | null = null
     open: true,
     x: boundedX,
     y: boundedY,
-    categoryId
+    categoryId,
+    channelId
   };
+  void channelMenuKeyboard.openedBy(event.currentTarget as HTMLElement | null);
+}
+
+function openChannelPaneMenuWithKeyboard(event: KeyboardEvent, groupId: string, channelId: string): void {
+  if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+  event.preventDefault();
+  const target = event.currentTarget as HTMLElement;
+  const rect = target.getBoundingClientRect();
+  openChannelPaneMenu({ preventDefault() {}, clientX: rect.left, clientY: rect.bottom, currentTarget: target }, groupId, channelId);
 }
 
 function openChannelPaneMenuFromList(event: MouseEvent): void {
@@ -216,8 +235,8 @@ function categoryKindForID(categoryId: string | null): "text" | "voice" | null {
 }
 
 function runGuildHeaderAction(
-  _event?: Event,
-  action: "create-channel" | "create-category" | "open-settings" | "open-notifications" | "open-privacy" | "noop" = "noop"
+  _event: Event,
+  action: "create-channel" | "create-category" | "open-settings" | "open-notifications" | "mark-read"
 ): void {
   guildMenuKeyboard.closeAndReturn();
   void nextTick(() => {
@@ -225,13 +244,13 @@ function runGuildHeaderAction(
     if (action === "create-category") emit("createCategory", null, null);
     if (action === "open-settings") emit("openServerSettings");
     if (action === "open-notifications") emit("openNotificationSettings");
-    if (action === "open-privacy") emit("openPrivacySettings");
+    if (action === "mark-read") emit("markServerRead");
   });
 }
 
 function runChannelPaneAction(
-  _event?: Event,
-  action: "create-channel" | "create-category" | "rename-category" | "delete-category" | "noop" = "noop"
+  _event: Event,
+  action: "create-channel" | "create-category" | "rename-category" | "delete-category" | "toggle-channel-mute"
 ): void {
   if (action === "create-channel") {
     emit("createChannel", channelPaneMenu.value.categoryId ?? null);
@@ -251,11 +270,16 @@ function runChannelPaneAction(
       emit("deleteCategory", categoryId);
     }
   }
+  if (action === "toggle-channel-mute" && channelPaneMenu.value.channelId) {
+    emit("toggleChannelMuted", channelPaneMenu.value.channelId);
+  }
   closeChannelPaneMenu();
 }
 
 function toggleHideMutedChannels(): void {
-  hideMutedChannels.value = !hideMutedChannels.value;
+  emit("toggleHideMutedChannels");
+  closeChannelPaneMenu();
+  closeGuildHeaderMenu();
 }
 
 function emitUpdatedLayout(nextGroups: ChannelGroup[]): void {
@@ -464,7 +488,7 @@ function onWindowPointerDown(event: PointerEvent): void {
 function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
     if (guildHeaderMenu.value.open) guildMenuKeyboard.closeAndReturn();
-    closeChannelPaneMenu();
+    if (channelPaneMenu.value.open) channelMenuKeyboard.closeAndReturn();
     closeVoicePresencePopover();
   }
 }
@@ -498,9 +522,6 @@ onBeforeUnmount(() => {
         </button>
         <small class="guild-header-build">{{ serverBuildLabel }}</small>
       </div>
-      <button type="button" class="guild-header-action" aria-label="Invite people">
-        <AppIcon :path="mdiAccountMultiplePlus" :size="36" />
-      </button>
     </header>
     <section
       v-if="guildHeaderMenu.open"
@@ -511,12 +532,7 @@ onBeforeUnmount(() => {
       aria-label="Server quick actions"
       :style="{ left: `${guildHeaderMenu.x}px`, top: `${guildHeaderMenu.y}px` }"
     >
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
-        Invite to Server
-        <span class="guild-menu-icon">
-          <AppIcon :path="mdiAccountMultiplePlus" :size="17" />
-        </span>
-      </button>
+      <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'mark-read')">Mark As Read</button>
       <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'open-settings')">
         Server Settings
         <span class="guild-menu-icon">
@@ -545,13 +561,6 @@ onBeforeUnmount(() => {
           <AppIcon :path="mdiPlus" :size="17" />
         </span>
       </button>
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
-        Create Event
-        <span class="guild-menu-icon">
-          <AppIcon :path="mdiPlus" :size="17" />
-        </span>
-      </button>
-
       <div class="guild-menu-divider" />
 
       <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'open-notifications')">
@@ -560,21 +569,8 @@ onBeforeUnmount(() => {
           <AppIcon :path="mdiCogOutline" :size="17" />
         </span>
       </button>
-      <button type="button" class="guild-menu-item" role="menuitem" @click="($event) => runGuildHeaderAction($event, 'open-privacy')">
-        Privacy Settings
-        <span class="guild-menu-icon">
-          <AppIcon :path="mdiCogOutline" :size="17" />
-        </span>
-      </button>
-
       <div class="guild-menu-divider" />
 
-      <button type="button" class="guild-menu-item" role="menuitem" @click="runGuildHeaderAction">
-        Edit Per-server Profile
-        <span class="guild-menu-icon">
-          <AppIcon :path="mdiCogOutline" :size="17" />
-        </span>
-      </button>
       <button
         type="button"
         class="guild-menu-item"
@@ -660,6 +656,8 @@ onBeforeUnmount(() => {
               :draggable="isDragEnabled"
               @dragstart="onChannelDragStart($event, group.id, channel.id)"
               @dragend="onDragEnd"
+              @contextmenu.prevent.stop="openChannelPaneMenu($event, group.id, channel.id)"
+              @keydown="openChannelPaneMenuWithKeyboard($event, group.id, channel.id)"
               @click="
                 channel.type === 'voice' ? emit('selectVoiceChannel', channel.id) : emit('selectChannel', channel.id)
               "
@@ -727,8 +725,10 @@ onBeforeUnmount(() => {
 
       <section
         v-if="channelPaneMenu.open"
+        ref="channelMenuElement"
         class="channel-pane-menu"
         role="menu"
+        @keydown="channelMenuKeyboard.onKeydown"
         aria-label="Channel pane actions"
         :style="{ left: `${channelPaneMenu.x}px`, top: `${channelPaneMenu.y}px` }"
       >
@@ -741,6 +741,17 @@ onBeforeUnmount(() => {
         >
           Hide Muted Channels
           <span class="channel-pane-menu-checkbox" :class="{ 'is-checked': hideMutedChannels }" />
+        </button>
+
+        <button
+          v-if="channelPaneMenu.channelId"
+          type="button"
+          class="channel-pane-menu-item"
+          role="menuitemcheckbox"
+          :aria-checked="mutedChannelIds.includes(channelPaneMenu.channelId)"
+          @click="($event) => runChannelPaneAction($event, 'toggle-channel-mute')"
+        >
+          {{ mutedChannelIds.includes(channelPaneMenu.channelId) ? "Unmute Channel" : "Mute Channel" }}
         </button>
 
         <div class="channel-pane-menu-divider" />
@@ -786,9 +797,6 @@ onBeforeUnmount(() => {
             Delete Category
           </button>
         </div>
-        <button type="button" class="channel-pane-menu-item" role="menuitem" @click="runChannelPaneAction">
-          Invite to Server
-        </button>
       </section>
 
       <VoicePresencePopover

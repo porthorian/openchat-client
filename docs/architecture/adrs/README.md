@@ -23,3 +23,4 @@ This directory contains Architecture Decision Records for the OpenChat Client.
 - `0007-at-protocol-hybrid-integration.md` (Proposed, 2026-02-15)
 - `0008-local-vue-components.md` (Accepted, 2026-09-17)
 - `0009-opt-in-profile-publication.md` (Proposed, 2026-09-18; security review pending)
+- `0010-server-actions-privacy.md` (Accepted for implementation, 2026-09-18)

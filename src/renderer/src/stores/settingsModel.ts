@@ -35,6 +35,8 @@ export type SettingsData = {
   notificationPreview: boolean;
   notificationPolicyByServer: Record<string, NotificationPolicy>;
   previousNotificationPolicyByServer: Record<string, "all" | "mentions">;
+  mutedChannelIdsByServer: Record<string, string[]>;
+  hideMutedChannelsByServer: Record<string, boolean>;
   presenceStatus: PresenceStatus;
 };
 
@@ -50,6 +52,8 @@ export function defaultSettings(): SettingsData {
     notificationPreview: true,
     notificationPolicyByServer: {},
     previousNotificationPolicyByServer: {},
+    mutedChannelIdsByServer: {},
+    hideMutedChannelsByServer: {},
     presenceStatus: "online"
   };
 }
@@ -68,13 +72,24 @@ export function normalizeSettings(raw: unknown, legacyMuted: readonly string[] =
   const shortcuts = isRecord(source.shortcuts) ? source.shortcuts : {};
   const policies = isRecord(source.notificationPolicyByServer) ? source.notificationPolicyByServer : {};
   const previous = isRecord(source.previousNotificationPolicyByServer) ? source.previousNotificationPolicyByServer : {};
+  const mutedChannels = isRecord(source.mutedChannelIdsByServer) ? source.mutedChannelIdsByServer : {};
+  const hidden = isRecord(source.hideMutedChannelsByServer) ? source.hideMutedChannelsByServer : {};
   const policyByServer: Record<string, NotificationPolicy> = {};
   const previousByServer: Record<string, "all" | "mentions"> = {};
+  const mutedChannelIdsByServer: Record<string, string[]> = {};
+  const hideMutedChannelsByServer: Record<string, boolean> = {};
   for (const [serverId, policy] of Object.entries(policies)) {
     if (serverId.trim() && (policy === "all" || policy === "mentions" || policy === "off")) policyByServer[serverId] = policy;
   }
   for (const [serverId, policy] of Object.entries(previous)) {
     if (serverId.trim() && (policy === "all" || policy === "mentions")) previousByServer[serverId] = policy;
+  }
+  for (const [serverId, ids] of Object.entries(mutedChannels)) {
+    if (!serverId.trim() || !Array.isArray(ids)) continue;
+    mutedChannelIdsByServer[serverId] = [...new Set(ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0))];
+  }
+  for (const [serverId, isHidden] of Object.entries(hidden)) {
+    if (serverId.trim() && typeof isHidden === "boolean") hideMutedChannelsByServer[serverId] = isHidden;
   }
   if (!isRecord(raw) || raw.version !== 1) {
     for (const serverId of legacyMuted) if (serverId.trim()) policyByServer[serverId] = "off";
@@ -95,6 +110,8 @@ export function normalizeSettings(raw: unknown, legacyMuted: readonly string[] =
     notificationPreview: typeof source.notificationPreview === "boolean" ? source.notificationPreview : defaults.notificationPreview,
     notificationPolicyByServer: policyByServer,
     previousNotificationPolicyByServer: previousByServer,
+    mutedChannelIdsByServer,
+    hideMutedChannelsByServer,
     presenceStatus: choice(source.presenceStatus, ["online", "idle", "busy", "invisible"], defaults.presenceStatus)
   };
 }

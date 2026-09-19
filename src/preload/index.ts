@@ -5,7 +5,8 @@ import {
   type DesktopCaptureSource,
   type OpenGraphMetadata,
   type ProjectLinks,
-  type RuntimeInfo
+  type RuntimeInfo,
+  type StoredVerifiedSession
 } from "../shared/ipc";
 
 type UpdateStatusListener = (snapshot: ClientUpdateSnapshot) => void;
@@ -28,6 +29,13 @@ const api = {
   },
   rtc: {
     listDesktopCaptureSources: async (): Promise<DesktopCaptureSource[]> => ipcRenderer.invoke(IPCChannels.RTCListDesktopSources)
+  },
+  identity: {
+    publicKey: async (): Promise<string> => ipcRenderer.invoke(IPCChannels.IdentityPublicKey),
+    signChallenge: async (payload: string): Promise<string> => ipcRenderer.invoke(IPCChannels.IdentitySignChallenge, payload),
+    storeSession: async (session: StoredVerifiedSession): Promise<void> => ipcRenderer.invoke(IPCChannels.IdentityStoreSession, session),
+    loadSession: async (serverId: string): Promise<StoredVerifiedSession | null> => ipcRenderer.invoke(IPCChannels.IdentityLoadSession, serverId),
+    clearSession: async (serverId: string): Promise<void> => ipcRenderer.invoke(IPCChannels.IdentityClearSession, serverId)
   },
   updates: {
     getStatus: async (): Promise<ClientUpdateSnapshot> => ipcRenderer.invoke(IPCChannels.UpdateGetStatus),

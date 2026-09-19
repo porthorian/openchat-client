@@ -2,8 +2,6 @@
 import { computed, ref, watch } from "vue";
 import { useDialogFocus } from "@renderer/composables/useDialogFocus";
 
-type SettingsTabID = "profile" | "engagement" | "moderation" | "integrations";
-
 const props = defineProps<{
   isOpen: boolean;
   isLoading: boolean;
@@ -22,7 +20,6 @@ const emit = defineEmits<{
 const dialogElement = ref<HTMLElement | null>(null);
 useDialogFocus(() => props.isOpen, dialogElement, () => emit("close"));
 
-const activeTab = ref<SettingsTabID>("profile");
 const draftDisplayName = ref("");
 const draftDescription = ref("");
 const draftBannerPreset = ref("");
@@ -40,7 +37,6 @@ const bannerPresets = [
 ];
 
 function initializeDraft(): void {
-  activeTab.value = "profile";
   draftDisplayName.value = props.displayName;
   draftDescription.value = props.description;
   draftBannerPreset.value = props.bannerPreset || "ocean";
@@ -78,37 +74,13 @@ function submit(): void {
 
       <div class="server-settings-body">
         <nav class="server-settings-tabs" aria-label="Server settings sections">
-          <button type="button" class="server-settings-tab" :class="{ 'is-active': activeTab === 'profile' }" @click="activeTab = 'profile'">
+          <button type="button" class="server-settings-tab is-active">
             Server Profile
-          </button>
-          <button
-            type="button"
-            class="server-settings-tab"
-            :class="{ 'is-active': activeTab === 'engagement' }"
-            @click="activeTab = 'engagement'"
-          >
-            Engagement
-          </button>
-          <button
-            type="button"
-            class="server-settings-tab"
-            :class="{ 'is-active': activeTab === 'moderation' }"
-            @click="activeTab = 'moderation'"
-          >
-            Moderation
-          </button>
-          <button
-            type="button"
-            class="server-settings-tab"
-            :class="{ 'is-active': activeTab === 'integrations' }"
-            @click="activeTab = 'integrations'"
-          >
-            Integrations
           </button>
         </nav>
 
         <section class="server-settings-panel">
-          <template v-if="activeTab === 'profile'">
+          <template>
             <p class="create-channel-server">{{ serverName || "Current Server" }}</p>
 
             <label class="server-modal-field">
@@ -135,9 +107,6 @@ function submit(): void {
                 </option>
               </select>
             </label>
-          </template>
-          <template v-else>
-            <p class="server-settings-placeholder">This section is planned for the next server settings iteration.</p>
           </template>
         </section>
       </div>

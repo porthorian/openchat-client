@@ -1,5 +1,6 @@
 import type { ServerCapabilities, ServerCapabilitiesResponse } from "@renderer/types/capabilities";
 import { normalizeServerCapabilities } from "@renderer/types/capabilities";
+import { tokenForUIDAndBackend } from "./verifiedSessionClient";
 
 export type JoinTicketResponse = {
   ticket: string;
@@ -73,13 +74,15 @@ export async function requestJoinTicket(params: {
 }): Promise<JoinTicketResponse> {
   const base = params.backendUrl.replace(/\/$/, "");
   const endpoint = `${base}/v1/rtc/channels/${encodeURIComponent(params.channelId)}/join-ticket`;
+  const token = tokenForUIDAndBackend(params.userUID, params.backendUrl);
   const response = await fetch(endpoint, {
     method: "POST",
     signal: params.signal,
     headers: {
       "Content-Type": "application/json",
-      "X-OpenChat-User-UID": params.userUID,
-      "X-OpenChat-Device-ID": params.deviceID
+      ...(token
+        ? { Authorization: `Bearer ${token}` }
+        : { "X-OpenChat-User-UID": params.userUID, "X-OpenChat-Device-ID": params.deviceID })
     },
     body: JSON.stringify({
       server_id: params.serverID

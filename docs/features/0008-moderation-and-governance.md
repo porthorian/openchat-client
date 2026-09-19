@@ -1,8 +1,8 @@
 # Feature: Moderation and Governance under E2EE
 
-- Status: Draft
+- Status: Implementation contract; capability remains off until enforcement is verified
 - Owners: Maintainers
-- Last Updated: 2026-02-11
+- Last Updated: 2026-09-18
 - Related ADRs: `docs/architecture/adrs/0004-multi-server-isolation.md`, `docs/architecture/adrs/0005-user-owned-identity.md`, `docs/architecture/adrs/0006-webrtc-sfu-media-architecture.md`
 - Related Issues: TBD
 
@@ -16,6 +16,11 @@ OpenChat needs moderation controls that preserve strong E2EE guarantees. Moderat
 - As a user, I want clear policy and case visibility so moderation actions are understandable and contestable.
 
 ## Scope
+The first release covers current channels; this contract also reserves the future encrypted-channel epoch gate. It does not turn on end-to-end encrypted messaging.
+
+Any member can report a user or message by reference and reason. Attaching plaintext requires a separate consent action. The owner appoints roles and edits policy; admins and moderators handle cases and vote. No one can sanction an equal or higher role, and the owner is protected. Kick, short timeout, and temporary channel lock are immediate. Ban, long timeout, and role removal require two yes votes, three distinct eligible voters, and a 24-hour window by default. Insufficient eligible voters blocks a proposal. Policy changes apply only to new proposals.
+
+Reporter views expose their own case status; targets see actions affecting them; eligible staff see evidence, votes, and audit details. Disclosed plaintext is encrypted at rest and deleted 30 days after closure while audit metadata remains. The backend must enforce membership and posting restrictions across HTTP, realtime, and RTC and revoke affected sessions. Capability advertisement follows migration, recovery, and cross-client enforcement checks.
 ### In Scope
 - Moderation policy display in server settings:
   - emergency actions allowed by role

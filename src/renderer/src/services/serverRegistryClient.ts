@@ -1,4 +1,5 @@
 import type { ServerProfile } from "@renderer/types/models";
+import { tokenForUIDAndBackend } from "./verifiedSessionClient";
 
 const viteBackendURL = (
   (import.meta as { env?: { VITE_OPENCHAT_BACKEND_URL?: string } }).env?.VITE_OPENCHAT_BACKEND_URL ?? ""
@@ -68,7 +69,9 @@ export type OwnershipClaimResult = {
   claimedAt: string;
 };
 
-function authHeaders(userUID: string, deviceID: string): Record<string, string> {
+function authHeaders(userUID: string, deviceID: string, backendUrl: string): Record<string, string> {
+  const token = tokenForUIDAndBackend(userUID, backendUrl);
+  if (token) return { Authorization: `Bearer ${token}` };
   return {
     "X-OpenChat-User-UID": userUID,
     "X-OpenChat-Device-ID": deviceID
@@ -84,7 +87,7 @@ export async function fetchServerDirectory(
     endpoint,
     auth
       ? {
-          headers: authHeaders(auth.userUID, auth.deviceID)
+          headers: authHeaders(auth.userUID, auth.deviceID, backendUrl)
         }
       : undefined
   );
@@ -114,7 +117,7 @@ export async function leaveServerMembership(params: {
   const endpoint = `${params.backendUrl.replace(/\/$/, "")}/v1/servers/${encodeURIComponent(params.serverId)}/membership`;
   const response = await fetch(endpoint, {
     method: "DELETE",
-    headers: authHeaders(params.userUID, params.deviceID)
+    headers: authHeaders(params.userUID, params.deviceID, params.backendUrl)
   });
   if (!response.ok) {
     const text = await response.text();
@@ -134,7 +137,7 @@ export async function createServer(params: {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -194,7 +197,7 @@ export async function claimServerOwnership(params: {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      ...authHeaders(params.userUID, params.deviceID),
+      ...authHeaders(params.userUID, params.deviceID, params.backendUrl),
       "Content-Type": "application/json"
     },
     body: JSON.stringify({

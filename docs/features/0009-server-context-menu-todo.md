@@ -1,6 +1,20 @@
 # Server Context Menu TODO
 
-Status: Partially implemented. `Mute/Unmute Server` and `Leave Server` are wired; most other actions remain placeholders.
+Status: In progress. Local mute/hide, mark-read, notification settings, server profile, and confirmed leave are wired. Backend-dependent actions appear only after active capability and enforcement support.
+
+## Agreed first-release contract (2026-09-18)
+
+- Both server rail and channel header use the same server-scoped handlers and focus-return behavior.
+- Bulk mark-as-read sends all text-channel cursors and reconciles the authoritative response. A per-channel fallback remains for older servers.
+- Owner/admin can create and revoke expiring, use-limited invites. Redeeming one atomically joins the server.
+- Channel mute, hide-muted, and notification policy persist locally per server. Hidden active channels remain visible until selection changes so content does not disappear unexpectedly.
+- Leave confirms backend membership removal. If the server is unreachable, a second confirmation offers local removal with explicit notice that backend membership remains.
+- Privacy controls cover server-enforced presence visibility and mention permissions. Read-ack data is private to its owner. DMs and message requests are outside this release.
+- Per-server display name/avatar override requires opt-in consent, expected-version edits, and removal. Resolution order is override, global profile, then UID.
+- Events support create/list/RSVP/edit/cancel and reminders. Daily, weekly, and monthly occurrences retain local wall time in an IANA zone across daylight-saving transitions. Edits/cancellation target one occurrence or the series.
+- `403` is a permission failure; `409` is a stale version or conflicting vote. Unsupported actions are hidden when the backend does not advertise active enforcement.
+
+The interface and rollout are specified in [ADR-0010](../architecture/adrs/0010-server-actions-privacy.md) and the backend's `docs/architecture/server-actions-contract.md`.
 
 ## Scope
 - Right-click menu on server rail entries.
