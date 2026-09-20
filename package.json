@@ -30,8 +30,8 @@
     "@mdi/js": "^7.4.47",
     "@vue/devtools-api": "^8.1.5",
     "electron-updater": "^6.8.9",
-    "pinia": "^4.0.2",
-    "vue": "^3.5.40"
+    "pinia": "^4.0.3",
+    "vue": "^3.5.43"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
