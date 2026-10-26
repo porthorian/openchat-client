@@ -29,9 +29,9 @@
   "dependencies": {
     "@mdi/js": "^7.4.47",
     "@vue/devtools-api": "^8.1.5",
-    "electron-updater": "^6.8.9",
-    "pinia": "^4.0.3",
-    "vue": "^3.5.43"
+    "electron-updater": "^6.8.11",
+    "pinia": "^4.1.0",
+    "vue": "^3.5.44"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
